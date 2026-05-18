@@ -134,8 +134,8 @@ ${convo}
 ━━━━━━━━━━━━━━━━━
 <b>${notes.title}</b>
 👥 ${notes.participants}${notes.agenda ? `\n\n📌 안건\n${notes.agenda}` : ''}${notes.decisions ? `\n\n✅ 결정사항\n${notes.decisions}` : ''}${notes.actions ? `\n\n🎯 액션아이템\n${notes.actions}` : ''}${notes.notes ? `\n\n💬 메모\n${notes.notes}` : ''}`;
-    await sendTelegram(tgSummary);
-    console.log('[회의록] 텔레그램 발송 완료');
+    await sendTelegramGroup(tgSummary);
+    console.log('[회의록] 단톡방 발송 완료');
   } catch(e) { console.error('[회의록] 오류:', e.message); }
 }
 
@@ -582,6 +582,9 @@ ${reviews ? `이번 주 리뷰 ${reviews.count}건 기준, 반복 칭찬 키워�
 function sendTelegram(text) {
   return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, { chat_id: TG_CHAT_ID, text, parse_mode: 'HTML' });
 }
+function sendTelegramGroup(text) {
+  return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, { chat_id: GROUP_CHAT_ID, text, parse_mode: 'HTML' });
+}
 
 // ── 일간 리포트 ────────────────────────────────────────
 async function dailyReport() {
@@ -696,26 +699,28 @@ ${claritySection}`;
     memoSection = `\n━━━━━━━━━━━━━━━━━\n📝 <b>은우 메모</b>\n${lines.trim()}`;
   }
 
-  const { messages: groupMessages } = await processTelegramCommands();
+  const { store: reminderStore, messages: groupMessages } = await processTelegramCommands();
   const yesterday = dateStr(1);
   if (groupMessages.length > 0) await saveMeetingNotes(groupMessages, yesterday);
 
-  const routineMsg = `☀️ <b>오늘 아침 루틴</b>
-━━━━━━━━━━━━━━━━━
-1. 위 리포트 이상 신호 확인
-2. Clarity 세션 녹화 5개 보기
-   → 장바구니 담고 이탈한 사람 필터
-   → 어디서 막히는지 확인
-3. 신규 리뷰 확인 (3점 이하 있으면 당일 연락)
-4. 단톡방 분석 확인 (아래 메시지)${tasksSection}${memoSection}`;
+  // 리마인드가 있으면 단톡방 요약 메시지 뒤에 함께 발송
+  const activeReminders = getActiveReminders(reminderStore);
+  if (activeReminders.length > 0) {
+    const lines = activeReminders.map(r => `[${r.id}] ${r.text}`).join('\n');
+    const remindMsg = `🔁 <b>진행 중 리마인드</b>\n━━━━━━━━━━━━━━━━━\n${lines}\n<i>완료 → /완료 번호</i>`;
+    await sendTelegramGroup(remindMsg);
+  }
 
-  const result = await sendTelegram(msg);
-  if (result.ok) {
-    if (analysisMsg) await sendTelegram(analysisMsg);
-    await sendTelegram(routineMsg);
+  // 개인 DM: 할일 + 메모만
+  const personalMsg = `☀️ <b>오늘 할일</b>${tasksSection}${memoSection}`;
+
+  const groupResult = await sendTelegramGroup(msg);
+  if (groupResult.ok) {
+    if (analysisMsg) await sendTelegramGroup(analysisMsg);
+    if (tasksSection || memoSection) await sendTelegram(personalMsg);
     console.log('일간 발송 완료 ✅');
   } else {
-    console.error('발송 실패 ❌:', JSON.stringify(result));
+    console.error('발송 실패 ❌:', JSON.stringify(groupResult));
   }
 }
 
