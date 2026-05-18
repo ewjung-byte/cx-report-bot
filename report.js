@@ -148,7 +148,7 @@ const CLARITY_PROJECT_ID = 'vzm43te29q';
 const clarityToken       = (process.env.CLARITY_TOKEN     || _cla).trim();
 const GROUP_CHAT_ID      = (process.env.TG_GROUP_CHAT_ID  || _tg.group_chat_id   || '').toString().trim();
 const REMINDERS_PATH     = './reminders.json';
-const APPS_SCRIPT_URL    = process.env.APPS_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbyc5k35KduJt6r7934gHRwEsAgA_x2yeij2VBAqzgYRqwsanh7faxPWHmuhfnuOrhLb/exec';
+const APPS_SCRIPT_URL    = process.env.APPS_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycby_4WNcHLvcgCUIb3qhRi-h9_qApHSLXwCQa3_Qmw4xDNbdaZvPVeshmlGPg661KMRG/exec';
 const ga4Config = {
   client_id:     (process.env.GA4_CLIENT_ID     || _ga.client_id     || '').trim(),
   client_secret: (process.env.GA4_CLIENT_SECRET || _ga.client_secret || '').trim(),
