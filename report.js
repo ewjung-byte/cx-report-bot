@@ -76,24 +76,24 @@ function getActiveReminders(store) {
 }
 
 const CAFE24_BASE        = 'https://italyjungmiso.cafe24api.com/api/v2/admin/';
-let   CAFE24_ACCESS_TOKEN = _cf.access_token || '';
+let   CAFE24_ACCESS_TOKEN = (_cf.access_token || '').trim();
 const CAFE24_API_VERSION = '2025-12-01';
 const CAFE24_CLIENT_ID   = 'Vv3AL9nXIZ9uDs0f8CXrHA';
-const META_TOKEN         = process.env.META_ACCESS_TOKEN || _mt.access_token    || '';
-const META_AD_ACCOUNT    = process.env.META_AD_ACCOUNT   || _mt.ad_account_id   || '';
-const TG_TOKEN           = process.env.TG_BOT_TOKEN      || _tg.bot_token       || '';
-const TG_CHAT_ID         = process.env.TG_CHAT_ID        || _tg.chat_id         || '';
-const CLAUDE_API_KEY     = process.env.CLAUDE_API_KEY    || _cl.api_key         || '';
-const CLAUDE_MODEL       = process.env.CLAUDE_MODEL      || _cl.model           || 'claude-sonnet-4-6';
+const META_TOKEN         = (process.env.META_ACCESS_TOKEN || _mt.access_token    || '').trim();
+const META_AD_ACCOUNT    = (process.env.META_AD_ACCOUNT   || _mt.ad_account_id   || '').toString().trim();
+const TG_TOKEN           = (process.env.TG_BOT_TOKEN      || _tg.bot_token       || '').trim();
+const TG_CHAT_ID         = (process.env.TG_CHAT_ID        || _tg.chat_id         || '').toString().trim();
+const CLAUDE_API_KEY     = (process.env.CLAUDE_API_KEY    || _cl.api_key         || '').trim();
+const CLAUDE_MODEL       = (process.env.CLAUDE_MODEL      || _cl.model           || 'claude-sonnet-4-6').trim();
 const CLARITY_PROJECT_ID = 'vzm43te29q';
-const clarityToken       = process.env.CLARITY_TOKEN     || _cla;
-const GROUP_CHAT_ID      = process.env.TG_GROUP_CHAT_ID  || _tg.group_chat_id   || '';
+const clarityToken       = (process.env.CLARITY_TOKEN     || _cla).trim();
+const GROUP_CHAT_ID      = (process.env.TG_GROUP_CHAT_ID  || _tg.group_chat_id   || '').toString().trim();
 const REMINDERS_PATH     = './reminders.json';
 const ga4Config = {
-  client_id:     process.env.GA4_CLIENT_ID     || _ga.client_id,
-  client_secret: process.env.GA4_CLIENT_SECRET || _ga.client_secret,
-  refresh_token: process.env.GA4_REFRESH_TOKEN || _ga.refresh_token,
-  property_id:   process.env.GA4_PROPERTY_ID   || _ga.property_id,
+  client_id:     (process.env.GA4_CLIENT_ID     || _ga.client_id     || '').trim(),
+  client_secret: (process.env.GA4_CLIENT_SECRET || _ga.client_secret || '').trim(),
+  refresh_token: (process.env.GA4_REFRESH_TOKEN || _ga.refresh_token || '').trim(),
+  property_id:   (process.env.GA4_PROPERTY_ID   || _ga.property_id   || '').toString().trim(),
 };
 
 // ── 카페24 토큰 자동 갱신 (GitHub Actions용) ───────────
