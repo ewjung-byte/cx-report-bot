@@ -36,7 +36,8 @@ async function processTelegramCommands() {
     const store = loadReminders();
     const offset = store.lastUpdateId ? store.lastUpdateId + 1 : 0;
     const res = await fetchJson(`https://api.telegram.org/bot${TG_TOKEN}/getUpdates?offset=${offset}&limit=100&allowed_updates=%5B%22message%22%5D`);
-    if (!res.ok || !res.result.length) return store;
+    if (!res.ok || !res.result.length) return { store, messages: [] };
+    const messages = [];
     for (const update of res.result) {
       store.lastUpdateId = Math.max(store.lastUpdateId, update.update_id);
       const msg = update.message;
@@ -44,6 +45,9 @@ async function processTelegramCommands() {
       if (String(msg.chat.id) !== String(GROUP_CHAT_ID)) continue;
       const text = msg.text.trim();
       const today = new Date().toISOString().split('T')[0];
+      const sender = msg.from ? msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : '') : '알수없음';
+      const isBot = msg.from ? !!msg.from.is_bot : false;
+      messages.push({ time: new Date(msg.date * 1000).toTimeString().slice(0, 5), sender, isBot, text });
 
       const addMatch = text.match(/^\/추가\s+(.+)/s);
       if (addMatch) {
@@ -51,7 +55,6 @@ async function processTelegramCommands() {
         store.reminders.push({ id: maxId + 1, text: addMatch[1].trim(), addedDate: today, done: false });
         continue;
       }
-
       const doneMatch = text.match(/^\/완료\s+(.+)/);
       if (doneMatch) {
         const parts = doneMatch[1].trim().split(/\s+/);
@@ -68,11 +71,67 @@ async function processTelegramCommands() {
       }
     }
     saveReminders(store);
-    return store;
-  } catch(e) { console.error('리마인드 처리 오류:', e.message); return loadReminders(); }
+    return { store, messages };
+  } catch(e) { console.error('리마인드 처리 오류:', e.message); return { store: loadReminders(), messages: [] }; }
 }
 function getActiveReminders(store) {
   return (store.reminders || []).filter(r => !r.done);
+}
+
+// ── 회의록 자동화 ──────────────────────────────────────
+function postToAppsScript(data, url, hops) {
+  if (hops === undefined) hops = 5;
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(data);
+    const u = new URL(url);
+    const req = https.request({ hostname: u.hostname, path: u.pathname + u.search, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {
+      if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location && hops > 0) {
+        res.resume(); resolve(postToAppsScript(data, res.headers.location, hops - 1)); return;
+      }
+      let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { resolve({ ok: true }); } });
+    });
+    req.on('error', reject); req.write(body); req.end();
+  });
+}
+
+async function saveMeetingNotes(messages, date) {
+  if (!messages.length) return;
+  const convo = messages.map(m => `[${m.time}] ${m.sender}${m.isBot ? '(봇)' : ''}: ${m.text}`).join('\n');
+  const prompt = `다음은 ${date} 송마망 팀 텔레그램 그룹 대화야.
+의미 있는 업무 논의가 있으면 회의록 형식으로 JSON 출력해줘.
+잡담만 있거나 내용이 없으면 null 반환.
+
+대화:
+${convo}
+
+출력 형식 (JSON만, 설명 없이):
+{
+  "title": "주요 논의 제목",
+  "participants": "참석자 이름들 (쉼표 구분)",
+  "agenda": "주요 안건 (줄바꿈 구분)",
+  "decisions": "결정 사항 (줄바꿈 구분, 없으면 빈문자열)",
+  "actions": "액션 아이템 (줄바꿈 구분, 없으면 빈문자열)",
+  "assignee": "담당자",
+  "notes": "기타 메모"
+}`;
+
+  try {
+    const body = JSON.stringify({ model: CLAUDE_MODEL, max_tokens: 1000, messages: [{ role: 'user', content: prompt }] });
+    const raw = await new Promise((resolve, reject) => {
+      const req = https.request({ hostname: 'api.anthropic.com', path: '/v1/messages', method: 'POST', headers: { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {
+        let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(JSON.parse(d)));
+      });
+      req.on('error', reject); req.write(body); req.end();
+    });
+    const text = raw.content?.[0]?.text?.trim();
+    if (!text || text === 'null') { console.log('[회의록] 업무 내용 없음, 스킵'); return; }
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return;
+    const notes = JSON.parse(jsonMatch[0]);
+    const result = await postToAppsScript({ date, status: '🟡 진행중', ...notes }, APPS_SCRIPT_URL);
+    console.log('[회의록] 시트 저장 완료:', notes.title);
+    return result;
+  } catch(e) { console.error('[회의록] 오류:', e.message); }
 }
 
 const CAFE24_BASE        = 'https://italyjungmiso.cafe24api.com/api/v2/admin/';
@@ -89,6 +148,7 @@ const CLARITY_PROJECT_ID = 'vzm43te29q';
 const clarityToken       = (process.env.CLARITY_TOKEN     || _cla).trim();
 const GROUP_CHAT_ID      = (process.env.TG_GROUP_CHAT_ID  || _tg.group_chat_id   || '').toString().trim();
 const REMINDERS_PATH     = './reminders.json';
+const APPS_SCRIPT_URL    = process.env.APPS_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbyc5k35KduJt6r7934gHRwEsAgA_x2yeij2VBAqzgYRqwsanh7faxPWHmuhfnuOrhLb/exec';
 const ga4Config = {
   client_id:     (process.env.GA4_CLIENT_ID     || _ga.client_id     || '').trim(),
   client_secret: (process.env.GA4_CLIENT_SECRET || _ga.client_secret || '').trim(),
@@ -631,8 +691,10 @@ ${claritySection}`;
     memoSection = `\n━━━━━━━━━━━━━━━━━\n📝 <b>은우 메모</b>\n${lines.trim()}`;
   }
 
-  const reminderStore = await processTelegramCommands();
+  const { store: reminderStore, messages: groupMessages } = await processTelegramCommands();
   const activeReminders = getActiveReminders(reminderStore);
+  const yesterday = dateStr(1);
+  if (groupMessages.length > 0) await saveMeetingNotes(groupMessages, yesterday);
   let remindersSection = '';
   if (activeReminders.length > 0) {
     const lines = activeReminders.map(r => `[${r.id}] ${r.text} <i>(${r.addedDate} ~)</i>`).join('\n');
