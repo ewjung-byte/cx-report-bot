@@ -128,9 +128,14 @@ ${convo}
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return;
     const notes = JSON.parse(jsonMatch[0]);
-    const result = await postToAppsScript({ date, status: '🟡 진행중', ...notes }, APPS_SCRIPT_URL);
+    await postToAppsScript({ date, status: '🟡 진행중', ...notes }, APPS_SCRIPT_URL);
     console.log('[회의록] 시트 저장 완료:', notes.title);
-    return result;
+    const tgSummary = `📋 <b>어제 단톡방 요약</b> (${date})
+━━━━━━━━━━━━━━━━━
+<b>${notes.title}</b>
+👥 ${notes.participants}${notes.agenda ? `\n\n📌 안건\n${notes.agenda}` : ''}${notes.decisions ? `\n\n✅ 결정사항\n${notes.decisions}` : ''}${notes.actions ? `\n\n🎯 액션아이템\n${notes.actions}` : ''}${notes.notes ? `\n\n💬 메모\n${notes.notes}` : ''}`;
+    await sendTelegram(tgSummary);
+    console.log('[회의록] 텔레그램 발송 완료');
   } catch(e) { console.error('[회의록] 오류:', e.message); }
 }
 
@@ -691,15 +696,9 @@ ${claritySection}`;
     memoSection = `\n━━━━━━━━━━━━━━━━━\n📝 <b>은우 메모</b>\n${lines.trim()}`;
   }
 
-  const { store: reminderStore, messages: groupMessages } = await processTelegramCommands();
-  const activeReminders = getActiveReminders(reminderStore);
+  const { messages: groupMessages } = await processTelegramCommands();
   const yesterday = dateStr(1);
   if (groupMessages.length > 0) await saveMeetingNotes(groupMessages, yesterday);
-  let remindersSection = '';
-  if (activeReminders.length > 0) {
-    const lines = activeReminders.map(r => `[${r.id}] ${r.text} <i>(${r.addedDate} ~)</i>`).join('\n');
-    remindersSection = `\n━━━━━━━━━━━━━━━━━\n🔁 <b>진행 중 리마인드</b>\n${lines}\n<i>완료 → 그룹에서 /완료 번호</i>`;
-  }
 
   const routineMsg = `☀️ <b>오늘 아침 루틴</b>
 ━━━━━━━━━━━━━━━━━
@@ -708,7 +707,7 @@ ${claritySection}`;
    → 장바구니 담고 이탈한 사람 필터
    → 어디서 막히는지 확인
 3. 신규 리뷰 확인 (3점 이하 있으면 당일 연락)
-4. 단톡방 분석 확인 (아래 메시지)${tasksSection}${memoSection}${remindersSection}`;
+4. 단톡방 분석 확인 (아래 메시지)${tasksSection}${memoSection}`;
 
   const result = await sendTelegram(msg);
   if (result.ok) {
