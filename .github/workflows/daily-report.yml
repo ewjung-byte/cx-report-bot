@@ -1,0 +1,34 @@
+name: CX Daily Report
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 매일 KST 09:00 (UTC 00:00)
+  workflow_dispatch:       # GitHub UI에서 수동 실행 가능
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run CX Report
+        run: node report.js
+        env:
+          CAFE24_CLIENT_SECRET: ${{ secrets.CAFE24_CLIENT_SECRET }}
+          CAFE24_REFRESH_TOKEN: ${{ secrets.CAFE24_REFRESH_TOKEN }}
+          META_ACCESS_TOKEN:    ${{ secrets.META_ACCESS_TOKEN }}
+          META_AD_ACCOUNT:      ${{ secrets.META_AD_ACCOUNT }}
+          TG_BOT_TOKEN:         ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:           ${{ secrets.TG_CHAT_ID }}
+          TG_GROUP_CHAT_ID:     ${{ secrets.TG_GROUP_CHAT_ID }}
+          CLAUDE_API_KEY:       ${{ secrets.CLAUDE_API_KEY }}
+          CLAUDE_MODEL:         ${{ secrets.CLAUDE_MODEL }}
+          CLARITY_TOKEN:        ${{ secrets.CLARITY_TOKEN }}
+          GA4_CLIENT_ID:        ${{ secrets.GA4_CLIENT_ID }}
+          GA4_CLIENT_SECRET:    ${{ secrets.GA4_CLIENT_SECRET }}
+          GA4_REFRESH_TOKEN:    ${{ secrets.GA4_REFRESH_TOKEN }}
+          GA4_PROPERTY_ID:      ${{ secrets.GA4_PROPERTY_ID }}

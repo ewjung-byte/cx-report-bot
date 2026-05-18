@@ -1,0 +1,9 @@
+node_modules/
+reminders.json
+*.token.json
+*_token.txt
+*_config.json
+*_api.json
+*_oauth.json
+memo.json
+.env

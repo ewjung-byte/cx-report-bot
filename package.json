@@ -1,0 +1,11 @@
+{
+  "name": "cx-report-bot",
+  "version": "1.0.0",
+  "description": "이태리정미소 CX 일간/주간 리포트 텔레그램 봇",
+  "main": "report.js",
+  "scripts": {
+    "start": "node report.js",
+    "daily": "node report.js daily",
+    "weekly": "node report.js weekly"
+  }
+}
