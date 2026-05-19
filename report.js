@@ -392,6 +392,72 @@ async function getCafe24SalesByProduct(startDate, endDate) {
   } catch(e) { console.error('Cafe24 상품별 오류:', e.message); return { totalSales: 0, count: 0, byProduct: {} }; }
 }
 
+// ── 재구매·리텐션 분석 (카페24 회원 주문 이력) ──────────
+// OKR "바질 재구매자 300명" 추적용. 송마망 봇 미커버 영역.
+async function getRepurchaseStats(lookbackDays, periodStart, periodEnd) {
+  try {
+    const start = dateStr(lookbackDays);
+    const end = dateStr(1);
+    let allOrders = [], offset = 0;
+    while (true) {
+      const url = `${CAFE24_BASE}orders?start_date=${start}&end_date=${end}&limit=100&offset=${offset}`;
+      const data = await fetchJson(url, { 'Authorization': `Bearer ${CAFE24_ACCESS_TOKEN}`, 'X-Cafe24-Api-Version': CAFE24_API_VERSION });
+      if (!data.orders || data.orders.length === 0) break;
+      allOrders = allOrders.concat(data.orders);
+      if (data.orders.length < 100) break;
+      offset += 100;
+      if (offset > 20000) break;
+    }
+    const valid = allOrders.filter(o => o.paid === 'T' && o.canceled === 'F');
+
+    // 회원별 주문 이력 (게스트는 신원 식별 불가 → 신규로 취급)
+    const byMember = {};
+    valid.forEach(o => {
+      const mid = (o.member_id || '').trim();
+      if (!mid) return;
+      const d = String(o.order_date || '').slice(0, 10);
+      const amt = parseFloat(o.payment_amount || 0);
+      (byMember[mid] = byMember[mid] || []).push({ date: d, amt });
+    });
+    Object.values(byMember).forEach(list => list.sort((a, b) => a.date < b.date ? -1 : 1));
+
+    const distinctMembers = Object.keys(byMember).length;
+    const repeatMembers = Object.values(byMember).filter(l => l.length >= 2).length;
+    const repurchaseRate = distinctMembers ? (repeatMembers / distinctMembers * 100) : 0;
+
+    // 재구매까지 평균 일수 (1→2회차)
+    let gapSum = 0, gapN = 0;
+    Object.values(byMember).forEach(l => {
+      if (l.length >= 2) {
+        const g = (new Date(l[1].date) - new Date(l[0].date)) / 86400000;
+        if (g >= 0) { gapSum += g; gapN++; }
+      }
+    });
+    const avgDaysToRepeat = gapN ? Math.round(gapSum / gapN) : null;
+
+    // 이번 기간(주간) 신규 vs 재구매 매출 분리
+    let newCount = 0, newAmt = 0, repCount = 0, repAmt = 0, guestCount = 0, guestAmt = 0;
+    valid.forEach(o => {
+      const od = String(o.order_date || '').slice(0, 10);
+      if (od < periodStart || od > periodEnd) return;
+      const amt = parseFloat(o.payment_amount || 0);
+      const mid = (o.member_id || '').trim();
+      if (!mid) { guestCount++; guestAmt += amt; return; }
+      const hist = byMember[mid] || [];
+      const earlier = hist.some(x => x.date < od);
+      if (earlier) { repCount++; repAmt += amt; }
+      else { newCount++; newAmt += amt; }
+    });
+    const periodTotal = newAmt + repAmt + guestAmt;
+    const repShare = periodTotal ? (repAmt / periodTotal * 100) : 0;
+
+    return {
+      lookbackDays, distinctMembers, repeatMembers, repurchaseRate, avgDaysToRepeat,
+      week: { newCount, newAmt, repCount, repAmt, guestCount, guestAmt, repShare },
+    };
+  } catch (e) { console.error('재구매 분석 오류:', e.message); return null; }
+}
+
 // ── Meta 광고 ──────────────────────────────────────────
 async function getMetaStats(since, until) {
   try {
@@ -568,22 +634,19 @@ async function getClaudeAnalysis(mode, data) {
 
   let prompt;
   if (mode === 'daily') {
-    const productLines = Object.entries(cafe24?.byProduct||{})
-      .sort((a,b)=>b[1].count-a[1].count)
-      .map(([name, v]) => `  - ${name}: ${v.count}건`).join('\n');
     prompt = `너는 이태리정미소(프리미엄 이탈리안 식품 쇼핑몰) CX 분석가야.
-오늘 일간 데이터에서 이상 신호나 즉각 대응이 필요한 것만 짧게 알려줘.
+광고·매출은 다른 봇이 보고하니 보지 말고, 오늘 자사몰 온사이트 행동 데이터에서 CX 이상 신호만 짧게 짚어줘.
 
-[오늘 데이터]
-- 메타 광고비: ${formatMoney(meta.spend)} / ROAS: ${meta.roas}% / 구매: ${meta.purchases}건
-- CPM: ${formatMoney(meta.cpm)} / 빈도: ${meta.frequency.toFixed(1)}회 / 도달: ${meta.reach.toLocaleString()}명
-- 전환 퍼널: 랜딩 ${meta.landing} → 조회 ${meta.viewContent} → 장바구니 ${meta.addToCart} → 결제 ${meta.checkout} → 구매 ${meta.purchases}
-- 자사몰 매출: ${formatMoney(cafe24.totalSales)} (${cafe24.count}건)
-- 스크립트 에러: ${clarity?.scriptErrorPct?.toFixed(1)||'-'}%
-- 빠른 뒤로가기: ${clarity?.quickbackPct?.toFixed(1)||'-'}%
-- 상품별 판매:
-${productLines}
+[오늘 온사이트 행동 (Microsoft Clarity)]
+- 세션: ${clarity?.totalSessions||'-'}
+- 스크립트 에러율: ${clarity?.scriptErrorPct?.toFixed(1)||'-'}% (정상 10% 이하)
+- 빠른 뒤로가기율: ${clarity?.quickbackPct?.toFixed(1)||'-'}% (정상 8% 이하)
+- 데드클릭율: ${clarity?.deadClickPct?.toFixed(1)||'-'}%
+- 스크롤 깊이: ${clarity?.scrollDepth?.toFixed(0)||'-'}% / 활성 체류: ${clarity?.activeTimeSec||'-'}초
+- 인스타 인앱 비중: ${clarity?.instagramPct||'-'}%
+- 온사이트 퍼널: 랜딩 ${f?.landing||0} → 상품 ${f?.product||0} → 장바구니 ${f?.cart||0} → 결제 ${f?.checkout||0}
 
+스크립트 에러·이탈·퍼널 단계 급락 등 사이트 UX/기술 문제 위주로.
 이상 신호가 있으면 축약체로 "🚨 <항목> — <핵심수치·원인 한 토막> ▶ <행동>" 한 신호당 한 줄. 완결문장·조사 최소화, 최대 4개.
 이상 없으면 "✅ 특이사항 없음" 한 줄.
 중요: 마크다운 기호(#, *, **, ---, >) 절대 사용하지 마. 일반 텍스트로만.`;
@@ -600,6 +663,7 @@ ${productLines}
 - 인스타 인앱: ${clarity?.instagramPct||'-'}%
 - 구매 퍼널: 랜딩 ${f?.landing||0}명 → 상품 ${f?.product||0}명(${pct(f?.product,f?.landing)}) → 장바구니 ${f?.cart||0}명(${pct(f?.cart,f?.landing)}) → 구매하기 ${f?.checkout||0}명(${pct(f?.checkout,f?.landing)})
 - GA4 신규 전환율: ${pct(ga4?.userType?.cur?.new?.conv, ga4?.userType?.cur?.new?.sessions)} / 재방문 전환율: ${pct(ga4?.userType?.cur?.ret?.conv, ga4?.userType?.cur?.ret?.sessions)}
+- 재구매(회원·90일): 재구매율 ${repurchase?.repurchaseRate?.toFixed(1)||'-'}% (재구매 ${repurchase?.repeatMembers||0}/${repurchase?.distinctMembers||0}명), 평균 ${repurchase?.avgDaysToRepeat??'-'}일 만에 재구매 / 이번주 재구매 매출비중 ${repurchase?.week?.repShare?.toFixed(0)||'-'}% (회사 OKR: 바질 재구매자 300명)
 ${reviews ? `\n[이번 주 리뷰 ${reviews.count}건 / 평균 ${reviews.avg}점]\n${reviews.texts}` : ''}
 
 == 파트 1: 반드시 이번 주 홈페이지에 적용할 것 ==
@@ -632,55 +696,32 @@ function sendTelegramGroup(text) {
 // ── 일간 리포트 ────────────────────────────────────────
 async function dailyReport() {
   const today = dateStr(1);
-  const sameWeekday = dateStr(2);
-  const w7start = dateStr(7);
-  const w14start = dateStr(14);
-  const w8end = dateStr(8);
   const display = formatDate(today);
   console.log(`[일간] ${today}`);
 
-  const [cafe24, meta, metaPrev, clarity, sheetsTasks, cafe24Week, metaWeek, cafe24PrevWeek, metaPrevWeek] = await Promise.all([
-    getCafe24SalesByProduct(today),
-    getMetaStats(today, today),
-    getMetaStats(sameWeekday, sameWeekday),
+  // A안: 메타·매출은 송마망 봇과 중복 → 제거. 은우봇 일간은 CX 행동(Clarity) 중심
+  const [clarity, sheetsTasks] = await Promise.all([
     getClarityData(),
     getSheetsTasks(),
-    getCafe24Sales(w7start, today),
-    getMetaStats(w7start, today),
-    getCafe24Sales(w14start, w8end),
-    getMetaStats(w14start, w8end),
   ]);
 
-  const analysis = await getClaudeAnalysis('daily', { meta, cafe24, clarity });
-
-  const cpa = meta.spend > 0 && meta.purchases > 0 ? formatMoney(meta.spend / meta.purchases) : '-';
-
-  const p83 = cafe24.byProduct['83'] || { amount: 0, count: 0 };
-  const metaRoas = meta.spend > 0 && p83.amount > 0 ? ((p83.amount / meta.spend) * 100).toFixed(0) : '-';
-
-  const weekRoas = metaWeek.spend > 0 && cafe24Week.sales > 0 ? ((cafe24Week.sales / metaWeek.spend) * 100).toFixed(0) : '-';
-  const weekCpa  = metaWeek.spend > 0 && metaWeek.purchases > 0 ? formatMoney(metaWeek.spend / metaWeek.purchases) : '-';
-  const prevWeekRoas = metaPrevWeek.spend > 0 && cafe24PrevWeek.sales > 0 ? ((cafe24PrevWeek.sales / metaPrevWeek.spend) * 100).toFixed(0) : '-';
-  const prevWeekCpa  = metaPrevWeek.spend > 0 && metaPrevWeek.purchases > 0 ? formatMoney(metaPrevWeek.spend / metaPrevWeek.purchases) : '-';
+  const analysis = await getClaudeAnalysis('daily', { clarity });
 
   const claritySection = clarity
     ? `에러 ${clarity.scriptErrorPct.toFixed(1)}%${icon(clarity.scriptErrorPct, 10, 30)} · 뒤로 ${clarity.quickbackPct.toFixed(1)}%${icon(clarity.quickbackPct, 8, 15)} · 스크롤 ${clarity.scrollDepth.toFixed(0)}% · 체류 ${clarity.activeTimeSec}초`
     : '⚠️ 데이터 없음 (API 한도)';
+  const f = clarity && clarity.funnel;
+  const funnelLine = f
+    ? `랜딩 ${f.landing.toLocaleString()} → 상품 ${f.product}(${pct(f.product, f.landing)}) → 장바 ${f.cart} → 결제 ${f.checkout}`
+    : '-';
 
-  const msg = `📊 <b>일간 리포트</b> · ${display}
+  const msg = `🔎 <b>CX 일간</b> · ${display}
 ━━━━━━━━━━━━━━━━━
-💰 <b>메타광고</b> (랜딩 #83)
-비 ${formatMoney(meta.spend)}${diff(meta.spend, metaPrev.spend)} · 노출 ${meta.impressions.toLocaleString()} · 도달 ${meta.reach.toLocaleString()} · 빈도 ${meta.frequency.toFixed(1)}회
-CTR ${meta.ctr.toFixed(1)}% · CPM ${formatMoney(meta.cpm)}${meta.frequency >= 3 ? ' ⚠️소재교체' : ''}
-🛒 <b>퍼널</b>  랜딩 ${meta.landing}→조회 ${meta.viewContent}→장바 ${meta.addToCart}→결제 ${meta.checkout}→구매 ${meta.purchases}건${diffCount(meta.purchases, metaPrev.purchases)}
-ROAS ${meta.roas}% · CPA ${cpa} · 전환 ${pct(meta.purchases, meta.clicks)}
-🏪 <b>#83</b>  메타 ${formatMoney(p83.amount)}(${p83.count}건)·ROAS ${metaRoas}% / 자사몰 ${formatMoney(cafe24.totalSales)}(${cafe24.count}건)
-📈 <b>주간</b> (${formatDate(w7start)}~${display})
-비 ${formatMoney(metaWeek.spend)}${diff(metaWeek.spend, metaPrevWeek.spend)} · 구매 ${metaWeek.purchases}건${diffCount(metaWeek.purchases, metaPrevWeek.purchases)} · 매출 ${formatMoney(cafe24Week.sales)}${diff(cafe24Week.sales, cafe24PrevWeek.sales)} · CPA ${weekCpa} · ROAS ${weekRoas}%
-전주  비 ${formatMoney(metaPrevWeek.spend)} · 구매 ${metaPrevWeek.purchases}건 · 매출 ${formatMoney(cafe24PrevWeek.sales)} · ROAS ${prevWeekRoas}%
-👁️ <b>Clarity</b>  ${claritySection}`;
+👁️ <b>온사이트 행동</b>  ${claritySection}
+🔽 <b>온사이트 퍼널</b>  ${funnelLine}
+<i>광고·매출은 송마망 봇 리포트 참고</i>`;
 
-  const analysisMsg = analysis ? `🤖 <b>이상 신호</b>\n${analysis}` : null;
+  const analysisMsg = analysis ? `🤖 <b>CX 이상 신호</b>\n${analysis}` : null;
 
   console.log('\n======= 텔레그램 전문 =======');
   console.log(msg.replace(/<[^>]+>/g, ''));
@@ -754,7 +795,7 @@ async function weeklyReport() {
   const display = `${formatDate(thisStart)} ~ ${formatDate(thisEnd)}`;
   console.log(`[주간] ${display}`);
 
-  const [metaThis, metaLast, cafe24This, cafe24Last, clarity, ga4, reviews] = await Promise.all([
+  const [metaThis, metaLast, cafe24This, cafe24Last, clarity, ga4, reviews, repurchase] = await Promise.all([
     getMetaStats(thisStart, thisEnd),
     getMetaStats(dateStr(14), dateStr(8)),
     getCafe24Sales(thisStart, thisEnd),
@@ -762,9 +803,10 @@ async function weeklyReport() {
     getClarityData(),
     getGA4Weekly(),
     getCafe24Reviews(thisStart, thisEnd),
+    getRepurchaseStats(90, thisStart, thisEnd),
   ]);
 
-  const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, clarity, ga4, reviews });
+  const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, clarity, ga4, reviews, repurchase });
 
   const chMap = { 'Paid Social':'유료SNS', 'Organic Social':'자연SNS', 'Direct':'직접유입', 'Organic Search':'검색', 'Paid Other':'기타광고' };
   const chLines = Object.entries(ga4?.channels||{}).sort((a,b)=>b[1].cur.sessions-a[1].cur.sessions).slice(0,4).map(([ch, v]) =>
@@ -796,6 +838,12 @@ ROAS: ${metaThis.roas}%${diff(parseFloat(metaThis.roas), parseFloat(metaLast.roa
 
 🏪 <b>자사몰 매출 (카페24)</b>
 ${formatMoney(cafe24This.sales)}${diff(cafe24This.sales, cafe24Last.sales)} (${cafe24This.count}건)
+
+🔁 <b>재구매·리텐션</b> (회원, 최근 90일)
+${repurchase
+  ? `재구매율 ${repurchase.repurchaseRate.toFixed(1)}% (재구매 회원 ${repurchase.repeatMembers}/${repurchase.distinctMembers}명)${repurchase.avgDaysToRepeat != null ? ` · 평균 ${repurchase.avgDaysToRepeat}일 만에 재구매` : ''}
+이번주 신규 ${formatMoney(repurchase.week.newAmt)}(${repurchase.week.newCount}건) vs 재구매 ${formatMoney(repurchase.week.repAmt)}(${repurchase.week.repCount}건) · 재구매 매출비중 ${repurchase.week.repShare.toFixed(0)}%${repurchase.week.guestCount ? `\n비회원 ${formatMoney(repurchase.week.guestAmt)}(${repurchase.week.guestCount}건, 식별불가)` : ''}`
+  : '데이터 없음'}
 
 📊 <b>GA4 채널</b>
 ${chLines}
