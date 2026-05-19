@@ -1,0 +1,32 @@
+name: CX Message Collector
+
+on:
+  schedule:
+    - cron: '0 */2 * * *'  # 매 2시간 (UTC) = 하루 12회 실행
+  workflow_dispatch:
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Collect tagged messages
+        run: node collect.js
+        env:
+          TG_BOT_TOKEN:      ${{ secrets.TG_BOT_TOKEN }}
+          TG_GROUP_CHAT_ID:  ${{ secrets.TG_GROUP_CHAT_ID }}
+          APPS_SCRIPT_URL:   ${{ secrets.APPS_SCRIPT_URL }}
+
+      - name: Save update ID
+        if: always()
+        run: |
+          git config user.name "cx-bot"
+          git config user.email "bot@songmamans.com"
+          git add -f last_update_id.json 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "chore: update message poll state [skip ci]"
+          git push || true
