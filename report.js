@@ -40,16 +40,24 @@ async function getRemindersFromSheet() {
 }
 
 // ── 회의록 자동화 ──────────────────────────────────────
-function postToAppsScript(data, url, hops) {
-  if (hops === undefined) hops = 5;
+function postToAppsScript(data, url) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(data);
     const u = new URL(url);
-    const req = https.request({ hostname: u.hostname, path: u.pathname + u.search, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {
-      if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location && hops > 0) {
-        res.resume(); resolve(postToAppsScript(data, res.headers.location, hops - 1)); return;
+    const req = https.request({ hostname: u.hostname, path: u.pathname + u.search, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+    }, (res) => {
+      if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
+        // GAS는 doPost 실행 후 302로 응답을 전달 → GET으로 받아야 JSON 정상 수신
+        res.resume();
+        https.get(res.headers.location, (r) => {
+          let d = ''; r.on('data', c => d += c);
+          r.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { resolve({ ok: true }); } });
+        }).on('error', reject);
+        return;
       }
-      let d = ''; res.on('data', c => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { resolve({ ok: true }); } });
+      let d = ''; res.on('data', c => d += c);
+      res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { resolve({ ok: true }); } });
     });
     req.on('error', reject); req.write(body); req.end();
   });
