@@ -99,13 +99,20 @@ async function main() {
 
     const foundTags = detectTags(text);
     if (foundTags.length > 0) {
-      await postToAppsScript({ action: 'save_tagged', date: dateStr, time: timeStr, sender, tags: foundTags.join(', '), text }, APPS_SCRIPT_URL).catch(() => {});
+      const tr = await postToAppsScript({ action: 'save_tagged', date: dateStr, time: timeStr, sender, tags: foundTags.join(', '), text }, APPS_SCRIPT_URL)
+        .catch(e => ({ ok: false, error: e.message }));
+      if (!tr || tr.ok !== true) { console.error('[save_tagged 실패]', JSON.stringify(tr)); process.exitCode = 1; }
       taggedCount++;
     }
   }
 
   if (dailyMsgs.length > 0) {
-    await postToAppsScript({ action: 'save_daily', messages: dailyMsgs }, APPS_SCRIPT_URL).catch(() => {});
+    const r = await postToAppsScript({ action: 'save_daily', messages: dailyMsgs }, APPS_SCRIPT_URL)
+      .catch(e => ({ ok: false, error: e.message }));
+    if (!r || r.ok !== true) {
+      console.error('[save_daily 실패]', JSON.stringify(r));
+      process.exitCode = 1;
+    }
   }
 
   fs.writeFileSync('./last_update_id.json', JSON.stringify({ id: newLastId }), 'utf8');
