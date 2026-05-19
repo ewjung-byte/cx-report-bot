@@ -32,11 +32,28 @@ async function getRemindersFromSheet() {
   } catch(e) { console.error('[리마인드 조회 오류]', e.message); return []; }
 }
 
-// ── 텔레그램 getUpdates + 태그 메시지 GAS 저장 ────────
-async function processTelegramMessages() {
-  const TAGS = ['/결정', '/액션', '/아이디어', '/공유', '/광고', '/소싱', '/CS', '/운영', '/디자인'];
+const TAGS = ['/결정', '/액션', '/아이디어', '/공유', '/광고', '/소싱', '/CS', '/운영', '/디자인'];
+
+// 태그를 토큰 단위로 정확 매칭 (대소문자 무시). "송장/CS/봇" 부분일치 오탐 방지.
+function detectTags(text) {
+  const tokens = text.toLowerCase().split(/\s+/);
+  return TAGS.filter(tag => {
+    const t = tag.toLowerCase();
+    return tokens.some(tok => tok === t || tok.replace(/[^a-z0-9가-힣/]+$/, '') === t);
+  });
+}
+
+// 어제 그룹 대화를 '일일대화' 시트에서 읽기 (요약 입력)
+async function getDailyMessagesFromSheet(date) {
   try {
-    // lastUpdateId는 GAS 리마인드 시트 첫 행 메타데이터로 관리하거나 파일로 유지
+    const res = await postToAppsScript({ action: 'get_daily_messages', date }, APPS_SCRIPT_URL);
+    return res.messages || [];
+  } catch(e) { console.error('[일일대화 조회 오류]', e.message); return []; }
+}
+
+// ── 텔레그램 getUpdates → 일일대화·태그·리마인드 GAS 저장 ────────
+async function processTelegramMessages() {
+  try {
     let lastUpdateId = 0;
     try {
       const data = JSON.parse(require('fs').readFileSync('./last_update_id.json', 'utf8'));
@@ -45,9 +62,10 @@ async function processTelegramMessages() {
 
     const offset = lastUpdateId ? lastUpdateId + 1 : 0;
     const res = await fetchJson(`https://api.telegram.org/bot${TG_TOKEN}/getUpdates?offset=${offset}&limit=100&allowed_updates=%5B%22message%22%5D`);
-    if (!res.ok || !res.result.length) return { messages: [], reminders: [] };
+    if (!res.ok || !res.result.length) return { messages: [] };
 
     const messages = [];
+    const dailyMsgs = [];
     const remindersToAdd = [];
     const remindersDone = [];
     let newLastId = lastUpdateId;
@@ -59,11 +77,12 @@ async function processTelegramMessages() {
       if (String(msg.chat.id) !== String(GROUP_CHAT_ID)) continue;
 
       const text = msg.text.trim();
-      const sender = msg.from ? msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : '') : '알수없음';
-      const isBot = msg.from ? !!msg.from.is_bot : false;
-      const msgDate = new Date(msg.date * 1000);
-      const dateStr = msgDate.toISOString().split('T')[0];
-      const timeStr = msgDate.toTimeString().slice(0, 5);
+      const from = msg.from || {};
+      const sender = from.first_name ? from.first_name + (from.last_name ? ' ' + from.last_name : '') : '알수없음';
+      const isBot = !!from.is_bot;
+      const kst = new Date(msg.date * 1000 + 9 * 3600 * 1000);
+      const dateStr = kst.toISOString().split('T')[0];
+      const timeStr = kst.toISOString().slice(11, 16);
 
       messages.push({ time: timeStr, sender, isBot, text, date: dateStr });
 
@@ -72,16 +91,18 @@ async function processTelegramMessages() {
       const doneMatch = text.match(/^\/완료\s+(.+)/);
       if (doneMatch) { remindersDone.push(...doneMatch[1].trim().split(/\s+/)); continue; }
 
-      // 태그 메시지 → GAS 시트에 즉시 저장 (대소문자 무시)
-      const lowerText = text.toLowerCase();
-      const foundTags = TAGS.filter(t => lowerText.includes(t.toLowerCase()));
+      dailyMsgs.push({ date: dateStr, time: timeStr, sender, isBot, text });
+
+      const foundTags = detectTags(text);
       if (foundTags.length > 0) {
-        postToAppsScript({ action: 'save_tagged', date: dateStr, time: timeStr, sender, tags: foundTags.join(', '), text }, APPS_SCRIPT_URL)
+        await postToAppsScript({ action: 'save_tagged', date: dateStr, time: timeStr, sender, tags: foundTags.join(', '), text }, APPS_SCRIPT_URL)
           .catch(e => console.error('[태그저장 오류]', e.message));
       }
     }
 
-    // 리마인드 추가/완료 GAS에 저장
+    if (dailyMsgs.length > 0) {
+      await postToAppsScript({ action: 'save_daily', messages: dailyMsgs }, APPS_SCRIPT_URL).catch(() => {});
+    }
     for (const r of remindersToAdd) {
       await postToAppsScript({ action: 'add_reminder', ...r }, APPS_SCRIPT_URL).catch(() => {});
     }
@@ -89,10 +110,9 @@ async function processTelegramMessages() {
       await postToAppsScript({ action: 'update_reminder_done', ids: remindersDone, texts: remindersDone }, APPS_SCRIPT_URL).catch(() => {});
     }
 
-    // lastUpdateId 저장
     require('fs').writeFileSync('./last_update_id.json', JSON.stringify({ id: newLastId }), 'utf8');
-    return { messages, remindersToAdd, remindersDone };
-  } catch(e) { console.error('[메시지 처리 오류]', e.message); return { messages: [], remindersToAdd: [], remindersDone: [] }; }
+    return { messages };
+  } catch(e) { console.error('[메시지 처리 오류]', e.message); return { messages: [] }; }
 }
 
 // ── 회의록 자동화 ──────────────────────────────────────
@@ -155,10 +175,8 @@ ${convo}
     const notes = JSON.parse(jsonMatch[0]);
     await postToAppsScript({ date, status: '🟡 진행중', ...notes }, APPS_SCRIPT_URL);
     console.log('[회의록] 시트 저장 완료:', notes.title);
-    const tgSummary = `📋 <b>어제 단톡방 요약</b> (${date})
-━━━━━━━━━━━━━━━━━
-<b>${notes.title}</b>
-👥 ${notes.participants}${notes.agenda ? `\n\n📌 안건\n${notes.agenda}` : ''}${notes.decisions ? `\n\n✅ 결정사항\n${notes.decisions}` : ''}${notes.actions ? `\n\n🎯 액션아이템\n${notes.actions}` : ''}${notes.notes ? `\n\n💬 메모\n${notes.notes}` : ''}`;
+    const tgSummary = `📋 <b>어제 요약</b> · ${date}
+<b>${notes.title}</b> · 👥 ${notes.participants}${notes.agenda ? `\n📌 ${notes.agenda}` : ''}${notes.decisions ? `\n✅ ${notes.decisions}` : ''}${notes.actions ? `\n🎯 ${notes.actions}` : ''}${notes.notes ? `\n💬 ${notes.notes}` : ''}`;
     await sendTelegramGroup(tgSummary);
     console.log('[회의록] 단톡방 발송 완료');
   } catch(e) { console.error('[회의록] 오류:', e.message); }
@@ -566,8 +584,8 @@ async function getClaudeAnalysis(mode, data) {
 - 상품별 판매:
 ${productLines}
 
-이상 신호가 있으면 "🚨 [항목]: [원인 추정] → [즉각 행동]" 형식으로.
-이상 없으면 "✅ 오늘 특이사항 없음" 한 줄로.
+이상 신호가 있으면 축약체로 "🚨 <항목> — <핵심수치·원인 한 토막> ▶ <행동>" 한 신호당 한 줄. 완결문장·조사 최소화, 최대 4개.
+이상 없으면 "✅ 특이사항 없음" 한 줄.
 중요: 마크다운 기호(#, *, **, ---, >) 절대 사용하지 마. 일반 텍스트로만.`;
   } else {
     prompt = `너는 이태리정미소(프리미엄 이탈리안 식품 쇼핑몰) CX 분석가야.
@@ -646,45 +664,23 @@ async function dailyReport() {
   const prevWeekCpa  = metaPrevWeek.spend > 0 && metaPrevWeek.purchases > 0 ? formatMoney(metaPrevWeek.spend / metaPrevWeek.purchases) : '-';
 
   const claritySection = clarity
-    ? `스크립트 에러: ${clarity.scriptErrorPct.toFixed(1)}% ${icon(clarity.scriptErrorPct, 10, 30)}
-빠른 뒤로가기: ${clarity.quickbackPct.toFixed(1)}% ${icon(clarity.quickbackPct, 8, 15)}
-스크롤 깊이: ${clarity.scrollDepth.toFixed(0)}%  |  체류: ${clarity.activeTimeSec}초`
-    : '⚠️ 오늘 데이터 없음 (API 한도 초과)';
+    ? `에러 ${clarity.scriptErrorPct.toFixed(1)}%${icon(clarity.scriptErrorPct, 10, 30)} · 뒤로 ${clarity.quickbackPct.toFixed(1)}%${icon(clarity.quickbackPct, 8, 15)} · 스크롤 ${clarity.scrollDepth.toFixed(0)}% · 체류 ${clarity.activeTimeSec}초`
+    : '⚠️ 데이터 없음 (API 한도)';
 
-  const msg = `📊 <b>이태리정미소 일간 리포트</b>
-📅 ${display}
+  const msg = `📊 <b>일간 리포트</b> · ${display}
 ━━━━━━━━━━━━━━━━━
+💰 <b>메타광고</b> (랜딩 #83)
+비 ${formatMoney(meta.spend)}${diff(meta.spend, metaPrev.spend)} · 노출 ${meta.impressions.toLocaleString()} · 도달 ${meta.reach.toLocaleString()} · 빈도 ${meta.frequency.toFixed(1)}회
+CTR ${meta.ctr.toFixed(1)}% · CPM ${formatMoney(meta.cpm)}${meta.frequency >= 3 ? ' ⚠️소재교체' : ''}
+🛒 <b>퍼널</b>  랜딩 ${meta.landing}→조회 ${meta.viewContent}→장바 ${meta.addToCart}→결제 ${meta.checkout}→구매 ${meta.purchases}건${diffCount(meta.purchases, metaPrev.purchases)}
+ROAS ${meta.roas}% · CPA ${cpa} · 전환 ${pct(meta.purchases, meta.clicks)}
+🏪 <b>#83</b>  메타 ${formatMoney(p83.amount)}(${p83.count}건)·ROAS ${metaRoas}% / 자사몰 ${formatMoney(cafe24.totalSales)}(${cafe24.count}건)
+📈 <b>주간</b> (${formatDate(w7start)}~${display})
+비 ${formatMoney(metaWeek.spend)}${diff(metaWeek.spend, metaPrevWeek.spend)} · 구매 ${metaWeek.purchases}건${diffCount(metaWeek.purchases, metaPrevWeek.purchases)} · 매출 ${formatMoney(cafe24Week.sales)}${diff(cafe24Week.sales, cafe24PrevWeek.sales)} · CPA ${weekCpa} · ROAS ${weekRoas}%
+전주  비 ${formatMoney(metaPrevWeek.spend)} · 구매 ${metaPrevWeek.purchases}건 · 매출 ${formatMoney(cafe24PrevWeek.sales)} · ROAS ${prevWeekRoas}%
+👁️ <b>Clarity</b>  ${claritySection}`;
 
-💰 <b>메타 광고</b>
-광고비: ${formatMoney(meta.spend)}${diff(meta.spend, metaPrev.spend)}  |  랜딩: #83
-노출 ${meta.impressions.toLocaleString()}  |  도달 ${meta.reach.toLocaleString()}  |  빈도 ${meta.frequency.toFixed(1)}회
-CTR ${meta.ctr.toFixed(1)}%  |  CPM ${formatMoney(meta.cpm)}${meta.frequency >= 3 ? '\n⚠️ 빈도 3회 이상 — 소재 교체 검토' : ''}
-
-🛒 <b>전환 퍼널</b>
-랜딩 ${meta.landing}  →  조회 ${meta.viewContent}  →  장바구니 ${meta.addToCart}  →  결제 ${meta.checkout}  →  구매 ${meta.purchases}건${diffCount(meta.purchases, metaPrev.purchases)}
-ROAS ${meta.roas}%  |  CPA ${cpa}  |  전환율 ${pct(meta.purchases, meta.clicks)}
-━━━━━━━━━━━━━━━━━
-
-🏪 <b>메타 광고 결과 (바질페스토 #83 기준)</b>
-메타 매출: ${formatMoney(p83.amount)} (${p83.count}건)
-자사몰 전체: ${formatMoney(cafe24.totalSales)} (${cafe24.count}건, 참고)
-메타 ROAS: ${metaRoas}%
-
-📊 <b>주별 성과 비교</b>
-<b>이번 주</b> (${formatDate(w7start)} ~ ${display})
-광고비: ${formatMoney(metaWeek.spend)}${diff(metaWeek.spend, metaPrevWeek.spend)}  |  구매: ${metaWeek.purchases}건${diffCount(metaWeek.purchases, metaPrevWeek.purchases)}
-자사몰 매출: ${formatMoney(cafe24Week.sales)}${diff(cafe24Week.sales, cafe24PrevWeek.sales)}
-CPA: ${weekCpa}  |  ROAS: ${weekRoas}%
-<b>전주</b> (${formatDate(w14start)} ~ ${formatDate(w8end)})
-광고비: ${formatMoney(metaPrevWeek.spend)}  |  구매: ${metaPrevWeek.purchases}건
-자사몰 매출: ${formatMoney(cafe24PrevWeek.sales)}
-CPA: ${prevWeekCpa}  |  ROAS: ${prevWeekRoas}%
-━━━━━━━━━━━━━━━━━
-
-👁️ <b>Clarity</b>
-${claritySection}`;
-
-  const analysisMsg = analysis ? `🤖 이상 신호 분석\n━━━━━━━━━━━━━━━━━\n${analysis}` : null;
+  const analysisMsg = analysis ? `🤖 <b>이상 신호</b>\n${analysis}` : null;
 
   console.log('\n======= 텔레그램 전문 =======');
   console.log(msg.replace(/<[^>]+>/g, ''));
@@ -697,7 +693,7 @@ ${claritySection}`;
     const oneThingText = sheetsTasks.oneThing.replace(/^\[완료\]\s*/, '');
     const statusIcon = isDone ? '✅' : '⬜';
     const oneThingFormatted = isDone ? `<s>${oneThingText}</s>` : oneThingText;
-    tasksSection = `\n━━━━━━━━━━━━━━━━━\n📋 <b>이번 주 전략 할일</b>\n⭐ ${statusIcon} ${oneThingFormatted}`;
+    tasksSection = `\n📋 <b>주간 전략</b>  ⭐ ${statusIcon} ${oneThingFormatted}`;
     if (sheetsTasks.subs.length) {
       const subLines = sheetsTasks.subs.map(s => {
         const done = s.startsWith('[완료]');
@@ -721,20 +717,21 @@ ${claritySection}`;
     if (urgentItems.length) lines += urgentItems.map(t => `🚨 ${t.text}`).join('\n') + '\n';
     if (normalItems.length) lines += normalItems.map(t => `• ${t.text}`).join('\n') + '\n';
     if (doneItems.length)   lines += doneItems.map(t => `• <s>${t.text}</s>`).join('\n');
-    memoSection = `\n━━━━━━━━━━━━━━━━━\n📝 <b>은우 메모</b>\n${lines.trim()}`;
+    memoSection = `\n📝 <b>은우 메모</b>\n${lines.trim()}`;
   }
 
   const yesterday = dateStr(1);
-  const [{ messages: groupMessages }, activeReminders] = await Promise.all([
+  // 1) 최신 메시지 수집(일일대화·태그·리마인드 저장) → 2) 어제분을 시트에서 읽어 요약
+  const [, activeReminders] = await Promise.all([
     processTelegramMessages(),
     getRemindersFromSheet(),
   ]);
-  const yesterdayMsgs = groupMessages.filter(m => m.date === yesterday);
+  const yesterdayMsgs = await getDailyMessagesFromSheet(yesterday);
   if (yesterdayMsgs.length > 0) await saveMeetingNotes(yesterdayMsgs, yesterday);
 
   if (activeReminders.length > 0) {
     const lines = activeReminders.map(r => `[${r.id}] ${r.text}`).join('\n');
-    const remindMsg = `🔁 <b>진행 중 리마인드</b>\n━━━━━━━━━━━━━━━━━\n${lines}\n<i>완료 → /완료 번호</i>`;
+    const remindMsg = `🔁 <b>리마인드</b>\n${lines}\n<i>완료 → /완료 번호</i>`;
     await sendTelegramGroup(remindMsg);
   }
 
