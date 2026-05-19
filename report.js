@@ -24,58 +24,19 @@ function getMemos() {
   } catch(e) { return []; }
 }
 
-// ── 리마인드 ──────────────────────────────────────────
-function loadReminders() {
-  try { return readJson(REMINDERS_PATH); } catch(e) { return { lastUpdateId: 0, reminders: [] }; }
-}
-function saveReminders(data) {
-  fs.writeFileSync(REMINDERS_PATH, JSON.stringify(data, null, 2), 'utf8');
-}
-async function processTelegramCommands() {
+// ── GAS 기반 메시지/리마인드 조회 (웹훅 전환 후) ───────
+async function getDailyMessages(date) {
   try {
-    const store = loadReminders();
-    const offset = store.lastUpdateId ? store.lastUpdateId + 1 : 0;
-    const res = await fetchJson(`https://api.telegram.org/bot${TG_TOKEN}/getUpdates?offset=${offset}&limit=100&allowed_updates=%5B%22message%22%5D`);
-    if (!res.ok || !res.result.length) return { store, messages: [] };
-    const messages = [];
-    for (const update of res.result) {
-      store.lastUpdateId = Math.max(store.lastUpdateId, update.update_id);
-      const msg = update.message;
-      if (!msg || !msg.text) continue;
-      if (String(msg.chat.id) !== String(GROUP_CHAT_ID)) continue;
-      const text = msg.text.trim();
-      const today = new Date().toISOString().split('T')[0];
-      const sender = msg.from ? msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : '') : '알수없음';
-      const isBot = msg.from ? !!msg.from.is_bot : false;
-      messages.push({ time: new Date(msg.date * 1000).toTimeString().slice(0, 5), sender, isBot, text });
-
-      const addMatch = text.match(/^\/추가\s+(.+)/s);
-      if (addMatch) {
-        const maxId = store.reminders.reduce((m, r) => Math.max(m, r.id), 0);
-        store.reminders.push({ id: maxId + 1, text: addMatch[1].trim(), addedDate: today, done: false });
-        continue;
-      }
-      const doneMatch = text.match(/^\/완료\s+(.+)/);
-      if (doneMatch) {
-        const parts = doneMatch[1].trim().split(/\s+/);
-        for (const part of parts) {
-          const num = parseInt(part);
-          if (!isNaN(num)) {
-            const item = store.reminders.find(r => r.id === num && !r.done);
-            if (item) { item.done = true; item.doneDate = today; }
-          } else {
-            const item = store.reminders.find(r => !r.done && r.text.includes(part));
-            if (item) { item.done = true; item.doneDate = today; }
-          }
-        }
-      }
-    }
-    saveReminders(store);
-    return { store, messages };
-  } catch(e) { console.error('리마인드 처리 오류:', e.message); return { store: loadReminders(), messages: [] }; }
+    const res = await postToAppsScript({ action: 'get_daily_messages', date }, APPS_SCRIPT_URL);
+    return res.messages || [];
+  } catch(e) { console.error('[메시지 조회 오류]', e.message); return []; }
 }
-function getActiveReminders(store) {
-  return (store.reminders || []).filter(r => !r.done);
+
+async function getRemindersFromSheet() {
+  try {
+    const res = await postToAppsScript({ action: 'get_reminders' }, APPS_SCRIPT_URL);
+    return res.reminders || [];
+  } catch(e) { console.error('[리마인드 조회 오류]', e.message); return []; }
 }
 
 // ── 회의록 자동화 ──────────────────────────────────────
@@ -152,7 +113,7 @@ const CLAUDE_MODEL       = (process.env.CLAUDE_MODEL      || _cl.model          
 const CLARITY_PROJECT_ID = 'vzm43te29q';
 const clarityToken       = (process.env.CLARITY_TOKEN     || _cla).trim();
 const GROUP_CHAT_ID      = (process.env.TG_GROUP_CHAT_ID  || _tg.group_chat_id   || '').toString().trim();
-const REMINDERS_PATH     = './reminders.json';
+// REMINDERS_PATH 제거 — 리마인드는 GAS Google Sheets에서 관리
 const APPS_SCRIPT_URL    = process.env.APPS_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycby_4WNcHLvcgCUIb3qhRi-h9_qApHSLXwCQa3_Qmw4xDNbdaZvPVeshmlGPg661KMRG/exec';
 const ga4Config = {
   client_id:     (process.env.GA4_CLIENT_ID     || _ga.client_id     || '').trim(),
@@ -699,12 +660,13 @@ ${claritySection}`;
     memoSection = `\n━━━━━━━━━━━━━━━━━\n📝 <b>은우 메모</b>\n${lines.trim()}`;
   }
 
-  const { store: reminderStore, messages: groupMessages } = await processTelegramCommands();
   const yesterday = dateStr(1);
+  const [groupMessages, activeReminders] = await Promise.all([
+    getDailyMessages(yesterday),
+    getRemindersFromSheet(),
+  ]);
   if (groupMessages.length > 0) await saveMeetingNotes(groupMessages, yesterday);
 
-  // 리마인드가 있으면 단톡방 요약 메시지 뒤에 함께 발송
-  const activeReminders = getActiveReminders(reminderStore);
   if (activeReminders.length > 0) {
     const lines = activeReminders.map(r => `[${r.id}] ${r.text}`).join('\n');
     const remindMsg = `🔁 <b>진행 중 리마인드</b>\n━━━━━━━━━━━━━━━━━\n${lines}\n<i>완료 → /완료 번호</i>`;
