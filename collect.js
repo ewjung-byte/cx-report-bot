@@ -82,7 +82,8 @@ async function main() {
       continue;
     }
 
-    const foundTags = TAGS.filter(t => text.includes(t));
+    const lowerText = text.toLowerCase();
+    const foundTags = TAGS.filter(t => lowerText.includes(t.toLowerCase()));
     if (foundTags.length > 0) {
       await postToAppsScript({ action: 'save_tagged', date: dateStr, time: timeStr, sender, tags: foundTags.join(', '), text }, APPS_SCRIPT_URL).catch(() => {});
       taggedCount++;

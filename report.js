@@ -72,8 +72,9 @@ async function processTelegramMessages() {
       const doneMatch = text.match(/^\/완료\s+(.+)/);
       if (doneMatch) { remindersDone.push(...doneMatch[1].trim().split(/\s+/)); continue; }
 
-      // 태그 메시지 → GAS 시트에 즉시 저장
-      const foundTags = TAGS.filter(t => text.includes(t));
+      // 태그 메시지 → GAS 시트에 즉시 저장 (대소문자 무시)
+      const lowerText = text.toLowerCase();
+      const foundTags = TAGS.filter(t => lowerText.includes(t.toLowerCase()));
       if (foundTags.length > 0) {
         postToAppsScript({ action: 'save_tagged', date: dateStr, time: timeStr, sender, tags: foundTags.join(', '), text }, APPS_SCRIPT_URL)
           .catch(e => console.error('[태그저장 오류]', e.message));
