@@ -677,8 +677,9 @@ async function getGA4Daily(dateStrYmd) {
   try {
     const token = await getGA4Token();
     const range = { startDate: dateStrYmd, endDate: dateStrYmd };
-    const [chRes, pageRes] = await Promise.all([
+    const [chRes, utRes, pageRes] = await Promise.all([
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'sessionDefaultChannelGroup'}], limit: 8, orderBys:[{metric:{metricName:'sessions'},desc:true}] }),
+      ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'newVsReturning'}] }),
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'screenPageViews'},{name:'sessions'}], dimensions:[{name:'pagePathPlusQueryString'}], limit: 40, orderBys:[{metric:{metricName:'screenPageViews'},desc:true}] }),
     ]);
     const channels = (chRes.rows||[]).map(r => ({
@@ -686,23 +687,18 @@ async function getGA4Daily(dateStrYmd) {
       sessions: parseInt(r.metricValues[0].value),
       purchases: parseInt(r.metricValues[1].value),
     }));
-    const products = {};
-    let surlSessions = 0, totalSessions = 0;
+    const userType = { new:{sessions:0,purchases:0}, ret:{sessions:0,purchases:0} };
+    (utRes.rows||[]).forEach(r => {
+      const k = r.dimensionValues[0].value === 'new' ? 'new' : 'ret';
+      userType[k].sessions = parseInt(r.metricValues[0].value);
+      userType[k].purchases = parseInt(r.metricValues[1].value);
+    });
+    let surlSessions = 0;
     (pageRes.rows||[]).forEach(r => {
       const path = r.dimensionValues[0].value;
-      const pv = parseInt(r.metricValues[0].value);
-      const ses = parseInt(r.metricValues[1].value);
-      totalSessions += ses;
-      if (/^\/surl\/p\//i.test(path)) surlSessions += ses;
-      const m = path.match(/product_no=(\d+)/);
-      if (m) {
-        const id = m[1];
-        if (!products[id]) products[id] = { id, pv: 0, sessions: 0 };
-        products[id].pv += pv; products[id].sessions += ses;
-      }
+      if (/^\/surl\/p\//i.test(path)) surlSessions += parseInt(r.metricValues[1].value);
     });
-    const topProducts = Object.values(products).sort((a,b)=>b.sessions-a.sessions).slice(0,3);
-    return { channels, topProducts, surlSessions, totalSessions };
+    return { channels, userType, surlSessions };
   } catch(e) { console.error('GA4 일간 오류:', e.message); return null; }
 }
 
@@ -746,32 +742,38 @@ async function getClaudeAnalysis(mode, data) {
 
   let prompt;
   if (mode === 'daily') {
-    const chLines = (ga4Daily?.channels || []).slice(0, 5).map(c => `  - ${c.name}: ${c.sessions}세션·구매 ${c.purchases} (CVR ${pct(c.purchases, c.sessions)})`).join('\n') || '  (없음)';
-    const prdLines = (ga4Daily?.topProducts || []).slice(0, 3).map(p => `  - #${p.id}: ${p.sessions}세션 (${p.pv}pv)`).join('\n') || '  (없음)';
-    prompt = `너는 이태리정미소(프리미엄 이탈리안 식품 쇼핑몰) CX 분석가야.
-광고·매출 절대값은 다른 봇이 보고하니 보지 말고, 어제 자사몰 온사이트 행동·진입경로·상품 페이지 데이터에서 CX 이상 신호만 짧게 짚어줘.
+    const ut = ga4Daily?.userType;
+    const newCvr = ut?.new?.sessions > 0 ? (ut.new.purchases / ut.new.sessions * 100).toFixed(2) : '-';
+    const retCvr = ut?.ret?.sessions > 0 ? (ut.ret.purchases / ut.ret.sessions * 100).toFixed(2) : '-';
+    const cafeMain = cafe24?.byProduct?.['83'] || {amount:0,count:0};
+    const cafeOthers = cafe24 ? Object.entries(cafe24.byProduct||{}).filter(([k])=>k!=='83').reduce((s,[,v])=>({amount:s.amount+v.amount, count:s.count+v.count}), {amount:0,count:0}) : {amount:0,count:0};
+    prompt = `너는 이태리정미소 CX 관리자야. 광고·매출 절대값은 다른 봇이 보고하니 분석 X. 너는 어제 (1) 사이트 건강 (2) 리텐션 (3) 사이드SKU 시동 세 축만 보고 즉시 행동 필요한 신호만 짚어내.
 
-[온사이트 행동 (Microsoft Clarity)]
-- 세션: ${clarity?.totalSessions||'-'}
-- 스크립트 에러율: ${clarity?.scriptErrorPct?.toFixed(1)||'-'}% (정상 10% 이하)
-- 빠른 뒤로가기율: ${clarity?.quickbackPct?.toFixed(1)||'-'}% (정상 8% 이하)
-- 데드클릭율: ${clarity?.deadClickPct?.toFixed(1)||'-'}%
-- 스크롤 깊이: ${clarity?.scrollDepth?.toFixed(0)||'-'}% / 활성 체류: ${clarity?.activeTimeSec||'-'}초
-- 인스타 인앱 비중: ${clarity?.instagramPct||'-'}%
-- 온사이트 퍼널: 랜딩 ${f?.landing||0} → 상품 ${f?.product||0} → 장바구니 ${f?.cart||0} → 결제 ${f?.checkout||0}
+[사이트 건강 — Microsoft Clarity]
+- 세션: ${clarity?.totalSessions||'-'} / 스크립트에러 ${clarity?.scriptErrorPct?.toFixed(1)||'-'}% (정상 10↓) / 빠른뒤로가기 ${clarity?.quickbackPct?.toFixed(1)||'-'}% (정상 8↓) / 데드클릭 ${clarity?.deadClickPct?.toFixed(1)||'-'}%
+- 인스타 인앱: ${clarity?.instagramPct||'-'}% (80↑ 시 인앱 결제 마찰 주의)
+- 체류 ${clarity?.activeTimeSec||'-'}초 / 스크롤 ${clarity?.scrollDepth?.toFixed(0)||'-'}%
+- 결제 페이지 세션: ${clarity?.funnel?.checkout||0} / 장바구니: ${clarity?.funnel?.cart||0} (장바→결제 단계 통과율)
 
-[GA4 어제 채널별 (CVR=구매/세션)]
-${chLines}
+[리텐션 — GA4, OKR "재구매자 300명"]
+- 재방문: ${ut?.ret?.sessions||0}명·구매 ${ut?.ret?.purchases||0} (CVR ${retCvr}%)
+- 신규: ${ut?.new?.sessions||0}명·구매 ${ut?.new?.purchases||0} (CVR ${newCvr}%)
+- 재방문이 신규 대비 충분히 효율적(보통 3~5배)인지, 재방문 절대수가 늘고 있는지
 
-[GA4 어제 상품 페이지 top 3]
-${prdLines}
+[사이드SKU 시동 — 카페24 자사몰]
+- #83 바질페스토(메인): ${formatMoney(cafeMain.amount)}·${cafeMain.count}건
+- #83 외 합계: ${formatMoney(cafeOthers.amount)}·${cafeOthers.count}건 (파파넬라 EVOO·룽고 등 OKR 신규 SKU)
+- 비#83 매출이 잡혔다면 어떤 SKU인지, 시동 신호인지
 
-[짧은URL(/surl/p/*) 세션]: ${ga4Daily?.surlSessions||0} (구매는 0으로 잡힘 → 추적 끊김 가능)
+판단 기준:
+- 즉시 행동 필요한가 (yes만 신호로 만듦)
+- 위 3축 중 하나라도 임계 초과·역전·정체면 신호
+- "데이터 미수집"은 신호로 만들지 마 (Clarity API 한도일 뿐)
 
-스크립트 에러·이탈·퍼널 단계 급락·채널별 CVR 격차·상품 페이지 트래픽 대비 구매 부진 위주로.
-이상 신호가 있으면 축약체로 "🚨 <항목> — <핵심수치·원인 한 토막> ▶ <행동>" 한 신호당 한 줄. 완결문장·조사 최소화, 최대 4개.
-이상 없으면 "✅ 특이사항 없음" 한 줄.
-중요: 마크다운 기호(#, *, **, ---, >) 절대 사용하지 마. 일반 텍스트로만.`;
+신호 형식 (최대 3개): 🚨 <항목> — <근거 수치> ▶ <행동>
+모두 정상이면 한 줄: ✅ 특이사항 없음 — <오늘 본업 한 줄 코멘트>
+
+마크다운 기호 금지(#, *, **, ---, >). 일반 텍스트만.`;
   } else {
     prompt = `너는 이태리정미소(프리미엄 이탈리안 식품 쇼핑몰) CX 분석가야.
 이번 주 데이터를 분석하고 세 파트로 답해줘.
@@ -822,55 +824,53 @@ async function dailyReport() {
   const display = formatDate(today);
   console.log(`[일간] ${today}`);
 
-  // A안 + CX 관리자 강화: Clarity(온사이트 행동) + GA4 어제(채널·상품·짧은URL 손실)
-  const [clarity, sheetsTasks, ga4Daily] = await Promise.all([
+  // CX 관리자 일간: 사이트 건강 / 리텐션(OKR) / 비#83 매출 시그널 / Claude 이상신호
+  const [clarity, sheetsTasks, ga4Daily, cafe24] = await Promise.all([
     getClarityData(),
     getSheetsTasks(),
     getGA4Daily(today),
+    getCafe24SalesByProduct(today),
   ]);
 
-  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily });
+  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, cafe24 });
 
-  const claritySection = clarity
-    ? `에러 ${clarity.scriptErrorPct.toFixed(1)}%${icon(clarity.scriptErrorPct, 10, 30)} · 뒤로 ${clarity.quickbackPct.toFixed(1)}%${icon(clarity.quickbackPct, 8, 15)} · 스크롤 ${clarity.scrollDepth.toFixed(0)}% · 체류 ${clarity.activeTimeSec}초`
+  // 🚦 사이트 건강
+  const healthSection = clarity
+    ? `에러 ${clarity.scriptErrorPct.toFixed(1)}%${icon(clarity.scriptErrorPct, 10, 30)} · 뒤로 ${clarity.quickbackPct.toFixed(1)}%${icon(clarity.quickbackPct, 8, 15)} · 인스타인앱 ${clarity.instagramPct}%${parseFloat(clarity.instagramPct) > 80 ? '⚠️인앱마찰' : ''}\n체류 ${clarity.activeTimeSec}초 · 스크롤 ${clarity.scrollDepth.toFixed(0)}%${clarity.funnel ? ` · 결제 ${clarity.funnel.checkout}세션` : ''}`
     : '⚠️ 데이터 없음 (API 한도)';
-  const f = clarity && clarity.funnel;
-  const funnelLine = f
-    ? `랜딩 ${f.landing.toLocaleString()} → 상품 ${f.product}(${pct(f.product, f.landing)}) → 장바 ${f.cart} → 결제 ${f.checkout}`
-    : '-';
 
-  // 채널별 CVR (top 4, Paid Social·Direct·Organic 등)
-  let channelSection = '';
-  if (ga4Daily && ga4Daily.channels.length) {
-    channelSection = '\n📈 <b>어제 진입경로</b>\n' + ga4Daily.channels.slice(0, 4).map(c => {
-      const nm = CHANNEL_KR[c.name] || c.name;
-      return `${nm}: ${c.sessions}세션·구매 ${c.purchases} (CVR ${pct(c.purchases, c.sessions)})`;
-    }).join('\n');
+  // 🔁 리텐션
+  let retentionSection = '데이터 없음';
+  if (ga4Daily && ga4Daily.userType) {
+    const ut = ga4Daily.userType;
+    const newCvr = ut.new.sessions > 0 ? (ut.new.purchases / ut.new.sessions * 100) : 0;
+    const retCvr = ut.ret.sessions > 0 ? (ut.ret.purchases / ut.ret.sessions * 100) : 0;
+    const mult = newCvr > 0 ? (retCvr / newCvr).toFixed(1) : '-';
+    retentionSection = `재방문 ${ut.ret.sessions}명·구매 ${ut.ret.purchases} (CVR ${retCvr.toFixed(1)}%) / 신규 ${ut.new.sessions}명·구매 ${ut.new.purchases} (CVR ${newCvr.toFixed(1)}%) · 재방문이 신규 대비 ${mult}배`;
   }
 
-  // 상품 디테일 페이지 top 3
-  let productSection = '';
-  if (ga4Daily && ga4Daily.topProducts.length) {
-    productSection = '\n🛍️ <b>상품 페이지 top 3</b>\n' + ga4Daily.topProducts.map(p => {
-      const nm = PRODUCT_NAME[p.id] || `상품 #${p.id}`;
-      return `${nm}: ${p.sessions}세션 (${p.pv} pv)`;
-    }).join('\n');
-  }
-
-  // 짧은URL 추적 손실 경보 (광고 클릭 → 구매 추적 끊김 의심)
-  let alertSection = '';
-  if (ga4Daily) {
-    const paidSoc = ga4Daily.channels.find(c => c.name === 'Paid Social');
-    if (paidSoc && paidSoc.sessions >= 50 && paidSoc.purchases / Math.max(paidSoc.sessions, 1) < 0.005) {
-      alertSection = `\n🚨 <b>유료SNS CVR ${pct(paidSoc.purchases, paidSoc.sessions)}</b> — 광고 트래픽 구매 미연결 (짧은URL/${ga4Daily.surlSessions}세션 추적 누수 또는 결제 마찰 의심)`;
+  // 🌱 비#83 매출 시그널
+  let sideSkuSection = '0건 (모두 #83)';
+  if (cafe24 && cafe24.byProduct) {
+    const nonMain = Object.entries(cafe24.byProduct).filter(([k]) => k !== '83').map(([k,v])=>v).filter(v=>v.count>0);
+    if (nonMain.length) {
+      sideSkuSection = nonMain.sort((a,b)=>b.amount-a.amount).slice(0,4).map(p => {
+        const nm = PRODUCT_NAME[String(p.productNo)] || p.name || `#${p.productNo}`;
+        return `${nm}: ${formatMoney(p.amount)}·${p.count}건`;
+      }).join(' / ') + ' ↑';
     }
   }
 
   const msg = `🔎 <b>CX 일간</b> · ${display}
 ━━━━━━━━━━━━━━━━━
-👁️ <b>온사이트 행동</b>  ${claritySection}
-🔽 <b>온사이트 퍼널</b>  ${funnelLine}${channelSection}${productSection}${alertSection}
-<i>광고·매출은 송마망 봇 리포트 참고</i>`;
+🚦 <b>사이트 건강</b>
+${healthSection}
+
+🔁 <b>리텐션</b> (OKR)
+${retentionSection}
+
+🌱 <b>비#83 매출</b>
+${sideSkuSection}`;
 
   const analysisMsg = analysis ? `🤖 <b>CX 이상 신호</b>\n${analysis}` : null;
 
