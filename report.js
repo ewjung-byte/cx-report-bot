@@ -891,4 +891,22 @@ async function main() {
   else await dailyReport();
 }
 
-main().catch(e => { console.error('에러:', e.message); process.exit(1); });
+// 모듈로 require될 때(personal-metrics 등)는 main 자동실행 금지
+if (require.main === module) {
+  main().catch(e => { console.error('에러:', e.message); process.exit(1); });
+}
+
+// personal-metrics 등 외부 스크립트에서 데이터 수집 함수 재사용
+module.exports = {
+  refreshCafe24Token,
+  getCafe24Sales,
+  getCafe24SalesByProduct,
+  getCafe24Reviews,
+  getRepurchaseStats,
+  getMetaStats,
+  getGA4Weekly,
+  getClarityData,
+  getSheetsTasks,
+  dateStr,
+  formatDate,
+};
