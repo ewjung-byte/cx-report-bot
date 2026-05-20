@@ -4,6 +4,11 @@ on:
   # GitHub Actions cron은 지연 발화로 야간/오후 발송 사고 발생(2026-05-19 KST 21:21).
   # GAS 시간 트리거(triggerDailyReport, 매일 오전 9시대 KST)가 단일 정시 호출 경로.
   workflow_dispatch:       # GAS·수동에서만 실행
+    inputs:
+      mode:
+        description: 'Report mode (daily/weekly, empty = auto by weekday)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -19,7 +24,7 @@ jobs:
           node-version: '20'
 
       - name: Run CX Report
-        run: node report.js
+        run: node report.js ${{ inputs.mode }}
         env:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           CAFE24_CLIENT_SECRET: ${{ secrets.CAFE24_CLIENT_SECRET }}

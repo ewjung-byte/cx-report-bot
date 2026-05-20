@@ -566,12 +566,13 @@ async function getGA4Weekly() {
     const lw = { startDate: dateStr(14), endDate: dateStr(8) };
     const base = (dr) => ({ dateRanges:[dr] });
 
-    const [chThis, chLast, utThis, utLast, landingRes] = await Promise.all([
+    const [chThis, chLast, utThis, utLast, landingRes, productsRes] = await Promise.all([
       ga4Fetch(token, { ...base(tw), metrics:[{name:'sessions'},{name:'averageSessionDuration'}], dimensions:[{name:'sessionDefaultChannelGroup'}] }),
       ga4Fetch(token, { ...base(lw), metrics:[{name:'sessions'}], dimensions:[{name:'sessionDefaultChannelGroup'}] }),
       ga4Fetch(token, { ...base(tw), metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'newVsReturning'}] }),
       ga4Fetch(token, { ...base(lw), metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'newVsReturning'}] }),
       ga4Fetch(token, { ...base(tw), metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'landingPagePlusQueryString'}], limit:5, orderBys:[{metric:{metricName:'sessions'},desc:true}] }),
+      ga4Fetch(token, { ...base(tw), metrics:[{name:'screenPageViews'},{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'pagePathPlusQueryString'}], limit:50, orderBys:[{metric:{metricName:'sessions'},desc:true}] }),
     ]);
 
     const channels = {};
@@ -603,7 +604,21 @@ async function getGA4Weekly() {
       cvr: pct(parseInt(r.metricValues[1].value), parseInt(r.metricValues[0].value)),
     }));
 
-    return { channels, userType, landings };
+    // 상품별 페이지 성과 (product_no 기준 그루핑)
+    const products = {};
+    (productsRes.rows||[]).forEach(r => {
+      const path = r.dimensionValues[0].value;
+      const m = path.match(/product_no=(\d+)/);
+      if (!m) return;
+      const id = m[1];
+      if (!products[id]) products[id] = { id, pv:0, sessions:0, purchases:0 };
+      products[id].pv += parseInt(r.metricValues[0].value);
+      products[id].sessions += parseInt(r.metricValues[1].value);
+      products[id].purchases += parseInt(r.metricValues[2].value);
+    });
+    const topProducts = Object.values(products).sort((a,b)=>b.sessions-a.sessions).slice(0,5);
+
+    return { channels, userType, landings, topProducts };
   } catch(e) { console.error('GA4 오류:', e.message); return null; }
 }
 
@@ -746,6 +761,7 @@ ${prdLines}
 - 구매 퍼널: 랜딩 ${f?.landing||0}명 → 상품 ${f?.product||0}명(${pct(f?.product,f?.landing)}) → 장바구니 ${f?.cart||0}명(${pct(f?.cart,f?.landing)}) → 구매하기 ${f?.checkout||0}명(${pct(f?.checkout,f?.landing)})
 - GA4 구매전환율(ecommercePurchases): 신규 ${pct(ga4?.userType?.cur?.new?.conv, ga4?.userType?.cur?.new?.sessions)} / 재방문 ${pct(ga4?.userType?.cur?.ret?.conv, ga4?.userType?.cur?.ret?.sessions)} (재방문이 신규보다 현저히 높으면 리텐션 전략 ROI 시그널)
 - 재구매(회원·90일): 재구매율 ${repurchase?.repurchaseRate?.toFixed(1)||'-'}% (재구매 ${repurchase?.repeatMembers||0}/${repurchase?.distinctMembers||0}명), 평균 ${repurchase?.avgDaysToRepeat??'-'}일 만에 재구매 / 이번주 재구매 매출비중 ${repurchase?.week?.repShare?.toFixed(0)||'-'}% (회사 OKR: 바질 재구매자 300명)
+- 상품별 페이지 성과(top 5, GA4 product_no 기준): ${(ga4?.topProducts||[]).map(p=>`#${p.id} ${p.sessions}세션·구매 ${p.purchases}(CVR ${pct(p.purchases,p.sessions)})`).join(' / ')||'없음'}
 ${reviews ? `\n[이번 주 리뷰 ${reviews.count}건 / 평균 ${reviews.avg}점]\n${reviews.texts}` : ''}
 
 == 파트 1: 반드시 이번 주 홈페이지에 적용할 것 ==
@@ -926,6 +942,22 @@ async function weeklyReport() {
     return `${name}: ${l.sessions}명 CVR ${l.cvr}`;
   }).join('\n');
 
+  // 상품별 페이지 성과 (top 5)
+  const productLines = (ga4?.topProducts||[]).map(p => {
+    const nm = PRODUCT_NAME[p.id] || `상품 #${p.id}`;
+    return `${nm}: ${p.sessions}세션·구매 ${p.purchases} (CVR ${pct(p.purchases, p.sessions)})`;
+  }).join('\n');
+
+  // 결제 누수 추정액 (Clarity 스크립트에러 × 세션 × 자사몰 CVR × AOV)
+  let leakageLine = '데이터 부족';
+  if (clarity && clarity.totalSessions && clarity.scriptErrorPct && cafe24This.count > 0) {
+    const errorSessions = clarity.totalSessions * (clarity.scriptErrorPct / 100);
+    const aov = cafe24This.sales / cafe24This.count;
+    const siteCVR = cafe24This.count / Math.max(clarity.totalSessions, 1);
+    const lostRevenue = errorSessions * siteCVR * aov;
+    leakageLine = `${formatMoney(lostRevenue)}/주 잠재손실 추정 (에러 ${errorSessions.toFixed(0)}세션 × CVR ${(siteCVR*100).toFixed(1)}% × AOV ${formatMoney(aov)})`;
+  }
+
   const weeklyMsg = `📈 <b>이태리정미소 지난주 CX 리포트</b>
 📅 ${display}
 ━━━━━━━━━━━━━━━━━
@@ -952,12 +984,18 @@ ${userTypeLine}
 🏠 <b>랜딩 페이지 CVR</b>
 ${landingLines}
 
+🛍️ <b>상품 페이지 성과 (top 5)</b>
+${productLines || '데이터 없음'}
+
 🔽 <b>구매 퍼널 (Clarity)</b>
 ${funnelLine}
 
 👁️ <b>Clarity</b>
 스크롤 깊이: ${clarity?.scrollDepth?.toFixed(0)||'-'}% | 체류: ${clarity?.activeTimeSec||'-'}초
 스크립트 에러: ${clarity?.scriptErrorPct?.toFixed(1)||'-'}% ${clarity ? icon(clarity.scriptErrorPct,10,30) : ''} | 빠른뒤로가기: ${clarity?.quickbackPct?.toFixed(1)||'-'}% ${clarity ? icon(clarity.quickbackPct,8,15) : ''}
+
+💸 <b>결제 누수 추정</b>
+${leakageLine}
 
 ⭐ <b>고객 리뷰</b>
 ${reviews ? `${reviews.count}건 | 평균 ${reviews.avg}점 | 5점 ${reviews.dist[5]}건 / 4점 ${reviews.dist[4]}건 / 3점이하 ${reviews.dist.low}건` : '데이터 없음'}`;
