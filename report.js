@@ -534,9 +534,9 @@ async function getGA4Weekly() {
     const [chThis, chLast, utThis, utLast, landingRes] = await Promise.all([
       ga4Fetch(token, { ...base(tw), metrics:[{name:'sessions'},{name:'averageSessionDuration'}], dimensions:[{name:'sessionDefaultChannelGroup'}] }),
       ga4Fetch(token, { ...base(lw), metrics:[{name:'sessions'}], dimensions:[{name:'sessionDefaultChannelGroup'}] }),
-      ga4Fetch(token, { ...base(tw), metrics:[{name:'sessions'},{name:'conversions'}], dimensions:[{name:'newVsReturning'}] }),
-      ga4Fetch(token, { ...base(lw), metrics:[{name:'sessions'},{name:'conversions'}], dimensions:[{name:'newVsReturning'}] }),
-      ga4Fetch(token, { ...base(tw), metrics:[{name:'sessions'},{name:'conversions'}], dimensions:[{name:'landingPagePlusQueryString'}], limit:5, orderBys:[{metric:{metricName:'sessions'},desc:true}] }),
+      ga4Fetch(token, { ...base(tw), metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'newVsReturning'}] }),
+      ga4Fetch(token, { ...base(lw), metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'newVsReturning'}] }),
+      ga4Fetch(token, { ...base(tw), metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'landingPagePlusQueryString'}], limit:5, orderBys:[{metric:{metricName:'sessions'},desc:true}] }),
     ]);
 
     const channels = {};
@@ -662,7 +662,7 @@ async function getClaudeAnalysis(mode, data) {
 - 활성 체류: ${clarity?.activeTimeSec||'-'}초
 - 인스타 인앱: ${clarity?.instagramPct||'-'}%
 - 구매 퍼널: 랜딩 ${f?.landing||0}명 → 상품 ${f?.product||0}명(${pct(f?.product,f?.landing)}) → 장바구니 ${f?.cart||0}명(${pct(f?.cart,f?.landing)}) → 구매하기 ${f?.checkout||0}명(${pct(f?.checkout,f?.landing)})
-- GA4 신규 전환율: ${pct(ga4?.userType?.cur?.new?.conv, ga4?.userType?.cur?.new?.sessions)} / 재방문 전환율: ${pct(ga4?.userType?.cur?.ret?.conv, ga4?.userType?.cur?.ret?.sessions)}
+- GA4 구매전환율(ecommercePurchases): 신규 ${pct(ga4?.userType?.cur?.new?.conv, ga4?.userType?.cur?.new?.sessions)} / 재방문 ${pct(ga4?.userType?.cur?.ret?.conv, ga4?.userType?.cur?.ret?.sessions)} (재방문이 신규보다 현저히 높으면 리텐션 전략 ROI 시그널)
 - 재구매(회원·90일): 재구매율 ${repurchase?.repurchaseRate?.toFixed(1)||'-'}% (재구매 ${repurchase?.repeatMembers||0}/${repurchase?.distinctMembers||0}명), 평균 ${repurchase?.avgDaysToRepeat??'-'}일 만에 재구매 / 이번주 재구매 매출비중 ${repurchase?.week?.repShare?.toFixed(0)||'-'}% (회사 OKR: 바질 재구매자 300명)
 ${reviews ? `\n[이번 주 리뷰 ${reviews.count}건 / 평균 ${reviews.avg}점]\n${reviews.texts}` : ''}
 
@@ -819,8 +819,8 @@ async function weeklyReport() {
   const ut = ga4?.userType?.cur;
   const utPrev = ga4?.userType?.prev;
   const userTypeLine = ut
-    ? `신규: ${ut.new.sessions.toLocaleString()}명 | 전환 ${pct(ut.new.conv, ut.new.sessions)}${diff(ut.new.conv/Math.max(ut.new.sessions,1)*100, utPrev?.new?.conv/Math.max(utPrev?.new?.sessions||1,1)*100)}
-재방문: ${ut.ret.sessions.toLocaleString()}명 | 전환 ${pct(ut.ret.conv, ut.ret.sessions)}${diff(ut.ret.conv/Math.max(ut.ret.sessions,1)*100, utPrev?.ret?.conv/Math.max(utPrev?.ret?.sessions||1,1)*100)}`
+    ? `신규: ${ut.new.sessions.toLocaleString()}명 | 구매전환 ${pct(ut.new.conv, ut.new.sessions)}${diff(ut.new.conv/Math.max(ut.new.sessions,1)*100, utPrev?.new?.conv/Math.max(utPrev?.new?.sessions||1,1)*100)}
+재방문: ${ut.ret.sessions.toLocaleString()}명 | 구매전환 ${pct(ut.ret.conv, ut.ret.sessions)}${diff(ut.ret.conv/Math.max(ut.ret.sessions,1)*100, utPrev?.ret?.conv/Math.max(utPrev?.ret?.sessions||1,1)*100)}`
     : '-';
 
   const landingLines = (ga4?.landings||[]).map(l => {
