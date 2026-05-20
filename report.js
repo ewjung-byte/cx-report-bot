@@ -204,8 +204,43 @@ const ga4Config = {
   property_id:   (process.env.GA4_PROPERTY_ID   || _ga.property_id   || '').toString().trim(),
 };
 
-// ── 카페24 토큰 자동 갱신 (GitHub Actions용) ───────────
+// ── 카페24 토큰 자동 갱신 ──────────────────────────────
+// 1순위: Google Drive의 italy.token.json 직접 읽기 (VPS가 매시간 회전 → 항상 최신).
+//        GA4 OAuth refresh_token이 drive.readonly scope 포함하도록 재발급됨 (2026-05-20).
+// 2순위(fallback): 기존 Secret 기반 refresh API 호출.
+// → refresh_token 회전 시 Secret이 옛 거가 되어 깨지는 문제 영구 해결.
+async function loadCafe24FromDrive() {
+  const fileId = process.env.CAFE24_TOKEN_DRIVE_FILE_ID;
+  if (!fileId) return null;
+  if (!ga4Config.client_id || !ga4Config.refresh_token) return null;
+  try {
+    // GA4 OAuth refresh_token으로 access_token 발급 (drive.readonly 포함)
+    const tokenBody = `client_id=${ga4Config.client_id}&client_secret=${ga4Config.client_secret}&refresh_token=${ga4Config.refresh_token}&grant_type=refresh_token`;
+    const tokenRes = await new Promise((resolve, reject) => {
+      const req = https.request({ hostname: 'oauth2.googleapis.com', path: '/token', method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(tokenBody) } }, (r) => { let d = ''; r.on('data', c => d += c); r.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { reject(e); } }); });
+      req.on('error', reject); req.write(tokenBody); req.end();
+    });
+    const accessToken = tokenRes.access_token;
+    if (!accessToken) return null;
+    // Drive API로 파일 내용 다운로드
+    const fileBody = await new Promise((resolve, reject) => {
+      https.get({ hostname: 'www.googleapis.com', path: `/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`, headers: { 'Authorization': 'Bearer ' + accessToken } }, (r) => { let d = ''; r.on('data', c => d += c); r.on('end', () => resolve(d)); }).on('error', reject);
+    });
+    const token = JSON.parse(fileBody);
+    // expires_at이 미래면 access_token 그대로 사용
+    if (token.access_token && token.expires_at && new Date(token.expires_at) > new Date()) {
+      return token.access_token;
+    }
+    return null;
+  } catch (e) { console.error('[카페24] Drive 읽기 오류:', e.message); return null; }
+}
+
 async function refreshCafe24Token() {
+  // 1순위: Drive에서 최신 access_token 직접 사용
+  const fromDrive = await loadCafe24FromDrive();
+  if (fromDrive) { CAFE24_ACCESS_TOKEN = fromDrive; console.log('[카페24] 토큰 갱신 완료 (drive)'); return; }
+
+  // 2순위(fallback): 기존 Secret 기반 refresh
   const secret = process.env.CAFE24_CLIENT_SECRET;
   const rtoken = process.env.CAFE24_REFRESH_TOKEN || _cf.refresh_token;
   if (!secret || !rtoken) return;
@@ -223,7 +258,7 @@ async function refreshCafe24Token() {
     });
     req.on('error', reject); req.write(body); req.end();
   });
-  if (token) { CAFE24_ACCESS_TOKEN = token; console.log('[카페24] 토큰 갱신 완료'); }
+  if (token) { CAFE24_ACCESS_TOKEN = token; console.log('[카페24] 토큰 갱신 완료 (secret fallback)'); }
   else console.error('[카페24] 토큰 갱신 실패');
 }
 
