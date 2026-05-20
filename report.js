@@ -629,6 +629,43 @@ async function getCafe24Reviews(startDate, endDate) {
   } catch(e) { console.error('리뷰 오류:', e.message); return null; }
 }
 
+// ── GA4 일간 (어제 채널·상품 페이지·짧은URL 손실 감지) ─
+const PRODUCT_NAME = { '83': '바질페스토', '27': '룽고(빵)', '84': '광고랜딩 #84' };
+const CHANNEL_KR = { 'Paid Social':'유료SNS', 'Organic Social':'자연SNS', 'Direct':'직접유입', 'Organic Search':'검색', 'Paid Other':'기타광고', 'Referral':'추천', 'Organic Shopping':'쇼핑', 'Unassigned':'미분류' };
+
+async function getGA4Daily(dateStrYmd) {
+  try {
+    const token = await getGA4Token();
+    const range = { startDate: dateStrYmd, endDate: dateStrYmd };
+    const [chRes, pageRes] = await Promise.all([
+      ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'sessionDefaultChannelGroup'}], limit: 8, orderBys:[{metric:{metricName:'sessions'},desc:true}] }),
+      ga4Fetch(token, { dateRanges:[range], metrics:[{name:'screenPageViews'},{name:'sessions'}], dimensions:[{name:'pagePathPlusQueryString'}], limit: 40, orderBys:[{metric:{metricName:'screenPageViews'},desc:true}] }),
+    ]);
+    const channels = (chRes.rows||[]).map(r => ({
+      name: r.dimensionValues[0].value,
+      sessions: parseInt(r.metricValues[0].value),
+      purchases: parseInt(r.metricValues[1].value),
+    }));
+    const products = {};
+    let surlSessions = 0, totalSessions = 0;
+    (pageRes.rows||[]).forEach(r => {
+      const path = r.dimensionValues[0].value;
+      const pv = parseInt(r.metricValues[0].value);
+      const ses = parseInt(r.metricValues[1].value);
+      totalSessions += ses;
+      if (/^\/surl\/p\//i.test(path)) surlSessions += ses;
+      const m = path.match(/product_no=(\d+)/);
+      if (m) {
+        const id = m[1];
+        if (!products[id]) products[id] = { id, pv: 0, sessions: 0 };
+        products[id].pv += pv; products[id].sessions += ses;
+      }
+    });
+    const topProducts = Object.values(products).sort((a,b)=>b.sessions-a.sessions).slice(0,3);
+    return { channels, topProducts, surlSessions, totalSessions };
+  } catch(e) { console.error('GA4 일간 오류:', e.message); return null; }
+}
+
 // ── Clarity ────────────────────────────────────────────
 async function getClarityData() {
   try {
@@ -664,15 +701,17 @@ async function getClarityData() {
 
 // ── Claude 분석 ────────────────────────────────────────
 async function getClaudeAnalysis(mode, data) {
-  const { meta, cafe24, clarity, ga4, reviews } = data;
+  const { meta, cafe24, clarity, ga4, ga4Daily, reviews, repurchase } = data;
   const f = clarity?.funnel;
 
   let prompt;
   if (mode === 'daily') {
+    const chLines = (ga4Daily?.channels || []).slice(0, 5).map(c => `  - ${c.name}: ${c.sessions}세션·구매 ${c.purchases} (CVR ${pct(c.purchases, c.sessions)})`).join('\n') || '  (없음)';
+    const prdLines = (ga4Daily?.topProducts || []).slice(0, 3).map(p => `  - #${p.id}: ${p.sessions}세션 (${p.pv}pv)`).join('\n') || '  (없음)';
     prompt = `너는 이태리정미소(프리미엄 이탈리안 식품 쇼핑몰) CX 분석가야.
-광고·매출은 다른 봇이 보고하니 보지 말고, 오늘 자사몰 온사이트 행동 데이터에서 CX 이상 신호만 짧게 짚어줘.
+광고·매출 절대값은 다른 봇이 보고하니 보지 말고, 어제 자사몰 온사이트 행동·진입경로·상품 페이지 데이터에서 CX 이상 신호만 짧게 짚어줘.
 
-[오늘 온사이트 행동 (Microsoft Clarity)]
+[온사이트 행동 (Microsoft Clarity)]
 - 세션: ${clarity?.totalSessions||'-'}
 - 스크립트 에러율: ${clarity?.scriptErrorPct?.toFixed(1)||'-'}% (정상 10% 이하)
 - 빠른 뒤로가기율: ${clarity?.quickbackPct?.toFixed(1)||'-'}% (정상 8% 이하)
@@ -681,7 +720,15 @@ async function getClaudeAnalysis(mode, data) {
 - 인스타 인앱 비중: ${clarity?.instagramPct||'-'}%
 - 온사이트 퍼널: 랜딩 ${f?.landing||0} → 상품 ${f?.product||0} → 장바구니 ${f?.cart||0} → 결제 ${f?.checkout||0}
 
-스크립트 에러·이탈·퍼널 단계 급락 등 사이트 UX/기술 문제 위주로.
+[GA4 어제 채널별 (CVR=구매/세션)]
+${chLines}
+
+[GA4 어제 상품 페이지 top 3]
+${prdLines}
+
+[짧은URL(/surl/p/*) 세션]: ${ga4Daily?.surlSessions||0} (구매는 0으로 잡힘 → 추적 끊김 가능)
+
+스크립트 에러·이탈·퍼널 단계 급락·채널별 CVR 격차·상품 페이지 트래픽 대비 구매 부진 위주로.
 이상 신호가 있으면 축약체로 "🚨 <항목> — <핵심수치·원인 한 토막> ▶ <행동>" 한 신호당 한 줄. 완결문장·조사 최소화, 최대 4개.
 이상 없으면 "✅ 특이사항 없음" 한 줄.
 중요: 마크다운 기호(#, *, **, ---, >) 절대 사용하지 마. 일반 텍스트로만.`;
@@ -734,13 +781,14 @@ async function dailyReport() {
   const display = formatDate(today);
   console.log(`[일간] ${today}`);
 
-  // A안: 메타·매출은 송마망 봇과 중복 → 제거. 은우봇 일간은 CX 행동(Clarity) 중심
-  const [clarity, sheetsTasks] = await Promise.all([
+  // A안 + CX 관리자 강화: Clarity(온사이트 행동) + GA4 어제(채널·상품·짧은URL 손실)
+  const [clarity, sheetsTasks, ga4Daily] = await Promise.all([
     getClarityData(),
     getSheetsTasks(),
+    getGA4Daily(today),
   ]);
 
-  const analysis = await getClaudeAnalysis('daily', { clarity });
+  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily });
 
   const claritySection = clarity
     ? `에러 ${clarity.scriptErrorPct.toFixed(1)}%${icon(clarity.scriptErrorPct, 10, 30)} · 뒤로 ${clarity.quickbackPct.toFixed(1)}%${icon(clarity.quickbackPct, 8, 15)} · 스크롤 ${clarity.scrollDepth.toFixed(0)}% · 체류 ${clarity.activeTimeSec}초`
@@ -750,10 +798,37 @@ async function dailyReport() {
     ? `랜딩 ${f.landing.toLocaleString()} → 상품 ${f.product}(${pct(f.product, f.landing)}) → 장바 ${f.cart} → 결제 ${f.checkout}`
     : '-';
 
+  // 채널별 CVR (top 4, Paid Social·Direct·Organic 등)
+  let channelSection = '';
+  if (ga4Daily && ga4Daily.channels.length) {
+    channelSection = '\n📈 <b>어제 진입경로</b>\n' + ga4Daily.channels.slice(0, 4).map(c => {
+      const nm = CHANNEL_KR[c.name] || c.name;
+      return `${nm}: ${c.sessions}세션·구매 ${c.purchases} (CVR ${pct(c.purchases, c.sessions)})`;
+    }).join('\n');
+  }
+
+  // 상품 디테일 페이지 top 3
+  let productSection = '';
+  if (ga4Daily && ga4Daily.topProducts.length) {
+    productSection = '\n🛍️ <b>상품 페이지 top 3</b>\n' + ga4Daily.topProducts.map(p => {
+      const nm = PRODUCT_NAME[p.id] || `상품 #${p.id}`;
+      return `${nm}: ${p.sessions}세션 (${p.pv} pv)`;
+    }).join('\n');
+  }
+
+  // 짧은URL 추적 손실 경보 (광고 클릭 → 구매 추적 끊김 의심)
+  let alertSection = '';
+  if (ga4Daily) {
+    const paidSoc = ga4Daily.channels.find(c => c.name === 'Paid Social');
+    if (paidSoc && paidSoc.sessions >= 50 && paidSoc.purchases / Math.max(paidSoc.sessions, 1) < 0.005) {
+      alertSection = `\n🚨 <b>유료SNS CVR ${pct(paidSoc.purchases, paidSoc.sessions)}</b> — 광고 트래픽 구매 미연결 (짧은URL/${ga4Daily.surlSessions}세션 추적 누수 또는 결제 마찰 의심)`;
+    }
+  }
+
   const msg = `🔎 <b>CX 일간</b> · ${display}
 ━━━━━━━━━━━━━━━━━
 👁️ <b>온사이트 행동</b>  ${claritySection}
-🔽 <b>온사이트 퍼널</b>  ${funnelLine}
+🔽 <b>온사이트 퍼널</b>  ${funnelLine}${channelSection}${productSection}${alertSection}
 <i>광고·매출은 송마망 봇 리포트 참고</i>`;
 
   const analysisMsg = analysis ? `🤖 <b>CX 이상 신호</b>\n${analysis}` : null;
