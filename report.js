@@ -796,20 +796,8 @@ async function dailyReport() {
     memoSection = `\n📝 <b>은우 메모</b>\n${lines.trim()}`;
   }
 
-  const yesterday = dateStr(1);
-  // 1) 최신 메시지 수집(일일대화·태그·리마인드 저장) → 2) 어제분을 시트에서 읽어 요약
-  const [, activeReminders] = await Promise.all([
-    processTelegramMessages(),
-    getRemindersFromSheet(),
-  ]);
-  const yesterdayMsgs = await getDailyMessagesFromSheet(yesterday);
-  if (yesterdayMsgs.length > 0) await saveMeetingNotes(yesterdayMsgs, yesterday);
-
-  if (activeReminders.length > 0) {
-    const lines = activeReminders.map(r => `[${r.id}] ${r.text}`).join('\n');
-    const remindMsg = `🔁 <b>리마인드</b>\n${lines}\n<i>완료 → /완료 번호</i>`;
-    await sendTelegramGroup(remindMsg);
-  }
+  // 역할 고정(2026-05-20): 회의록/일일대화/리마인드는 미주 통합 영역. 은우봇은 CX 행동·이상신호 + 개인 할일/메모만 발송.
+  // (processTelegramMessages/getRemindersFromSheet/saveMeetingNotes/getDailyMessagesFromSheet 함수는 personal-metrics 등 추후 재사용 위해 export 유지)
 
   // 개인 DM: 할일 + 메모만
   const personalMsg = `☀️ <b>오늘 할일</b>${tasksSection}${memoSection}`;
