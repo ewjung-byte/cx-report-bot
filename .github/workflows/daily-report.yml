@@ -1,9 +1,9 @@
 name: CX Daily Report
 
 on:
-  schedule:
-    - cron: '30 0 * * *'  # 매일 KST 09:30 (UTC 00:30)
-  workflow_dispatch:       # GitHub UI에서 수동 실행 가능
+  # GitHub Actions cron은 지연 발화로 야간/오후 발송 사고 발생(2026-05-19 KST 21:21).
+  # GAS 시간 트리거(triggerDailyReport, 매일 오전 9시대 KST)가 단일 정시 호출 경로.
+  workflow_dispatch:       # GAS·수동에서만 실행
 
 permissions:
   contents: write
