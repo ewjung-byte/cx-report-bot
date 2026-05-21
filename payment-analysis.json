@@ -1,0 +1,14 @@
+{
+  "period": "2026-01-01 ~ 2026-05-21",
+  "total_orders": 0,
+  "payment_method": {},
+  "member_types": {
+    "member": 0,
+    "guest": 0,
+    "naver_auto": 0,
+    "kakao_auto": 0,
+    "other_auto": 0
+  },
+  "payment_by_member_type": {},
+  "generated_at": "2026-05-21T02:54:33.676Z"
+}
