@@ -3,9 +3,7 @@
 const https = require('https');
 const fs    = require('fs');
 
-const CAFE24_CLIENT_ID   = 'Vv3AL9nXIZ9uDs0f8CXrHA';
 const CAFE24_API_VERSION = '2025-12-01';
-const secret = process.env.CAFE24_CLIENT_SECRET;
 
 const ga4 = {
   client_id:     process.env.GA4_CLIENT_ID     || '',
@@ -53,37 +51,12 @@ async function loadTokenFromDrive() {
   } catch (e) { console.error('[Drive] 읽기 오류:', e.message); return null; }
 }
 
-async function cafe24Refresh(refreshToken) {
-  if (!secret) { console.error('[cafe24Refresh] CLIENT_SECRET 없음'); return null; }
-  if (!refreshToken) { console.error('[cafe24Refresh] refresh_token 없음'); return null; }
-  const auth = Buffer.from(`${CAFE24_CLIENT_ID}:${secret}`).toString('base64');
-  const res = await post('italyjungmiso.cafe24api.com', '/api/v2/oauth/token',
-    `grant_type=refresh_token&refresh_token=${refreshToken}`,
-    { 'Authorization': `Basic ${auth}` }
-  );
-  if (!res.access_token) console.error('[cafe24Refresh] API 응답:', JSON.stringify(res));
-  return res.access_token || null;
-}
-
+// VPS가 5분마다 갱신 → Drive read 단방향. refresh API 호출 금지.
 async function getAccessToken() {
   const drive = await loadTokenFromDrive();
-  if (drive) {
-    // Drive의 access_token 검증
-    const r = await get('italyjungmiso.cafe24api.com', '/api/v2/admin/products?limit=1', {
-      'Authorization': 'Bearer ' + drive.access_token,
-      'X-Cafe24-Api-Version': CAFE24_API_VERSION
-    });
-    if (r.status === 200) { console.log('[토큰] Drive access_token 유효'); return drive.access_token; }
-    // 만료됐으면 Drive의 refresh_token으로 신규 발급
-    if (drive.refresh_token) {
-      const newAt = await cafe24Refresh(drive.refresh_token);
-      if (newAt) { console.log('[토큰] Drive refresh_token으로 갱신 성공'); return newAt; }
-    }
-  }
-  console.error('[토큰] Drive 방식 실패 — secret fallback 시도');
-  const newAt = await cafe24Refresh(process.env.CAFE24_REFRESH_TOKEN);
-  if (newAt) { console.log('[토큰] Secret refresh_token으로 갱신 성공'); return newAt; }
-  throw new Error('access_token 발급 실패');
+  if (!drive || !drive.access_token) throw new Error('Drive에서 토큰 읽기 실패 — VPS 상태 확인 필요');
+  console.log('[토큰] Drive access_token 사용 (issued_at:', drive.issued_at, ')');
+  return drive.access_token;
 }
 
 async function fetchOrders(token, startDate, endDate) {
