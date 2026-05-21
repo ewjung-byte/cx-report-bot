@@ -35,6 +35,7 @@ function get(hostname, path, headers = {}) {
 // Drive에서 최신 cafe24 토큰 파일 읽기 (report.js와 동일 패턴)
 async function loadTokenFromDrive() {
   const fileId = process.env.CAFE24_TOKEN_DRIVE_FILE_ID;
+  console.log('[Drive] fileId:', fileId ? 'SET' : 'MISSING', '| ga4.client_id:', ga4.client_id ? 'SET' : 'MISSING', '| ga4.refresh_token:', ga4.refresh_token ? 'SET' : 'MISSING');
   if (!fileId || !ga4.client_id || !ga4.refresh_token) return null;
   try {
     const tokenRes = await post('oauth2.googleapis.com', '/token',
@@ -53,12 +54,14 @@ async function loadTokenFromDrive() {
 }
 
 async function cafe24Refresh(refreshToken) {
-  if (!secret || !refreshToken) return null;
+  if (!secret) { console.error('[cafe24Refresh] CLIENT_SECRET 없음'); return null; }
+  if (!refreshToken) { console.error('[cafe24Refresh] refresh_token 없음'); return null; }
   const auth = Buffer.from(`${CAFE24_CLIENT_ID}:${secret}`).toString('base64');
   const res = await post('italyjungmiso.cafe24api.com', '/api/v2/oauth/token',
     `grant_type=refresh_token&refresh_token=${refreshToken}`,
     { 'Authorization': `Basic ${auth}` }
   );
+  if (!res.access_token) console.error('[cafe24Refresh] API 응답:', JSON.stringify(res));
   return res.access_token || null;
 }
 
