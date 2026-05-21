@@ -278,13 +278,9 @@ async function refreshCafe24Token() {
     }
   }
 
-  // 2) fallback: Secret 기반 refresh
-  const secret = process.env.CAFE24_CLIENT_SECRET;
-  const rtoken = process.env.CAFE24_REFRESH_TOKEN || _cf.refresh_token;
-  if (!secret || !rtoken) { console.error('[카페24] 토큰 갱신 실패 (자격 없음)'); return; }
-  const newAt = await cafe24OauthRefresh(rtoken);
-  if (newAt) { CAFE24_ACCESS_TOKEN = newAt; console.log('[카페24] 토큰 갱신 완료 (secret fallback)'); }
-  else console.error('[카페24] 토큰 갱신 실패');
+  // fallback refresh 제거 — VPS가 단일 갱신 주체. 여기서 refresh API 직접 호출 시
+  // 카페24 refresh_token 소비 → VPS 보유 토큰 폐기 → 22시간 dead zone 발생.
+  console.error('[카페24] 토큰 갱신 실패 — Drive 읽기 불가. VPS 상태 확인 필요.');
 }
 
 // ── 날짜 헬퍼 ──────────────────────────────────────────

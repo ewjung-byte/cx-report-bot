@@ -31,7 +31,6 @@ jobs:
         env:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           CAFE24_CLIENT_SECRET: ${{ secrets.CAFE24_CLIENT_SECRET }}
-          CAFE24_REFRESH_TOKEN: ${{ secrets.CAFE24_REFRESH_TOKEN }}
           CAFE24_TOKEN_DRIVE_FILE_ID: ${{ secrets.CAFE24_TOKEN_DRIVE_FILE_ID }}
           META_ACCESS_TOKEN:    ${{ secrets.META_ACCESS_TOKEN }}
           META_AD_ACCOUNT:      ${{ secrets.META_AD_ACCOUNT }}
