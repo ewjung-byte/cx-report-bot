@@ -1,0 +1,31 @@
+name: Analyze Payments
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run payment analysis
+        run: node analyze-payments.js
+        env:
+          CAFE24_CLIENT_SECRET: ${{ secrets.CAFE24_CLIENT_SECRET }}
+          CAFE24_REFRESH_TOKEN: ${{ secrets.CAFE24_REFRESH_TOKEN }}
+
+      - name: Commit results
+        run: |
+          git config user.name "cx-bot"
+          git config user.email "bot@songmamans.com"
+          git add payment-analysis.json
+          git diff --cached --quiet || git commit -m "data: payment method analysis 2026-01~05"
+          git push origin HEAD
