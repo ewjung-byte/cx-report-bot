@@ -778,6 +778,42 @@ async function getMetaLandingPage() {
   } catch(e) { return { url: null, productNos: [] }; }
 }
 
+// ── P0: ACTIVE 광고 23개 URL 형식 검증 (2026-05-21 incident 재발 방지) ──
+// 정상: https://italy-jungmiso.com/surl/p/{숫자}  (옵션 ?utm_*)
+// 깨짐: 공백 합침, 두 URL, surl/p/숫자 외 path
+async function auditMetaAdUrls() {
+  try {
+    const fields = 'name,effective_status,creative{object_story_spec}';
+    const filter = encodeURIComponent('[{"field":"effective_status","operator":"IN","value":["ACTIVE"]}]');
+    const url = `https://graph.facebook.com/v19.0/${META_AD_ACCOUNT}/ads?fields=${fields}&filtering=${filter}&limit=100&access_token=${META_TOKEN}`;
+    const data = await fetchJson(url);
+    if (!data.data?.length) return { total: 0, broken: [], healthy: 0 };
+
+    const SURL_RE = /^https:\/\/italy-jungmiso\.com\/surl\/p\/\d+(?:\?[^\s%]*)?$/;
+    const broken = [];
+    let healthy = 0;
+
+    for (const ad of data.data) {
+      const spec = ad.creative?.object_story_spec || {};
+      const link = spec.video_data?.call_to_action?.value?.link
+                || spec.link_data?.link
+                || '';
+      if (!link) continue;
+      if (SURL_RE.test(link)) {
+        healthy++;
+      } else {
+        // 깨짐 패턴 진단
+        let reason = 'unknown';
+        if (link.includes('%20') || / /.test(link)) reason = '공백/%20 포함';
+        else if ((link.match(/https?:\/\//g) || []).length > 1) reason = '여러 URL 합침';
+        else if (!/\/surl\/p\/\d+/.test(link)) reason = 'surl/p 형식 아님';
+        broken.push({ id: ad.id, name: ad.name, link: link.slice(0, 120), reason });
+      }
+    }
+    return { total: data.data.length, broken, healthy };
+  } catch (e) { console.error('[광고 URL 검증 오류]', e.message); return null; }
+}
+
 // ── GA4 액세스 토큰 ────────────────────────────────────
 async function getGA4Token() {
   const body = Buffer.from(`client_id=${ga4Config.client_id}&client_secret=${ga4Config.client_secret}&refresh_token=${ga4Config.refresh_token}&grant_type=refresh_token`);
@@ -890,10 +926,12 @@ async function getGA4Daily(dateStrYmd) {
   try {
     const token = await getGA4Token();
     const range = { startDate: dateStrYmd, endDate: dateStrYmd };
-    const [chRes, utRes, pageRes] = await Promise.all([
+    const [chRes, utRes, pageRes, funnelRes] = await Promise.all([
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'sessionDefaultChannelGroup'}], limit: 8, orderBys:[{metric:{metricName:'sessions'},desc:true}] }),
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'newVsReturning'}] }),
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'screenPageViews'},{name:'sessions'}], dimensions:[{name:'pagePathPlusQueryString'}], limit: 40, orderBys:[{metric:{metricName:'screenPageViews'},desc:true}] }),
+      // 결제 단계별 이탈률 (5/22 결제쓱 AB테스트 대비)
+      ga4Fetch(token, { dateRanges:[range], metrics:[{name:'eventCount'}], dimensions:[{name:'eventName'}], dimensionFilter:{ filter:{ fieldName:'eventName', inListFilter:{ values:['add_to_cart','begin_checkout','purchase'] } } } }),
     ]);
     const channels = (chRes.rows||[]).map(r => ({
       name: r.dimensionValues[0].value,
@@ -911,7 +949,21 @@ async function getGA4Daily(dateStrYmd) {
       const path = r.dimensionValues[0].value;
       if (/^\/surl\/p\//i.test(path)) surlSessions += parseInt(r.metricValues[1].value);
     });
-    return { channels, userType, surlSessions };
+    // 결제 퍼널: add_to_cart → begin_checkout → purchase
+    const funnelMap = {};
+    (funnelRes.rows||[]).forEach(r => { funnelMap[r.dimensionValues[0].value] = parseInt(r.metricValues[0].value); });
+    const checkoutFunnel = {
+      addToCart: funnelMap['add_to_cart'] || 0,
+      beginCheckout: funnelMap['begin_checkout'] || 0,
+      purchase: funnelMap['purchase'] || 0,
+    };
+    // 이탈률 계산
+    checkoutFunnel.cartToCheckoutPct = checkoutFunnel.addToCart > 0
+      ? Math.round(checkoutFunnel.beginCheckout / checkoutFunnel.addToCart * 100) : null;
+    checkoutFunnel.checkoutToPurchasePct = checkoutFunnel.beginCheckout > 0
+      ? Math.round(checkoutFunnel.purchase / checkoutFunnel.beginCheckout * 100) : null;
+
+    return { channels, userType, surlSessions, checkoutFunnel };
   } catch(e) { console.error('GA4 일간 오류:', e.message); return null; }
 }
 
@@ -950,7 +1002,7 @@ async function getClarityData() {
 
 // ── Claude 분석 ────────────────────────────────────────
 async function getClaudeAnalysis(mode, data) {
-  const { meta, cafe24, clarity, ga4, ga4Daily, reviews, repurchase, segments, restock, voc, songmamans } = data;
+  const { meta, cafe24, clarity, ga4, ga4Daily, reviews, repurchase, segments, restock, voc, songmamans, adAudit } = data;
   const f = clarity?.funnel;
 
   let prompt;
@@ -986,6 +1038,15 @@ async function getClaudeAnalysis(mode, data) {
 - 체류 ${clarity?.activeTimeSec||'-'}초 / 스크롤 ${clarity?.scrollDepth?.toFixed(0)||'-'}%
 - 결제 페이지 ${clarity?.funnel?.checkout||0}세션 / 장바구니 ${clarity?.funnel?.cart||0}
 - (Clarity 한도 시) GA4 트래픽: ${trafficLine}
+
+[결제 퍼널 — GA4 이벤트 (5/22 결제쓱 AB 기준선)]
+- 장바구니 ${ga4Daily?.checkoutFunnel?.addToCart||0} → 결제진입 ${ga4Daily?.checkoutFunnel?.beginCheckout||0}(${ga4Daily?.checkoutFunnel?.cartToCheckoutPct??'-'}%) → 구매 ${ga4Daily?.checkoutFunnel?.purchase||0}(${ga4Daily?.checkoutFunnel?.checkoutToPurchasePct??'-'}%)
+※ 결제진입→구매 60%↓ 이면 결제 옵션 마찰 신호. 5/22 결제쓱 위치 변경 후 수치 변화 주시.
+
+[메타 광고 URL 검증 — P0]
+- ACTIVE ${adAudit?.total||'-'}개 중 정상 ${adAudit?.healthy||'-'}개 / 이상 ${adAudit?.broken?.length||0}개
+${adAudit?.broken?.length ? adAudit.broken.slice(0,3).map(a=>`- 🚨 ${a.name}: ${a.reason}`).join('\n') : '- 모두 정상'}
+※ 이상 1개라도 있으면 즉시 행동 신호. 어제 incident(23개 전부 공백URL)처럼 매출 정상이어도 JS에러 폭증 유발.
 
 [리텐션 — Cafe24 raw 기준, OKR "재구매자 300명"]
 - 어제 주문 ${seg.totalOrders||0}건 / 매출 ${formatMoney(seg.totalAmt||0)}
@@ -1083,7 +1144,11 @@ async function dailyReport() {
   ]);
   if (segments) segments = await enrichGuestSegmentsWithCRM(segments);
 
-  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, cafe24, segments, restock, voc, songmamans });
+  // P0: 메타 광고 URL 검증 (dailyReport에서 병렬 fetch)
+  const [adAudit, analysis] = await Promise.all([
+    auditMetaAdUrls(),
+    getClaudeAnalysis('daily', { clarity, ga4Daily, cafe24, segments, restock, voc, songmamans, adAudit }),
+  ]);
 
   // 🚦 사이트 (Clarity 우선, 한도 시 GA4 트래픽 채널 백업)
   const healthSection = clarity
@@ -1091,6 +1156,15 @@ async function dailyReport() {
     : (ga4Daily && ga4Daily.channels && ga4Daily.channels.length
         ? `⚠️ Clarity 한도 — 트래픽: ${ga4Daily.channels.slice(0,3).map(c=>`${c.name} ${c.sessions}`).join(' / ')}`
         : '⚠️ 데이터 없음');
+
+  // 💳 결제 퍼널 (GA4 이벤트 기반 — 5/22 결제쓱 AB 기준선)
+  let funnelSection = '';
+  if (ga4Daily?.checkoutFunnel) {
+    const cf = ga4Daily.checkoutFunnel;
+    const c2cIcon = cf.cartToCheckoutPct != null ? icon(100 - cf.cartToCheckoutPct, 30, 60) : '';
+    const c2pIcon = cf.checkoutToPurchasePct != null ? icon(100 - cf.checkoutToPurchasePct, 40, 60) : '';
+    funnelSection = `\n\n💳 <b>결제 퍼널</b> (GA4)\n장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout}(${cf.cartToCheckoutPct ?? '-'}%)${c2cIcon} → 구매 ${cf.purchase}(${cf.checkoutToPurchasePct ?? '-'}%)${c2pIcon}`;
+  }
 
   // 🔁 리텐션 (Cafe24 raw — 회원 first_order_date + 게스트 buyer_tel 식별)
   let retentionSection;
@@ -1105,6 +1179,9 @@ async function dailyReport() {
     const crmMatch = segments.crmMatchedGuests != null
       ? ` · CRM매칭 ${segments.crmMatchedGuests}/${segments.guestPhones.length}`
       : '';
+    // P0-3: OKR 진행률 (재구매자 분기 목표 300명)
+    const OKR_TARGET = 300;
+    const cumRepurchasers = m.retCount; // 오늘 재방문 회원 (누적은 repurchase stats에서 가져오면 더 정확하나 segments로 근사)
     retentionSection = `회원 ${memberTotal}건 (${memberSharePct.toFixed(0)}%) → 재방문 ${m.retCount}건 (${memberRetPct.toFixed(1)}%)\n게스트 ${guestTotal}건 → 반복구매 ${g.repeatCount}건 (${guestRepeatPct.toFixed(1)}%)${crmMatch}`;
   } else {
     retentionSection = '⚠️ Cafe24 데이터 미수집';
@@ -1119,6 +1196,15 @@ async function dailyReport() {
         const nm = PRODUCT_NAME[String(p.productNo)] || p.name || `#${p.productNo}`;
         return `${nm}: ${formatMoney(p.amount)}·${p.count}건`;
       }).join(' / ');
+    }
+  }
+
+  // 🔗 광고 URL 검증 (P0: 깨진 광고 있으면 항상 표시)
+  let adAuditSection = '';
+  if (adAudit) {
+    if (adAudit.broken.length > 0) {
+      const names = adAudit.broken.slice(0, 3).map(a => a.name.slice(0, 20)).join(', ');
+      adAuditSection = `\n\n🚨 <b>광고 URL 이상</b> ${adAudit.broken.length}개/${adAudit.total}개\n${names}${adAudit.broken.length > 3 ? ` 외 ${adAudit.broken.length - 3}개` : ''}\n→ 메타 광고 매니저 URL 즉시 확인`;
     }
   }
 
@@ -1143,13 +1229,13 @@ async function dailyReport() {
   const msg = `🔎 <b>CX 일간</b> · ${display}
 ━━━━━━━━━━━━━━━━━
 🚦 <b>사이트</b>
-${healthSection}
+${healthSection}${funnelSection}
 
 🔁 <b>리텐션</b> (Cafe24 raw)
 ${retentionSection}
 
 🌱 <b>비#83 매출</b>
-${sideSkuSection}${restockSection}${vocSection}`;
+${sideSkuSection}${adAuditSection}${restockSection}${vocSection}`;
 
   const analysisMsg = analysis ? `🤖 <b>CX 판단</b>\n${analysis}` : null;
 
@@ -1350,6 +1436,7 @@ module.exports = {
   fetchNegativeVOC,
   fetchSongmamansContext,
   getMetaStats,
+  auditMetaAdUrls,
   getGA4Weekly,
   getGA4Daily,
   getClarityData,

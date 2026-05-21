@@ -45,6 +45,9 @@ jobs:
           GA4_CLIENT_SECRET:    ${{ secrets.GA4_CLIENT_SECRET }}
           GA4_REFRESH_TOKEN:    ${{ secrets.GA4_REFRESH_TOKEN }}
           GA4_PROPERTY_ID:      ${{ secrets.GA4_PROPERTY_ID }}
+          TELEGRAM_API_ID:      ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH:    ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_USER_SESSION: ${{ secrets.TELEGRAM_USER_SESSION }}
 
       - name: Save bot state
         if: always()
