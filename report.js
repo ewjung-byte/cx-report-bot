@@ -1055,7 +1055,7 @@ ${adAudit?.broken?.length ? adAudit.broken.slice(0,3).map(a=>`- 🚨 ${a.name}: 
 - #83 바질페스토(메인): ${formatMoney(cafeMain.amount)}·${cafeMain.count}건
 - #83 외 합계: ${formatMoney(cafeOthers.amount)}·${cafeOthers.count}건 (파파넬라 EVOO·룽고 등)
 
-[재입고알림 — CRM 시트]
+[바질페스토 재입고알림 — CRM 시트]
 - 오늘 +${restock?.todayCount||0}건 / 누적 ${restock?.totalCount||0}건 / 대기 ${restock?.pendingCount||0}건
 - 이번달 ${restock?.thisMonthCount||0} vs 지난달 ${restock?.lastMonthCount||0} (${restock?.paceVsLastMonth?.toFixed(2)||'-'}배 페이스)
 ※ 대기 누적이 높고 발송 갱신 안 되면 LTV 누수 신호. 솔라피 실제 발송 확인은 미주 영역.
@@ -1209,9 +1209,9 @@ async function dailyReport() {
   if (restock) {
     const pace = restock.paceVsLastMonth ? ` · ${restock.paceVsLastMonth.toFixed(1)}배 페이스` : '';
     if (restock.todayCount > 0) {
-      restockSection = `\n\n📦 <b>재입고알림</b>\n오늘 +${restock.todayCount}건 · 누적 ${restock.totalCount}건 (대기 ${restock.pendingCount}건)${pace}`;
+      restockSection = `\n\n📦 <b>바질페스토 재입고알림</b>\n오늘 +${restock.todayCount}건 · 누적 ${restock.totalCount}건 (대기 ${restock.pendingCount}건)${pace}`;
     } else if (restock.pendingCount >= 100) {
-      restockSection = `\n\n📦 <b>재입고알림</b> · 대기 ${restock.pendingCount}건${pace}`;
+      restockSection = `\n\n📦 <b>바질페스토 재입고알림</b> · 대기 ${restock.pendingCount}건${pace}`;
     }
   }
 
