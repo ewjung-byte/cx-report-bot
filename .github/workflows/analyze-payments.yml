@@ -19,8 +19,12 @@ jobs:
       - name: Run payment analysis
         run: node analyze-payments.js
         env:
-          CAFE24_CLIENT_SECRET: ${{ secrets.CAFE24_CLIENT_SECRET }}
-          CAFE24_REFRESH_TOKEN: ${{ secrets.CAFE24_REFRESH_TOKEN }}
+          CAFE24_CLIENT_SECRET:        ${{ secrets.CAFE24_CLIENT_SECRET }}
+          CAFE24_REFRESH_TOKEN:        ${{ secrets.CAFE24_REFRESH_TOKEN }}
+          CAFE24_TOKEN_DRIVE_FILE_ID:  ${{ secrets.CAFE24_TOKEN_DRIVE_FILE_ID }}
+          GA4_CLIENT_ID:               ${{ secrets.GA4_CLIENT_ID }}
+          GA4_CLIENT_SECRET:           ${{ secrets.GA4_CLIENT_SECRET }}
+          GA4_REFRESH_TOKEN:           ${{ secrets.GA4_REFRESH_TOKEN }}
 
       - name: Commit results
         run: |
