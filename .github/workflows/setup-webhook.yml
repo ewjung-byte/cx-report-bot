@@ -1,0 +1,27 @@
+name: Setup Telegram Webhook (one-time)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Telegram webhook to GAS
+        env:
+          BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          GAS_URL: ${{ secrets.APPS_SCRIPT_URL }}
+        run: |
+          RES=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
+            -d "url=${GAS_URL}" \
+            -d 'allowed_updates=["message","callback_query"]')
+          echo "setWebhook response: ${RES}"
+          if echo "$RES" | grep -q '"ok":true'; then
+            echo "✅ Webhook 설정 완료"
+          else
+            echo "❌ 실패"
+            exit 1
+          fi
+          INFO=$(curl -s "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo")
+          PENDING=$(echo "$INFO" | grep -o '"pending_update_count":[0-9]*' || echo "pending: unknown")
+          echo "$PENDING"

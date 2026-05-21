@@ -51,6 +51,13 @@ async function getDailyMessagesFromSheet(date) {
   } catch(e) { console.error('[일일대화 조회 오류]', e.message); return []; }
 }
 
+async function getRecentActivities(hours = 24) {
+  try {
+    const res = await postToAppsScript({ action: 'get_activities', hours }, APPS_SCRIPT_URL);
+    return res.activities || [];
+  } catch(e) { console.error('[활동로그 조회 오류]', e.message); return []; }
+}
+
 // ── 텔레그램 getUpdates → 일일대화·태그·리마인드 GAS 저장 ────────
 async function processTelegramMessages() {
   try {
@@ -1113,6 +1120,63 @@ ${reviews ? `이번 주 리뷰 ${reviews.count}건 기준, 반복 칭찬 키워�
   } catch(e) { console.error('Claude 오류:', e.message); return null; }
 }
 
+// ── CX 관리자 분석 (개인 DM용) ─────────────────────────
+async function getCXManagerAnalysis(data) {
+  if (!CLAUDE_API_KEY) return null;
+  const { activities, dailyMessages, clarity, ga4Daily, segments, voc, restock, adAudit } = data;
+
+  const activitiesText = activities && activities.length
+    ? activities.slice(-15).map(a => `[${a.id} ${a.status}] ${a.content}`).join('\n')
+    : '(기록된 작업 없음)';
+
+  const chatText = dailyMessages && dailyMessages.length
+    ? dailyMessages.filter(m => !m.isBot).slice(-30).map(m => `${m.time} ${m.sender}: ${m.text}`).join('\n').slice(0, 3000)
+    : '(단톡방 메시지 없음)';
+
+  const cf = ga4Daily?.checkoutFunnel;
+  const signals = [
+    `Clarity: ${clarity ? '정상' : '한도초과'}`,
+    `GA4 채널: ${ga4Daily?.channels?.slice(0,3).map(c=>`${c.name} ${c.sessions}`).join(' / ') || '-'}`,
+    cf ? `퍼널: cart ${cf.addToCart} → checkout ${cf.beginCheckout}(${cf.cartToCheckoutPct||'-'}%) → 구매 ${cf.purchase}(${cf.checkoutToPurchasePct||'-'}%)` : '퍼널: 없음',
+    segments?.totalOrders ? `리텐션: 회원 ${segments.member.newCount+segments.member.retCount}건 (재방문 ${segments.member.retCount}) / 게스트 ${segments.guest.newCount+segments.guest.repeatCount}건` : '리텐션: 미수집',
+    `부정 VOC: ${voc?.negCount || 0}건`,
+    `재입고: 누적 ${restock?.totalCount||'-'}건 / 대기 ${restock?.pendingCount||'-'}건`,
+    `광고 URL 깨짐: ${adAudit?.broken?.length||0}/${adAudit?.total||0}`,
+  ].join('\n');
+
+  const facts = `[OKR] 바질 재구매자 Q2 100명/Q4 300명(현 40) · 자사몰 비중 목표 40%(현 29.6%) · ROAS Guardrail 350%+(현 375%)
+[CX 6축] 사이트 막힘·결제 누수·재방문·게스트→회원 전환·SKU ROI·수요/VOC
+[은우] CX 책임자. 보고보다 판단 선호, 간결한 답 원함.`;
+
+  const prompt = `너는 은우(이태리정미소 CX 책임자)의 CX 어시스턴트야.
+어제~24h의 데이터·은우 작업·단톡방을 보고, 오늘 은우가 알면 좋을 핵심만 추려.
+
+${facts}
+
+[데이터 신호 (어제)]
+${signals}
+
+[은우 작업 (24h)]
+${activitiesText}
+
+[단톡방 (24h)]
+${chatText}
+
+요청:
+- 데이터+작업+단톡방 연결해서 오늘 우선 봐야 할 것 1~2개
+- 측정 공백/무시된 신호 있으면 지적
+- 단톡방 결정 중 은우 작업과 연관된 것 있으면 연결
+
+5줄 이내, 마크다운 X, 짧은 문단으로.`;
+
+  try {
+    const res = await postJson('api.anthropic.com', '/v1/messages',
+      { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01' },
+      { model: CLAUDE_MODEL, max_tokens: 500, messages: [{ role: 'user', content: prompt }] });
+    return res.content?.[0]?.text || null;
+  } catch(e) { console.error('CX 분석 오류:', e.message); return null; }
+}
+
 // ── 텔레그램 발송 ──────────────────────────────────────
 function sendTelegram(text) {
   return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, { chat_id: TG_CHAT_ID, text, parse_mode: 'HTML' });
@@ -1276,13 +1340,25 @@ ${sideSkuSection}${adAuditSection}${restockSection}${vocSection}`;
   // 역할 고정(2026-05-20): 회의록/일일대화/리마인드는 미주 통합 영역. 은우봇은 CX 행동·이상신호 + 개인 할일/메모만 발송.
   // (processTelegramMessages/getRemindersFromSheet/saveMeetingNotes/getDailyMessagesFromSheet 함수는 personal-metrics 등 추후 재사용 위해 export 유지)
 
-  // 개인 DM: 할일 + 메모만
-  const personalMsg = `☀️ <b>오늘 할일</b>${tasksSection}${memoSection}`;
+  // ── CX 관리자 분석 (개인 DM에 추가) ──
+  const [activities, dailyMessages] = await Promise.all([
+    getRecentActivities(24).catch(() => []),
+    getDailyMessagesFromSheet(today).catch(() => [])
+  ]);
+  const cxManagerAnalysis = await getCXManagerAnalysis({
+    activities, dailyMessages, clarity, ga4Daily, segments, voc, restock, adAudit
+  });
+  const cxManagerSection = cxManagerAnalysis
+    ? `\n\n🎯 <b>CX 관리자 분석</b>\n${cxManagerAnalysis}`
+    : '';
+
+  // 개인 DM: 할일 + 메모 + CX 분석
+  const personalMsg = `☀️ <b>오늘 할일</b>${tasksSection}${memoSection}${cxManagerSection}`;
 
   const groupResult = await sendTelegramGroup(msg);
   if (groupResult.ok) {
     if (analysisMsg) await sendTelegramGroup(analysisMsg);
-    if (tasksSection || memoSection) await sendTelegram(personalMsg);
+    if (tasksSection || memoSection || cxManagerSection) await sendTelegram(personalMsg);
     console.log('일간 발송 완료 ✅');
   } else {
     console.error('발송 실패 ❌:', JSON.stringify(groupResult));

@@ -1,6 +1,12 @@
 var SHEET_ID = '1pBqKnyOQHwepzo65B_TCJ0dU-yjRL1aLs-TfEfBjXJI';
 var GROUP_CHAT_ID = '-5227165092';
+var EUNWOO_CHAT_ID = '8139301716';
+var PERSONAL_METRICS_SHEET_ID = '1nxnsbqQSxv-lRcCDsUh6r16qoyeywVRJhPScd2N21bA';
 var TAGS = ['/결정', '/액션', '/아이디어', '/공유', '/광고', '/소싱', '/CS', '/운영', '/디자인'];
+
+function _botToken() {
+  return PropertiesService.getScriptProperties().getProperty('BOT_TOKEN') || '';
+}
 
 function detectTags(text) {
   var tokens = String(text).toLowerCase().split(/\s+/);
@@ -35,7 +41,11 @@ function doPost(e) {
   try {
     var contents = JSON.parse(e.postData.contents);
     if (contents.update_id !== undefined) {
-      handleTelegramUpdate(contents);
+      if (contents.callback_query) {
+        handleCallbackQuery(contents.callback_query);
+      } else {
+        handleTelegramUpdate(contents);
+      }
       return ContentService.createTextOutput('ok');
     }
     var ss = SpreadsheetApp.openById(SHEET_ID);
@@ -155,6 +165,9 @@ function doPost(e) {
     if (action === 'cleanup') {
       return jsonOut(cleanupSheets());
     }
+    if (action === 'get_activities') {
+      return jsonOut(getActivitiesData(contents.hours || 24));
+    }
     return jsonOut({ok: false, error: 'unknown action'});
   } catch(err) {
     return jsonOut({ok: false, error: err.message});
@@ -164,7 +177,9 @@ function doPost(e) {
 function handleTelegramUpdate(update) {
   var msg = update.message || update.edited_message;
   if (!msg || !msg.text) return;
-  if (String(msg.chat.id) !== GROUP_CHAT_ID) return;
+  var chatId = String(msg.chat.id);
+  if (chatId === EUNWOO_CHAT_ID) { handleEunwooDM(msg); return; }
+  if (chatId !== GROUP_CHAT_ID) return;
   var text = msg.text.trim();
   var from = msg.from || {};
   var sender = (from.first_name || '') + (from.last_name ? ' ' + from.last_name : '');
@@ -180,6 +195,138 @@ function handleTelegramUpdate(update) {
   saveDailyMessage(ss, today, timeStr, sender, isBot, text);
   var foundTags = detectTags(text);
   if (foundTags.length > 0) saveTaggedMessage(ss, today, timeStr, sender, foundTags, text);
+}
+
+// ===== 은우 개인 DM 처리 =====
+function handleEunwooDM(msg) {
+  var text = msg.text.trim();
+  var chatId = msg.chat.id;
+  var msgTime = new Date(msg.date * 1000);
+  var date = Utilities.formatDate(msgTime, 'Asia/Seoul', 'yyyy-MM-dd');
+  var time = Utilities.formatDate(msgTime, 'Asia/Seoul', 'HH:mm');
+
+  var m;
+  if ((m = text.match(/^\/작업\s+([\s\S]+)/))) { addWork(m[1].trim(), chatId, date, time); return; }
+  if ((m = text.match(/^\/작업완료\s+([A-Z0-9-]+)/))) { updateWorkStatus(m[1].trim(), 'GO', chatId); return; }
+  if ((m = text.match(/^\/작업중단\s+([A-Z0-9-]+)/))) { updateWorkStatus(m[1].trim(), 'STOP', chatId); return; }
+  if ((m = text.match(/^\/작업보류\s+([A-Z0-9-]+)/))) { updateWorkStatus(m[1].trim(), 'HOLD', chatId); return; }
+  if (text === '/작업목록') { listActiveWorks(chatId); return; }
+  if (text === '/도움' || text === '/help') {
+    sendTGMessage(chatId, '<b>은우봇 명령어</b>\n/작업 [내용] — 새 작업 등록\n/작업목록 — 진행 중 작업 보기\n버튼으로 완료/중단/보류 처리');
+    return;
+  }
+}
+
+function handleCallbackQuery(query) {
+  var data = String(query.data || '');
+  var parts = data.split(':');
+  if (parts[0] !== 'work') return;
+  var status = parts[1]; // GO|STOP|HOLD
+  var workId = parts[2];
+  var chatId = query.message.chat.id;
+  updateWorkStatus(workId, status, chatId, query);
+  // answerCallbackQuery: spinner 끔
+  var label = status === 'GO' ? '완료 ✅' : status === 'STOP' ? '중단 ❌' : '보류 ⏸';
+  UrlFetchApp.fetch('https://api.telegram.org/bot' + _botToken() + '/answerCallbackQuery', {
+    method: 'post', contentType: 'application/json',
+    payload: JSON.stringify({ callback_query_id: query.id, text: label }),
+    muteHttpExceptions: true
+  });
+}
+
+function generateWorkId() {
+  var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  var id = '';
+  for (var i = 0; i < 6; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  return id;
+}
+
+function addWork(content, chatId, date, time) {
+  var workId = generateWorkId();
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sheet = ss.getSheetByName('활동로그') || ss.insertSheet('활동로그');
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['ID', '날짜', '시간', '내용', '상태', '완료일시']);
+    sheet.getRange('B:C').setNumberFormat('@');
+  }
+  sheet.appendRow([workId, date, time, content, '진행중', '']);
+  var keyboard = { inline_keyboard: [[
+    { text: '✅ 완료', callback_data: 'work:GO:' + workId },
+    { text: '❌ 중단', callback_data: 'work:STOP:' + workId },
+    { text: '⏸ 보류', callback_data: 'work:HOLD:' + workId }
+  ]]};
+  sendTGMessage(chatId, '📝 <b>작업 등록</b> (' + workId + ')\n' + content + '\n상태: 🟡 진행 중', keyboard);
+}
+
+function updateWorkStatus(workId, status, chatId, callbackQuery) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sheet = ss.getSheetByName('활동로그');
+  if (!sheet || sheet.getLastRow() < 2) { sendTGMessage(chatId, '작업 ' + workId + ' 못 찾음'); return; }
+  var data = sheet.getDataRange().getValues();
+  var now = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd HH:mm');
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === workId) {
+      var label = status === 'GO' ? '✅ 완료' : status === 'STOP' ? '❌ 중단' : '⏸ 보류';
+      sheet.getRange(i + 1, 5).setValue(label);
+      sheet.getRange(i + 1, 6).setValue(now);
+      var newText = '📝 <b>작업 ' + label + '</b> (' + workId + ')\n' + data[i][3] + '\n' + now;
+      if (callbackQuery) {
+        editTGMessage(chatId, callbackQuery.message.message_id, newText);
+      } else {
+        sendTGMessage(chatId, newText);
+      }
+      return;
+    }
+  }
+  sendTGMessage(chatId, '작업 ' + workId + ' 못 찾음');
+}
+
+function listActiveWorks(chatId) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sheet = ss.getSheetByName('활동로그');
+  if (!sheet || sheet.getLastRow() < 2) { sendTGMessage(chatId, '진행 중 작업 없음'); return; }
+  var data = sheet.getDataRange().getValues();
+  var lines = [];
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][4]) === '진행중') lines.push('[' + data[i][0] + '] ' + data[i][3]);
+  }
+  if (!lines.length) { sendTGMessage(chatId, '진행 중 작업 없음'); return; }
+  sendTGMessage(chatId, '📋 <b>진행 중 작업 ' + lines.length + '건</b>\n' + lines.join('\n'));
+}
+
+function getActivitiesData(hours) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sheet = ss.getSheetByName('활동로그');
+  if (!sheet || sheet.getLastRow() < 2) return { ok: true, activities: [] };
+  var data = sheet.getDataRange().getValues();
+  var cutoff = new Date(); cutoff.setHours(cutoff.getHours() - (hours || 24));
+  var out = [];
+  for (var i = 1; i < data.length; i++) {
+    var d = normDate(data[i][1]);
+    var t = normTime(data[i][2]);
+    var dt = new Date(d + 'T' + (t.length === 5 ? t : '00:00') + ':00+09:00');
+    if (!isNaN(dt.getTime()) && dt >= cutoff) {
+      out.push({ id: String(data[i][0]), date: d, time: t, content: String(data[i][3]), status: String(data[i][4]) });
+    }
+  }
+  return { ok: true, activities: out };
+}
+
+function sendTGMessage(chatId, text, replyMarkup) {
+  var payload = { chat_id: chatId, text: text, parse_mode: 'HTML' };
+  if (replyMarkup) payload.reply_markup = replyMarkup;
+  UrlFetchApp.fetch('https://api.telegram.org/bot' + _botToken() + '/sendMessage', {
+    method: 'post', contentType: 'application/json',
+    payload: JSON.stringify(payload), muteHttpExceptions: true
+  });
+}
+
+function editTGMessage(chatId, messageId, text) {
+  UrlFetchApp.fetch('https://api.telegram.org/bot' + _botToken() + '/editMessageText', {
+    method: 'post', contentType: 'application/json',
+    payload: JSON.stringify({ chat_id: chatId, message_id: messageId, text: text, parse_mode: 'HTML' }),
+    muteHttpExceptions: true
+  });
 }
 
 function saveDailyMessage(ss, date, time, sender, isBot, text) {
