@@ -518,6 +518,219 @@ async function getRepurchaseStats(lookbackDays, periodStart, periodEnd) {
   } catch (e) { console.error('재구매 분석 오류:', e.message); return null; }
 }
 
+// ── 고객 세그먼트 (Cafe24 raw 기준 — GA4 newVsReturning 신뢰 X) ──
+// 어제 주문자의 진짜 NEW/RETURN을 회원ID·전화번호로 식별.
+// lookbackDays: 어제 이전 윈도우 (기본 90일). 베이스라인 코호트 비교용은 365일 권장.
+async function fetchCafe24OrdersRange(startDate, endDate) {
+  // date range가 너무 길면 카페24 측 한도 의심 → 30일 단위로 분할 호출
+  const SPAN = 30;
+  const all = [];
+  let s = new Date(startDate + 'T00:00:00Z');
+  const e = new Date(endDate + 'T00:00:00Z');
+  while (s <= e) {
+    const chunkEnd = new Date(Math.min(s.getTime() + (SPAN - 1) * 86400000, e.getTime()));
+    const cs = s.toISOString().slice(0, 10);
+    const ce = chunkEnd.toISOString().slice(0, 10);
+    let offset = 0;
+    while (true) {
+      const url = `${CAFE24_BASE}orders?start_date=${cs}&end_date=${ce}&limit=100&offset=${offset}`;
+      const data = await fetchJson(url, { 'Authorization': `Bearer ${CAFE24_ACCESS_TOKEN}`, 'X-Cafe24-Api-Version': CAFE24_API_VERSION });
+      if (!data.orders || data.orders.length === 0) break;
+      all.push(...data.orders);
+      if (data.orders.length < 100) break;
+      offset += 100;
+      if (offset > 20000) break;
+    }
+    s = new Date(chunkEnd.getTime() + 86400000);
+  }
+  return all.filter(o => o.paid === 'T' && o.canceled === 'F');
+}
+
+async function getCafe24CustomerSegments(date, lookbackDays = 90) {
+  try {
+    // 1) 어제 주문 raw
+    const todayOrders = await fetchCafe24OrdersRange(date, date);
+    if (todayOrders.length === 0) return null;
+
+    // 2) 어제 주문에서 식별자 추출
+    const memberIds = new Set();
+    const guestPhones = new Set();
+    todayOrders.forEach(o => {
+      const mid = (o.member_id || '').trim();
+      if (mid) memberIds.add(mid);
+      else {
+        const tel = String(o.buyer_cellular || o.buyer_phone || '').replace(/[^0-9]/g, '');
+        if (tel) guestPhones.add(tel);
+      }
+    });
+
+    // 3) 이전 lookback 윈도우 주문 raw (어제 제외)
+    const lookbackStart = new Date(new Date(date + 'T00:00:00Z').getTime() - lookbackDays * 86400000).toISOString().slice(0, 10);
+    const lookbackEnd = new Date(new Date(date + 'T00:00:00Z').getTime() - 86400000).toISOString().slice(0, 10);
+    const priorOrders = await fetchCafe24OrdersRange(lookbackStart, lookbackEnd);
+
+    // 4) 회원별 첫 주문일 / 게스트별 이전 주문 횟수 빌드
+    const firstOrderByMember = {};
+    const priorCountByPhone = {};
+    priorOrders.forEach(o => {
+      const od = String(o.order_date || '').slice(0, 10);
+      const mid = (o.member_id || '').trim();
+      if (mid) {
+        if (!firstOrderByMember[mid] || od < firstOrderByMember[mid]) firstOrderByMember[mid] = od;
+      } else {
+        const tel = String(o.buyer_cellular || o.buyer_phone || '').replace(/[^0-9]/g, '');
+        if (tel) priorCountByPhone[tel] = (priorCountByPhone[tel] || 0) + 1;
+      }
+    });
+
+    // 5) 어제 주문 분류
+    const member = { newCount: 0, newAmt: 0, retCount: 0, retAmt: 0 };
+    const guest = { newCount: 0, newAmt: 0, repeatCount: 0, repeatAmt: 0 };
+    const returnMemberIds = []; // 재방문 회원 list (디버그용)
+    const repeatGuestPhones = []; // 반복 게스트 list (디버그용)
+    todayOrders.forEach(o => {
+      const amt = parseFloat(o.payment_amount || 0);
+      const mid = (o.member_id || '').trim();
+      if (mid) {
+        const first = firstOrderByMember[mid];
+        if (first && first < date) { member.retCount++; member.retAmt += amt; returnMemberIds.push(mid); }
+        else { member.newCount++; member.newAmt += amt; }
+      } else {
+        const tel = String(o.buyer_cellular || o.buyer_phone || '').replace(/[^0-9]/g, '');
+        if (tel && priorCountByPhone[tel] > 0) { guest.repeatCount++; guest.repeatAmt += amt; repeatGuestPhones.push(tel); }
+        else { guest.newCount++; guest.newAmt += amt; }
+      }
+    });
+
+    return {
+      date, lookbackDays,
+      totalOrders: todayOrders.length,
+      totalAmt: todayOrders.reduce((s, o) => s + parseFloat(o.payment_amount || 0), 0),
+      member, guest,
+      memberShare: todayOrders.length ? ((member.newCount + member.retCount) / todayOrders.length) : 0,
+      memberRetRate: (member.newCount + member.retCount) > 0 ? (member.retCount / (member.newCount + member.retCount)) : 0,
+      guestPhones: Array.from(guestPhones), // CRM join용 노출
+      returnMemberIds, repeatGuestPhones,
+    };
+  } catch (e) { console.error('고객 세그먼트 오류:', e.message); return null; }
+}
+
+// CRM 고객목록 시트 매칭 — 게스트 buyer_tel을 회원 전화번호와 join하면
+// "회원 가입했는데 비회원으로 산 사람" 또는 "이전 게스트가 결국 회원이 된 사람" 식별 가능
+const CRM_SHEET_ID = '1AQX7-CAEfWuJ4cbnxA-1jq4pK9CqEusMgY6cY--ZQ34';
+async function enrichGuestSegmentsWithCRM(segments) {
+  if (!segments || !segments.guestPhones || segments.guestPhones.length === 0) return segments;
+  try {
+    const token = await getGA4Token(); // drive.readonly + spreadsheets.readonly 같은 scope
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${CRM_SHEET_ID}/values/${encodeURIComponent('고객목록!A2:F2000')}`;
+    const data = await fetchJson(url, { 'Authorization': `Bearer ${token}` });
+    const phoneSet = new Set();
+    (data.values || []).forEach(row => {
+      const tel = String(row[1] || '').replace(/[^0-9]/g, '');
+      if (tel) phoneSet.add(tel);
+    });
+    let matched = 0;
+    segments.guestPhones.forEach(tel => { if (phoneSet.has(tel)) matched++; });
+    segments.crmMatchedGuests = matched;
+    segments.crmMatchRate = segments.guestPhones.length ? (matched / segments.guestPhones.length) : 0;
+    return segments;
+  } catch (e) { console.error('CRM 매칭 오류:', e.message); return segments; }
+}
+
+// ── CRM 시트 (재입고알림 / 최근 VOC) ───────────────────
+async function fetchRestockRequests() {
+  try {
+    const token = await getGA4Token();
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${CRM_SHEET_ID}/values/${encodeURIComponent('재입고알림!A2:D1000')}`;
+    const data = await fetchJson(url, { 'Authorization': `Bearer ${token}` });
+    const rows = (data.values || []).filter(r => r[0]);
+    const today = dateStr(0);
+    const todayCount = rows.filter(r => String(r[2] || '').startsWith(today)).length;
+    const thisMonth = today.slice(0, 7);
+    const lastMonth = (() => { const d = new Date(today); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 7); })();
+    const thisMonthCount = rows.filter(r => String(r[2] || '').startsWith(thisMonth)).length;
+    const lastMonthCount = rows.filter(r => String(r[2] || '').startsWith(lastMonth)).length;
+    const sentCount = rows.filter(r => r[3] === 'Y').length;
+    const pendingCount = rows.length - sentCount;
+    return {
+      totalCount: rows.length, sentCount, pendingCount,
+      todayCount, thisMonthCount, lastMonthCount,
+      paceVsLastMonth: lastMonthCount > 0 ? (thisMonthCount / lastMonthCount) : null,
+    };
+  } catch (e) { console.error('재입고알림 fetch 오류:', e.message); return null; }
+}
+
+async function fetchNegativeVOC(dateStrYmd) {
+  // dateStrYmd: 'YYYY-MM-DD' — 어제 + 오늘 VOC 중 부정/중립/개선만
+  try {
+    const token = await getGA4Token();
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${CRM_SHEET_ID}/values/${encodeURIComponent('📢 VOC!A2:H1500')}`;
+    const data = await fetchJson(url, { 'Authorization': `Bearer ${token}` });
+    const rows = (data.values || []).filter(r => r[0] === dateStrYmd || r[0] === dateStr(0));
+    const negs = rows.filter(r => !/긍정/.test(r[6] || ''));
+    return {
+      totalToday: rows.length,
+      negCount: negs.length,
+      items: negs.slice(0, 3).map(r => ({ date: r[0], cls: r[6], product: r[3], rating: r[4], excerpt: String(r[5] || '').slice(0, 80) })),
+    };
+  } catch (e) { console.error('VOC fetch 오류:', e.message); return null; }
+}
+
+// ── 송마망 회의록 (RAW + 액션 + Telegram 단톡방 — Claude 프롬프트 주입용) ──
+const SONGMAMANS_SHEET_ID = '1pBqKnyOQHwepzo65B_TCJ0dU-yjRL1aLs-TfEfBjXJI';
+const { fetchSongmamansChat } = require('./lib/telegram_user');
+
+async function fetchSongmamansContext() {
+  try {
+    const token = await getGA4Token();
+    const today = dateStr(0);
+    const yesterday = dateStr(1);
+    // batch: RAW 최근 + 액션 + 의견_결정 + 단톡방 직접 fetch
+    const ranges = [
+      encodeURIComponent('📥 RAW!A2:E300'),
+      encodeURIComponent('✅ 액션!A2:I100'),
+      encodeURIComponent('💡 의견_결정!A2:I100'),
+    ];
+    const urls = ranges.map(r => `https://sheets.googleapis.com/v4/spreadsheets/${SONGMAMANS_SHEET_ID}/values/${r}`);
+    const [[rawData, actData, decData], tgChat] = await Promise.all([
+      Promise.all(urls.map(u => fetchJson(u, { 'Authorization': `Bearer ${token}` }))),
+      fetchSongmamansChat(1).catch(e => { console.error('[단톡방 fetch 오류]', e.message); return null; }),
+    ]);
+
+    const rawRows = rawData.values || [];
+    const recentRaw = rawRows.filter(r => {
+      const t = String(r[0] || '');
+      return t.startsWith(today) || t.startsWith(yesterday);
+    }).slice(-20);
+
+    const actions = (actData.values || []).filter(r => r[6] !== '완료' && r[2]);
+    const openActions = actions.map(r => ({
+      id: r[0], date: r[1], owner: r[2], content: String(r[3] || '').slice(0, 100),
+      due: r[4], priority: r[5], status: r[6], by: r[7],
+    }));
+
+    const recentDecisions = (decData.values || []).filter(r => r[1]).slice(-10).map(r => ({
+      id: r[0], date: r[1], topic: r[2], status: r[4], decision: String(r[5] || '').slice(0, 80), decidedAt: r[7],
+    }));
+
+    // 단톡방: 사람 메시지만 추출 (봇 출력은 분량 절약 — 봇 발화수만 카운트)
+    let tgMessages = null;
+    let tgBotSummary = null;
+    if (tgChat) {
+      tgMessages = tgChat.messages
+        .filter(m => !m.isBot && m.text)
+        .slice(-30)
+        .map(m => `[${m.date.slice(11, 16)} ${m.senderName}] ${m.text.slice(0, 120)}`);
+      tgBotSummary = Object.entries(tgChat.bySender)
+        .filter(([k]) => k.includes('(bot)'))
+        .map(([k, v]) => `${k}: ${v}건`)
+        .join(', ');
+    }
+
+    return { recentRaw, openActions, recentDecisions, tgMessages, tgBotSummary, tgTotal: tgChat?.total };
+  } catch (e) { console.error('회의록 컨텍스트 오류:', e.message); return null; }
+}
+
 // ── Meta 광고 ──────────────────────────────────────────
 async function getMetaStats(since, until) {
   try {
@@ -737,41 +950,74 @@ async function getClarityData() {
 
 // ── Claude 분석 ────────────────────────────────────────
 async function getClaudeAnalysis(mode, data) {
-  const { meta, cafe24, clarity, ga4, ga4Daily, reviews, repurchase } = data;
+  const { meta, cafe24, clarity, ga4, ga4Daily, reviews, repurchase, segments, restock, voc, songmamans } = data;
   const f = clarity?.funnel;
 
   let prompt;
   if (mode === 'daily') {
-    const ut = ga4Daily?.userType;
-    const newCvr = ut?.new?.sessions > 0 ? (ut.new.purchases / ut.new.sessions * 100).toFixed(2) : '-';
-    const retCvr = ut?.ret?.sessions > 0 ? (ut.ret.purchases / ut.ret.sessions * 100).toFixed(2) : '-';
     const cafeMain = cafe24?.byProduct?.['83'] || {amount:0,count:0};
     const cafeOthers = cafe24 ? Object.entries(cafe24.byProduct||{}).filter(([k])=>k!=='83').reduce((s,[,v])=>({amount:s.amount+v.amount, count:s.count+v.count}), {amount:0,count:0}) : {amount:0,count:0};
-    prompt = `너는 이태리정미소 CX 관리자야. 광고·매출 절대값은 다른 봇이 보고하니 분석 X. 너는 어제 (1) 사이트 건강 (2) 리텐션 (3) 사이드SKU 시동 세 축만 보고 즉시 행동 필요한 신호만 짚어내.
+    const seg = segments || {};
+    const m = seg.member || {newCount:0,retCount:0,newAmt:0,retAmt:0};
+    const g = seg.guest || {newCount:0,repeatCount:0,newAmt:0,repeatAmt:0};
+    const trafficLine = ga4Daily?.channels?.length
+      ? ga4Daily.channels.slice(0,5).map(c=>`${c.name} ${c.sessions}세션`).join(' / ')
+      : '-';
 
-[사이트 건강 — Microsoft Clarity]
-- 세션: ${clarity?.totalSessions||'-'} / 스크립트에러 ${clarity?.scriptErrorPct?.toFixed(1)||'-'}% (정상 10↓) / 빠른뒤로가기 ${clarity?.quickbackPct?.toFixed(1)||'-'}% (정상 8↓) / 데드클릭 ${clarity?.deadClickPct?.toFixed(1)||'-'}%
-- 인스타 인앱: ${clarity?.instagramPct||'-'}% (80↑ 시 인앱 결제 마찰 주의)
+    const songCtx = (() => {
+      if (!songmamans) return '(미수집)';
+      const acts = (songmamans.openActions || []).slice(0, 5).map(a => `- ${a.id} [${a.owner}] ${a.content} (마감 ${a.due || '-'}, ${a.status})`).join('\n') || '없음';
+      const decs = (songmamans.recentDecisions || []).slice(-3).map(d => `- ${d.date} ${d.topic} → ${d.decision} [${d.status}]`).join('\n') || '없음';
+      const raw = (songmamans.recentRaw || []).slice(-5).map(r => `- ${r[0]} ${r[1]}: ${String(r[2]||'').slice(0,60)}`).join('\n') || '없음';
+      const tg = songmamans.tgMessages && songmamans.tgMessages.length
+        ? songmamans.tgMessages.join('\n')
+        : '(미수집)';
+      const botSummary = songmamans.tgBotSummary ? `봇 발화: ${songmamans.tgBotSummary}` : '';
+      return `[열린 액션]\n${acts}\n[최근 결정]\n${decs}\n[RAW 시트 최근]\n${raw}\n[단톡방 직접 (사람 메시지 최근 30건)]\n${tg}\n${botSummary}`;
+    })();
+
+    prompt = `너는 이태리정미소 CX 관리자야. 광고·매출 절대값 통합 보고는 송마망 봇 영역이라 분석 X. 너는 (1) 사이트 건강 (2) 리텐션 (Cafe24 raw) (3) 비#83 매출 (4) 재입고알림 신호 (5) 부정 VOC 다섯 축만 보고 즉시 행동 필요한 신호만 짚어내.
+
+송마망 회의록 컨텍스트는 인식만 하고 메시지에 출력 X. 단, 신호 판단할 때 "오늘 회사 분위기·진행중인 일"을 알고 행동 제안에 반영해.
+
+[사이트 — Microsoft Clarity]
+- 세션 ${clarity?.totalSessions||'-'} / 스크립트에러 ${clarity?.scriptErrorPct?.toFixed(1)||'-'}% (정상 10↓) / 빠른뒤로 ${clarity?.quickbackPct?.toFixed(1)||'-'}% (정상 8↓)
+- 인스타 인앱 ${clarity?.instagramPct||'-'}% (80↑ 시 결제 마찰)
 - 체류 ${clarity?.activeTimeSec||'-'}초 / 스크롤 ${clarity?.scrollDepth?.toFixed(0)||'-'}%
-- 결제 페이지 세션: ${clarity?.funnel?.checkout||0} / 장바구니: ${clarity?.funnel?.cart||0} (장바→결제 단계 통과율)
+- 결제 페이지 ${clarity?.funnel?.checkout||0}세션 / 장바구니 ${clarity?.funnel?.cart||0}
+- (Clarity 한도 시) GA4 트래픽: ${trafficLine}
 
-[리텐션 — GA4, OKR "재구매자 300명"]
-- 재방문: ${ut?.ret?.sessions||0}명·구매 ${ut?.ret?.purchases||0} (CVR ${retCvr}%)
-- 신규: ${ut?.new?.sessions||0}명·구매 ${ut?.new?.purchases||0} (CVR ${newCvr}%)
-- 재방문이 신규 대비 충분히 효율적(보통 3~5배)인지, 재방문 절대수가 늘고 있는지
+[리텐션 — Cafe24 raw 기준, OKR "재구매자 300명"]
+- 어제 주문 ${seg.totalOrders||0}건 / 매출 ${formatMoney(seg.totalAmt||0)}
+- 회원 ${m.newCount+m.retCount}건 → 신규 ${m.newCount} / 재방문 ${m.retCount} (재방문률 ${(m.newCount+m.retCount)>0?((m.retCount/(m.newCount+m.retCount))*100).toFixed(1):0}%)
+- 게스트 ${g.newCount+g.repeatCount}건 → 신규 ${g.newCount} / 반복 ${g.repeatCount}
+- CRM 고객목록 매칭 게스트: ${seg.crmMatchedGuests ?? '-'}/${seg.guestPhones?.length || 0}
+※ GA4 ecommercePurchases는 카페24 실주문의 15%만 잡혀 측정 신뢰 X — 무조건 위 Cafe24 raw 사용.
 
-[사이드SKU 시동 — 카페24 자사몰]
+[비#83 매출 — 카페24 자사몰]
 - #83 바질페스토(메인): ${formatMoney(cafeMain.amount)}·${cafeMain.count}건
-- #83 외 합계: ${formatMoney(cafeOthers.amount)}·${cafeOthers.count}건 (파파넬라 EVOO·룽고 등 OKR 신규 SKU)
-- 비#83 매출이 잡혔다면 어떤 SKU인지, 시동 신호인지
+- #83 외 합계: ${formatMoney(cafeOthers.amount)}·${cafeOthers.count}건 (파파넬라 EVOO·룽고 등)
+
+[재입고알림 — CRM 시트]
+- 오늘 +${restock?.todayCount||0}건 / 누적 ${restock?.totalCount||0}건 / 대기 ${restock?.pendingCount||0}건
+- 이번달 ${restock?.thisMonthCount||0} vs 지난달 ${restock?.lastMonthCount||0} (${restock?.paceVsLastMonth?.toFixed(2)||'-'}배 페이스)
+※ 대기 누적이 높고 발송 갱신 안 되면 LTV 누수 신호. 솔라피 실제 발송 확인은 미주 영역.
+
+[부정/중립 VOC — CRM 시트 (어제+오늘)]
+${voc && voc.negCount > 0 ? voc.items.map(i=>`- ${i.cls} ${i.rating} ${i.product}: "${i.excerpt}"`).join('\n') : '- 없음 (긍정만 ' + (voc?.totalToday||0) + '건)'}
+
+[송마망 회의록 — 인식만, 출력 X]
+${songCtx}
 
 판단 기준:
 - 즉시 행동 필요한가 (yes만 신호로 만듦)
-- 위 3축 중 하나라도 임계 초과·역전·정체면 신호
-- "데이터 미수집"은 신호로 만들지 마 (Clarity API 한도일 뿐)
+- 5축 중 하나라도 임계 초과·역전·정체면 신호
+- 회의록의 "오늘 진행중 액션·최근 결정"을 알고, 신호 발견 시 그 액션이 영향 주는지 명시
+- "데이터 미수집"은 신호 X
+- 게스트 비중 60%↑면 식별·전환 신호 가치 있음
 
 신호 형식 (최대 3개): 🚨 <항목> — <근거 수치> ▶ <행동>
-모두 정상이면 한 줄: ✅ 특이사항 없음 — <오늘 본업 한 줄 코멘트>
+모두 정상이면 한 줄: ✅ 특이사항 없음 — <회의록 컨텍스트 반영해 오늘 본업 한 줄>
 
 마크다운 기호 금지(#, *, **, ---, >). 일반 텍스트만.`;
   } else {
@@ -824,29 +1070,44 @@ async function dailyReport() {
   const display = formatDate(today);
   console.log(`[일간] ${today}`);
 
-  // CX 관리자 일간: 사이트 건강 / 리텐션(OKR) / 비#83 매출 시그널 / Claude 이상신호
-  const [clarity, sheetsTasks, ga4Daily, cafe24] = await Promise.all([
+  // 데이터 fetch — Cafe24 raw 중심 (GA4 newVsReturning은 측정 누락 신뢰 X)
+  let [clarity, sheetsTasks, ga4Daily, cafe24, segments, restock, voc, songmamans] = await Promise.all([
     getClarityData(),
     getSheetsTasks(),
     getGA4Daily(today),
     getCafe24SalesByProduct(today),
+    getCafe24CustomerSegments(today, 90),
+    fetchRestockRequests(),
+    fetchNegativeVOC(today),
+    fetchSongmamansContext(),
   ]);
+  if (segments) segments = await enrichGuestSegmentsWithCRM(segments);
 
-  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, cafe24 });
+  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, cafe24, segments, restock, voc, songmamans });
 
-  // 🚦 사이트 건강
+  // 🚦 사이트 (Clarity 우선, 한도 시 GA4 트래픽 채널 백업)
   const healthSection = clarity
     ? `에러 ${clarity.scriptErrorPct.toFixed(1)}%${icon(clarity.scriptErrorPct, 10, 30)} · 뒤로 ${clarity.quickbackPct.toFixed(1)}%${icon(clarity.quickbackPct, 8, 15)} · 인스타인앱 ${clarity.instagramPct}%${parseFloat(clarity.instagramPct) > 80 ? '⚠️인앱마찰' : ''}\n체류 ${clarity.activeTimeSec}초 · 스크롤 ${clarity.scrollDepth.toFixed(0)}%${clarity.funnel ? ` · 결제 ${clarity.funnel.checkout}세션` : ''}`
-    : '⚠️ 데이터 없음 (API 한도)';
+    : (ga4Daily && ga4Daily.channels && ga4Daily.channels.length
+        ? `⚠️ Clarity 한도 — 트래픽: ${ga4Daily.channels.slice(0,3).map(c=>`${c.name} ${c.sessions}`).join(' / ')}`
+        : '⚠️ 데이터 없음');
 
-  // 🔁 리텐션
-  let retentionSection = '데이터 없음';
-  if (ga4Daily && ga4Daily.userType) {
-    const ut = ga4Daily.userType;
-    const newCvr = ut.new.sessions > 0 ? (ut.new.purchases / ut.new.sessions * 100) : 0;
-    const retCvr = ut.ret.sessions > 0 ? (ut.ret.purchases / ut.ret.sessions * 100) : 0;
-    const mult = newCvr > 0 ? (retCvr / newCvr).toFixed(1) : '-';
-    retentionSection = `재방문 ${ut.ret.sessions}명·구매 ${ut.ret.purchases} (CVR ${retCvr.toFixed(1)}%) / 신규 ${ut.new.sessions}명·구매 ${ut.new.purchases} (CVR ${newCvr.toFixed(1)}%) · 재방문이 신규 대비 ${mult}배`;
+  // 🔁 리텐션 (Cafe24 raw — 회원 first_order_date + 게스트 buyer_tel 식별)
+  let retentionSection;
+  if (segments && segments.totalOrders > 0) {
+    const total = segments.totalOrders;
+    const m = segments.member, g = segments.guest;
+    const memberTotal = m.newCount + m.retCount;
+    const guestTotal = g.newCount + g.repeatCount;
+    const memberSharePct = total > 0 ? (memberTotal / total * 100) : 0;
+    const memberRetPct = memberTotal > 0 ? (m.retCount / memberTotal * 100) : 0;
+    const guestRepeatPct = guestTotal > 0 ? (g.repeatCount / guestTotal * 100) : 0;
+    const crmMatch = segments.crmMatchedGuests != null
+      ? ` · CRM매칭 ${segments.crmMatchedGuests}/${segments.guestPhones.length}`
+      : '';
+    retentionSection = `회원 ${memberTotal}건 (${memberSharePct.toFixed(0)}%) → 재방문 ${m.retCount}건 (${memberRetPct.toFixed(1)}%)\n게스트 ${guestTotal}건 → 반복구매 ${g.repeatCount}건 (${guestRepeatPct.toFixed(1)}%)${crmMatch}`;
+  } else {
+    retentionSection = '⚠️ Cafe24 데이터 미수집';
   }
 
   // 🌱 비#83 매출 시그널
@@ -857,26 +1118,44 @@ async function dailyReport() {
       sideSkuSection = nonMain.sort((a,b)=>b.amount-a.amount).slice(0,4).map(p => {
         const nm = PRODUCT_NAME[String(p.productNo)] || p.name || `#${p.productNo}`;
         return `${nm}: ${formatMoney(p.amount)}·${p.count}건`;
-      }).join(' / ') + ' ↑';
+      }).join(' / ');
     }
+  }
+
+  // 📦 재입고알림 (오늘 신규 신청 있거나 대기 누적이 클 때만)
+  let restockSection = '';
+  if (restock) {
+    const pace = restock.paceVsLastMonth ? ` · ${restock.paceVsLastMonth.toFixed(1)}배 페이스` : '';
+    if (restock.todayCount > 0) {
+      restockSection = `\n\n📦 <b>재입고알림</b>\n오늘 +${restock.todayCount}건 · 누적 ${restock.totalCount}건 (대기 ${restock.pendingCount}건)${pace}`;
+    } else if (restock.pendingCount >= 100) {
+      restockSection = `\n\n📦 <b>재입고알림</b> · 대기 ${restock.pendingCount}건${pace}`;
+    }
+  }
+
+  // 📢 부정/중립 VOC (있을 때만)
+  let vocSection = '';
+  if (voc && voc.negCount > 0) {
+    const list = voc.items.map(i => `${i.cls || ''} ${i.rating || ''} ${i.product || ''} — "${i.excerpt}"`).join('\n');
+    vocSection = `\n\n📢 <b>부정/중립 후기</b> ${voc.negCount}건\n${list}`;
   }
 
   const msg = `🔎 <b>CX 일간</b> · ${display}
 ━━━━━━━━━━━━━━━━━
-🚦 <b>사이트 건강</b>
+🚦 <b>사이트</b>
 ${healthSection}
 
-🔁 <b>리텐션</b> (OKR)
+🔁 <b>리텐션</b> (Cafe24 raw)
 ${retentionSection}
 
 🌱 <b>비#83 매출</b>
-${sideSkuSection}`;
+${sideSkuSection}${restockSection}${vocSection}`;
 
-  const analysisMsg = analysis ? `🤖 <b>CX 이상 신호</b>\n${analysis}` : null;
+  const analysisMsg = analysis ? `🤖 <b>CX 판단</b>\n${analysis}` : null;
 
   console.log('\n======= 텔레그램 전문 =======');
   console.log(msg.replace(/<[^>]+>/g, ''));
-  if (analysisMsg) { console.log('\n--- Claude 분석 ---\n' + analysisMsg); }
+  if (analysisMsg) { console.log('\n--- Claude 분석 ---\n' + analysisMsg.replace(/<[^>]+>/g, '')); }
   console.log('==============================\n');
 
   let tasksSection = '';
@@ -1064,10 +1343,18 @@ module.exports = {
   getCafe24SalesByProduct,
   getCafe24Reviews,
   getRepurchaseStats,
+  getCafe24CustomerSegments,
+  enrichGuestSegmentsWithCRM,
+  fetchCafe24OrdersRange,
+  fetchRestockRequests,
+  fetchNegativeVOC,
+  fetchSongmamansContext,
   getMetaStats,
   getGA4Weekly,
+  getGA4Daily,
   getClarityData,
   getSheetsTasks,
+  getClaudeAnalysis,
   dateStr,
   formatDate,
 };
