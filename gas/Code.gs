@@ -37,17 +37,40 @@ function doGet(e) {
   return ContentService.createTextOutput('CX Bot OK');
 }
 
+// ===== Telegram Polling (1분 트리거로 호출) =====
+function pollTelegramUpdates() {
+  var token = _botToken();
+  if (!token) return;
+  var props = PropertiesService.getScriptProperties();
+  var lastId = parseInt(props.getProperty('TG_LAST_UPDATE_ID') || '0');
+  var url = 'https://api.telegram.org/bot' + token + '/getUpdates?timeout=0&limit=100&offset=' + (lastId + 1);
+  var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  var data = JSON.parse(res.getContentText());
+  if (!data.ok || !data.result || !data.result.length) return;
+  var updates = data.result;
+  for (var i = 0; i < updates.length; i++) {
+    var u = updates[i];
+    if (u.callback_query) {
+      handleCallbackQuery(u.callback_query);
+    } else {
+      handleTelegramUpdate(u);
+    }
+    if (u.update_id > lastId) lastId = u.update_id;
+  }
+  props.setProperty('TG_LAST_UPDATE_ID', String(lastId));
+}
+
+function setupPollingTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'pollTelegramUpdates') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('pollTelegramUpdates').timeBased().everyMinutes(1).create();
+  console.log('polling trigger 등록 완료');
+}
+
 function doPost(e) {
   try {
     var contents = JSON.parse(e.postData.contents);
-    if (contents.update_id !== undefined) {
-      if (contents.callback_query) {
-        handleCallbackQuery(contents.callback_query);
-      } else {
-        handleTelegramUpdate(contents);
-      }
-      return ContentService.createTextOutput('ok');
-    }
     var ss = SpreadsheetApp.openById(SHEET_ID);
     var action = contents.action;
     if (action === 'add_meeting') {
