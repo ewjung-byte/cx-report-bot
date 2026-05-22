@@ -1305,7 +1305,11 @@ async function dailyReport() {
   let salesSection = '';
   if (dailyOrders && dailyOrders.totalCount > 0) {
     const d = dailyOrders;
+    // 전환율 = 카페24 주문(100% 정확) ÷ GA4 방문 → 양 끝이 다 정확한 유일한 신뢰 퍼널 지표
+    const sessions = (ga4Daily?.channels || []).reduce((s, c) => s + (c.sessions || 0), 0);
+    const cvr = sessions ? (d.totalCount / sessions * 100) : null;
     salesSection = `\n\n💳 <b>매출</b> ${formatMoney(d.revenue)}\n주문 ${d.totalCount}건 (결제 ${d.paidCount} · 취소 ${d.canceledCount})`;
+    if (cvr != null) salesSection += `\n전환율 ${cvr.toFixed(1)}% (주문 ${d.totalCount} ÷ 방문 ${sessions})`;
     if (ga4Daily?.checkoutFunnel) {
       const cf = ga4Daily.checkoutFunnel;
       salesSection += `\nGA4 장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout} (사이트 이탈 참고용)`;
