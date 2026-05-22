@@ -463,6 +463,38 @@ async function getCafe24SalesByProduct(startDate, endDate) {
   } catch(e) { console.error('Cafe24 상품별 오류:', e.message); return { totalSales: 0, count: 0, byProduct: {} }; }
 }
 
+// ── 일별 주문 요약 (매출 + 유입경로 + 결제수단) ──────────
+// order_place_name = 주문이 일어난 곳(모바일웹/네이버페이/톡체크아웃/PC). 광고소재별 X.
+async function getCafe24DailyOrders(startDate, endDate) {
+  endDate = endDate || startDate;
+  try {
+    let all = [], offset = 0;
+    while (true) {
+      const url = `${CAFE24_BASE}orders?start_date=${startDate}&end_date=${endDate}&limit=100&offset=${offset}`;
+      const data = await fetchJson(url, { 'Authorization': `Bearer ${CAFE24_ACCESS_TOKEN}`, 'X-Cafe24-Api-Version': CAFE24_API_VERSION });
+      if (!data.orders || data.orders.length === 0) break;
+      all = all.concat(data.orders);
+      if (data.orders.length < 100) break;
+      offset += 100;
+    }
+    const valid = all.filter(o => o.canceled === 'F');
+    const paidCount = all.filter(o => o.paid === 'T').length; // 대시보드 '결제' 기준(취소 포함)
+    const revenue = valid.reduce((s, o) => s + cafe24OrderRevenue(o), 0);
+    const LABEL = { '네이버 페이': '네이버페이', '톡체크아웃': '톡(카카오)', '모바일웹': '모바일웹', 'PC쇼핑몰': 'PC' };
+    const channels = {};
+    valid.forEach(o => { const k = LABEL[o.order_place_name] || o.order_place_name || '기타'; channels[k] = (channels[k] || 0) + 1; });
+    const channelList = Object.entries(channels).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
+    return {
+      totalCount: all.length,
+      validCount: valid.length,
+      paidCount,
+      canceledCount: all.length - valid.length,
+      revenue,
+      channels: channelList,
+    };
+  } catch(e) { console.error('Cafe24 일별주문 오류:', e.message); return null; }
+}
+
 // ── 재구매·리텐션 분석 (카페24 회원 주문 이력) ──────────
 // OKR "바질 재구매자 300명" 추적용. 송마망 봇 미커버 영역.
 async function getRepurchaseStats(lookbackDays, periodStart, periodEnd) {
@@ -1013,7 +1045,7 @@ async function getClarityData() {
 
 // ── Claude 분석 ────────────────────────────────────────
 async function getClaudeAnalysis(mode, data) {
-  const { meta, cafe24, clarity, ga4, ga4Daily, reviews, repurchase, segments, restock, voc, songmamans, adAudit } = data;
+  const { meta, cafe24, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit } = data;
   const f = clarity?.funnel;
 
   let prompt;
@@ -1050,9 +1082,14 @@ async function getClaudeAnalysis(mode, data) {
 - 결제 페이지 ${clarity?.funnel?.checkout||0}세션 / 장바구니 ${clarity?.funnel?.cart||0}
 - (Clarity 한도 시) GA4 트래픽: ${trafficLine}
 
-[결제 퍼널 — GA4 이벤트 (5/22 결제쓱 AB 기준선)]
-- 장바구니 ${ga4Daily?.checkoutFunnel?.addToCart||0} → 결제진입 ${ga4Daily?.checkoutFunnel?.beginCheckout||0}(${ga4Daily?.checkoutFunnel?.cartToCheckoutPct??'-'}%) → 구매 ${ga4Daily?.checkoutFunnel?.purchase||0}(${ga4Daily?.checkoutFunnel?.checkoutToPurchasePct??'-'}%)
-※ 결제진입→구매 60%↓ 이면 결제 옵션 마찰 신호. 5/22 결제쓱 위치 변경 후 수치 변화 주시.
+[매출·주문 — Cafe24 실데이터 (네이버페이/톡 포함 100%)]
+- 매출 ${formatMoney(dailyOrders?.revenue||0)} / 주문 ${dailyOrders?.totalCount||0}건 (결제 ${dailyOrders?.paidCount||0} · 취소 ${dailyOrders?.canceledCount||0})
+- 유입경로: ${(dailyOrders?.channels||[]).map(c=>`${c.name} ${c.count}`).join(' · ')||'-'}
+※ 유입경로는 "주문이 일어난 곳"(자사몰/네이버페이/카카오)이지 광고소재별 추적 아님.
+
+[사이트 장바구니 이탈 — GA4 (참고용, 외부결제 미포함)]
+- 장바구니 ${ga4Daily?.checkoutFunnel?.addToCart||0} → 결제진입 ${ga4Daily?.checkoutFunnel?.beginCheckout||0}(${ga4Daily?.checkoutFunnel?.cartToCheckoutPct??'-'}%)
+※ GA4 '구매'는 네이버페이/톡 등 외부결제가 안 잡혀 실제보다 적음 → 구매·매출은 위 Cafe24 숫자만 신뢰. GA4는 장바구니→결제 이탈 신호로만 사용.
 
 [메타 광고 URL 검증 — P0]
 - ACTIVE ${adAudit?.total||'-'}개 중 정상 ${adAudit?.healthy||'-'}개 / 이상 ${adAudit?.broken?.length||0}개
@@ -1131,7 +1168,7 @@ ${reviews ? `이번 주 리뷰 ${reviews.count}건 기준, 반복 칭찬 키워�
 // ── CX 관리자 분석 (개인 DM용) ─────────────────────────
 async function getCXManagerAnalysis(data) {
   if (!CLAUDE_API_KEY) return null;
-  const { activities, dailyMessages, clarity, ga4Daily, segments, voc, restock, adAudit } = data;
+  const { activities, dailyMessages, clarity, ga4Daily, dailyOrders, segments, voc, restock, adAudit } = data;
 
   const activitiesText = activities && activities.length
     ? activities.slice(-15).map(a => `[${a.id} ${a.status}] ${a.content}`).join('\n')
@@ -1143,9 +1180,11 @@ async function getCXManagerAnalysis(data) {
 
   const cf = ga4Daily?.checkoutFunnel;
   const signals = [
+    `매출(Cafe24): ${formatMoney(dailyOrders?.revenue||0)} / 주문 ${dailyOrders?.totalCount||0}건 (결제 ${dailyOrders?.paidCount||0}·취소 ${dailyOrders?.canceledCount||0})`,
+    `유입경로(Cafe24): ${(dailyOrders?.channels||[]).map(c=>`${c.name} ${c.count}`).join(' · ') || '-'}`,
     `Clarity: ${clarity ? '정상' : '한도초과'}`,
-    `GA4 채널: ${ga4Daily?.channels?.slice(0,3).map(c=>`${c.name} ${c.sessions}`).join(' / ') || '-'}`,
-    cf ? `퍼널: cart ${cf.addToCart} → checkout ${cf.beginCheckout}(${cf.cartToCheckoutPct||'-'}%) → 구매 ${cf.purchase}(${cf.checkoutToPurchasePct||'-'}%)` : '퍼널: 없음',
+    `GA4 트래픽: ${ga4Daily?.channels?.slice(0,3).map(c=>`${c.name} ${c.sessions}`).join(' / ') || '-'}`,
+    cf ? `사이트 이탈(GA4 참고): 장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout}(${cf.cartToCheckoutPct||'-'}%) ※GA4 구매는 외부결제 미포함이라 매출은 위 Cafe24만 신뢰` : '',
     segments?.totalOrders ? `리텐션: 회원 ${segments.member.newCount+segments.member.retCount}건 (재방문 ${segments.member.retCount}) / 게스트 ${segments.guest.newCount+segments.guest.repeatCount}건` : '리텐션: 미수집',
     `부정 VOC: ${voc?.negCount || 0}건`,
     `재입고: 누적 ${restock?.totalCount||'-'}건 / 대기 ${restock?.pendingCount||'-'}건`,
@@ -1200,11 +1239,12 @@ async function dailyReport() {
   console.log(`[일간] ${today}`);
 
   // 데이터 fetch — Cafe24 raw 중심 (GA4 newVsReturning은 측정 누락 신뢰 X)
-  let [clarity, sheetsTasks, ga4Daily, cafe24, segments, restock, voc, songmamans] = await Promise.all([
+  let [clarity, sheetsTasks, ga4Daily, cafe24, dailyOrders, segments, restock, voc, songmamans] = await Promise.all([
     getClarityData(),
     getSheetsTasks(),
     getGA4Daily(today),
     getCafe24SalesByProduct(today),
+    getCafe24DailyOrders(today),
     getCafe24CustomerSegments(today, 90),
     fetchRestockRequests(),
     fetchNegativeVOC(today),
@@ -1214,7 +1254,7 @@ async function dailyReport() {
 
   // P0: 메타 광고 URL 검증 (Claude 분석이 adAudit을 입력으로 받으므로 순차 실행)
   const adAudit = await auditMetaAdUrls();
-  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, cafe24, segments, restock, voc, songmamans, adAudit });
+  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, dailyOrders, cafe24, segments, restock, voc, songmamans, adAudit });
 
   // 🚦 사이트 (Clarity 우선, 한도 시 GA4 트래픽 채널 백업)
   const healthSection = clarity
@@ -1223,13 +1263,25 @@ async function dailyReport() {
         ? `⚠️ Clarity 한도 — 트래픽: ${ga4Daily.channels.slice(0,3).map(c=>`${c.name} ${c.sessions}`).join(' / ')}`
         : '⚠️ 데이터 없음');
 
-  // 💳 결제 퍼널 (GA4 이벤트 기반 — 5/22 결제쓱 AB 기준선)
-  let funnelSection = '';
-  if (ga4Daily?.checkoutFunnel) {
+  // 💳 매출·주문 (Cafe24 실데이터 — 네이버페이/톡 포함 100% 집계)
+  // GA4 구매는 외부결제(네이버페이 등) 미발화로 과소 → 카페24 실주문으로 대체.
+  let salesSection = '';
+  if (dailyOrders && dailyOrders.totalCount > 0) {
+    const d = dailyOrders;
+    salesSection = `\n\n💳 <b>매출</b> ${formatMoney(d.revenue)}\n주문 ${d.totalCount}건 (결제 ${d.paidCount} · 취소 ${d.canceledCount})`;
+    if (ga4Daily?.checkoutFunnel) {
+      const cf = ga4Daily.checkoutFunnel;
+      salesSection += `\nGA4 장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout} (사이트 이탈 참고용)`;
+    }
+  } else if (ga4Daily?.checkoutFunnel) {
     const cf = ga4Daily.checkoutFunnel;
-    const c2cIcon = cf.cartToCheckoutPct != null ? icon(100 - cf.cartToCheckoutPct, 30, 60) : '';
-    const c2pIcon = cf.checkoutToPurchasePct != null ? icon(100 - cf.checkoutToPurchasePct, 40, 60) : '';
-    funnelSection = `\n\n💳 <b>결제 퍼널</b> (GA4)\n장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout}(${cf.cartToCheckoutPct ?? '-'}%)${c2cIcon} → 구매 ${cf.purchase}(${cf.checkoutToPurchasePct ?? '-'}%)${c2pIcon}`;
+    salesSection = `\n\n💳 <b>결제 퍼널</b> (GA4)\n장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout} → 구매 ${cf.purchase}`;
+  }
+
+  // 🛒 유입경로 (Cafe24 order_place_name — 어디서 주문했는지. 광고소재별 아님)
+  let channelSection = '';
+  if (dailyOrders && dailyOrders.channels && dailyOrders.channels.length) {
+    channelSection = `\n\n🛒 <b>유입경로</b> (카페24)\n${dailyOrders.channels.map(c => `${c.name} ${c.count}`).join(' · ')}`;
   }
 
   // 🔁 리텐션 (Cafe24 raw — 회원 first_order_date + 게스트 buyer_tel 식별)
@@ -1295,7 +1347,7 @@ async function dailyReport() {
   const msg = `🔎 <b>CX 일간</b> · ${display}
 ━━━━━━━━━━━━━━━━━
 🚦 <b>사이트</b>
-${healthSection}${funnelSection}
+${healthSection}${salesSection}${channelSection}
 
 🔁 <b>리텐션</b> (Cafe24 raw)
 ${retentionSection}
@@ -1352,7 +1404,7 @@ ${sideSkuSection}${adAuditSection}${restockSection}${vocSection}`;
     getDailyMessagesFromSheet(today).catch(() => [])
   ]);
   const cxManagerAnalysis = await getCXManagerAnalysis({
-    activities, dailyMessages, clarity, ga4Daily, segments, voc, restock, adAudit
+    activities, dailyMessages, clarity, ga4Daily, dailyOrders, segments, voc, restock, adAudit
   });
   const cxManagerSection = cxManagerAnalysis
     ? `\n\n🎯 <b>CX 관리자 분석</b>\n${cxManagerAnalysis}`
@@ -1505,6 +1557,7 @@ module.exports = {
   refreshCafe24Token,
   getCafe24Sales,
   getCafe24SalesByProduct,
+  getCafe24DailyOrders,
   getCafe24Reviews,
   getRepurchaseStats,
   getCafe24CustomerSegments,
