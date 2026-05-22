@@ -922,7 +922,7 @@ async function getCafe24Reviews(startDate, endDate) {
 }
 
 // ── GA4 일간 (어제 채널·상품 페이지·짧은URL 손실 감지) ─
-const PRODUCT_NAME = { '83': '바질페스토', '27': '룽고(빵)', '84': '광고랜딩 #84' };
+const PRODUCT_NAME = { '83': '바질페스토', '27': '클래식 바질페스토(#27 구버전)', '84': '광고랜딩 #84' };
 const CHANNEL_KR = { 'Paid Social':'유료SNS', 'Organic Social':'자연SNS', 'Direct':'직접유입', 'Organic Search':'검색', 'Paid Other':'기타광고', 'Referral':'추천', 'Organic Shopping':'쇼핑', 'Unassigned':'미분류' };
 
 async function getGA4Daily(dateStrYmd) {
