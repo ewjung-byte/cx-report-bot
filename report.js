@@ -973,8 +973,9 @@ async function getGA4Daily(dateStrYmd) {
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'sessionDefaultChannelGroup'}], limit: 8, orderBys:[{metric:{metricName:'sessions'},desc:true}] }),
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'newVsReturning'}] }),
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'screenPageViews'},{name:'sessions'}], dimensions:[{name:'pagePathPlusQueryString'}], limit: 40, orderBys:[{metric:{metricName:'screenPageViews'},desc:true}] }),
-      // 결제 단계별 이탈률 (5/22 결제쓱 AB테스트 대비)
-      ga4Fetch(token, { dateRanges:[range], metrics:[{name:'eventCount'}], dimensions:[{name:'eventName'}], dimensionFilter:{ filter:{ fieldName:'eventName', inListFilter:{ values:['add_to_cart','begin_checkout','purchase'] } } } }),
+      // 결제 단계별 이탈 — 이벤트 횟수 X, "이벤트가 발생한 세션 수"(사람 기준)로 집계.
+      // eventCount는 한 사람이 결제창 들락날락하면 중복 카운트(예: 5/21 begin_checkout 37건=실제 24세션).
+      ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'}], dimensions:[{name:'eventName'}], dimensionFilter:{ filter:{ fieldName:'eventName', inListFilter:{ values:['add_to_cart','begin_checkout','purchase'] } } } }),
     ]);
     const channels = (chRes.rows||[]).map(r => ({
       name: r.dimensionValues[0].value,
@@ -992,7 +993,7 @@ async function getGA4Daily(dateStrYmd) {
       const path = r.dimensionValues[0].value;
       if (/^\/surl\/p\//i.test(path)) surlSessions += parseInt(r.metricValues[1].value);
     });
-    // 결제 퍼널: add_to_cart → begin_checkout → purchase
+    // 결제 퍼널: add_to_cart → begin_checkout → purchase (세션 수 기준)
     const funnelMap = {};
     (funnelRes.rows||[]).forEach(r => { funnelMap[r.dimensionValues[0].value] = parseInt(r.metricValues[0].value); });
     const checkoutFunnel = {
@@ -1245,6 +1246,9 @@ function buildDataHealthWarnings(d) {
   }
   // 트래픽·사이트
   if (!ga4Daily || !ga4Daily.checkoutFunnel) w.push('GA4 미수집');
+  else if (ga4Daily.checkoutFunnel.addToCart > 0 && ga4Daily.checkoutFunnel.beginCheckout === 0) {
+    w.push('결제진입 0 (추적 누락 의심 — 장바구니는 잡히는데 결제진입 이벤트 미발화)');
+  }
   if (!clarity) w.push('Clarity 한도/미수집(GA4 백업으로 대체됨)');
   // 분석
   if (!analysis) w.push('CX 판단(Claude) 비어있음');
