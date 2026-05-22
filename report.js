@@ -1224,6 +1224,39 @@ ${chatText}
   } catch(e) { console.error('CX 분석 오류:', e.message); return null; }
 }
 
+// ── 데이터 자가점검 (발송 전 검증, 이상 시 리포트에 표시) ──────
+// 목적: 데이터 소스가 조용히 실패(null·0)하거나 숫자가 안 맞을 때 사람이 아니라 봇이 먼저 잡는다.
+function buildDataHealthWarnings(d) {
+  const w = [];
+  const { dailyOrders, cafe24, segments, ga4Daily, clarity, analysis, cxManagerAnalysis, restock, voc, adAudit } = d;
+
+  // 매출/주문
+  if (!dailyOrders || dailyOrders.totalCount === 0) w.push('카페24 주문 미수집(매출 0)');
+  else {
+    if (dailyOrders.revenue === 0) w.push('매출 0원인데 주문 있음 → 금액 집계 오류 의심');
+    if (dailyOrders.paidCount > dailyOrders.totalCount) w.push('결제건수 > 주문건수 (모순)');
+    // 상품별 합(배송비 제외)은 매출보다 작아야 정상. 더 크면 집계 불일치
+    if (cafe24 && cafe24.totalSales > dailyOrders.revenue + 1) w.push('상품별 합 > 총매출 (집계 불일치)');
+  }
+  // 리텐션
+  if (!segments) w.push('리텐션(세그먼트) 미수집');
+  else if (segments.guest && (segments.guest.newCount + segments.guest.repeatCount) > 0 && (!segments.guestPhones || segments.guestPhones.length === 0)) {
+    w.push('게스트 주문 있는데 전화번호 0건 → 게스트→회원 매칭 불가(embed=receivers 필요)');
+  }
+  // 트래픽·사이트
+  if (!ga4Daily || !ga4Daily.checkoutFunnel) w.push('GA4 미수집');
+  if (!clarity) w.push('Clarity 한도/미수집(GA4 백업으로 대체됨)');
+  // 분석
+  if (!analysis) w.push('CX 판단(Claude) 비어있음');
+  if (!cxManagerAnalysis) w.push('CX 관리자 분석(Claude) 비어있음');
+  // CRM·광고
+  if (!restock) w.push('재입고알림(CRM) 미수집');
+  if (adAudit && adAudit.total > 0 && adAudit.broken && adAudit.broken.length / adAudit.total > 0.5) {
+    w.push(`광고 URL 절반 이상 깨짐 (${adAudit.broken.length}/${adAudit.total})`);
+  }
+  return w;
+}
+
 // ── 텔레그램 발송 ──────────────────────────────────────
 function sendTelegram(text) {
   return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, { chat_id: TG_CHAT_ID, text, parse_mode: 'HTML' });
@@ -1410,13 +1443,18 @@ ${sideSkuSection}${adAuditSection}${restockSection}${vocSection}`;
     ? `\n\n🎯 <b>CX 관리자 분석</b>\n${cxManagerAnalysis}`
     : '';
 
-  // 개인 DM: 할일 + 메모 + CX 분석
-  const personalMsg = `☀️ <b>오늘 할일</b>${tasksSection}${memoSection}${cxManagerSection}`;
+  // 발송 전 자가점검 — 이상 있으면 콘솔 로그 + 개인 DM에 표시
+  const warnings = buildDataHealthWarnings({ dailyOrders, cafe24, segments, ga4Daily, clarity, analysis, cxManagerAnalysis, restock, voc, adAudit });
+  if (warnings.length) console.error('⚠️ 데이터 점검 경고:\n- ' + warnings.join('\n- '));
+  const healthSectionDM = warnings.length ? `\n\n🔧 <b>데이터 점검</b>\n${warnings.map(x => `⚠️ ${x}`).join('\n')}` : '';
+
+  // 개인 DM: 할일 + 메모 + CX 분석 + (이상 시) 데이터 점검
+  const personalMsg = `☀️ <b>오늘 할일</b>${tasksSection}${memoSection}${cxManagerSection}${healthSectionDM}`;
 
   const groupResult = await sendTelegramGroup(msg);
   if (groupResult.ok) {
     if (analysisMsg) await sendTelegramGroup(analysisMsg);
-    if (tasksSection || memoSection || cxManagerSection) await sendTelegram(personalMsg);
+    if (tasksSection || memoSection || cxManagerSection || healthSectionDM) await sendTelegram(personalMsg);
     console.log('일간 발송 완료 ✅');
   } else {
     console.error('발송 실패 ❌:', JSON.stringify(groupResult));
