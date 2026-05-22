@@ -1225,6 +1225,30 @@ ${chatText}
   } catch(e) { console.error('CX 분석 오류:', e.message); return null; }
 }
 
+// ── 결제 전환 액션 (데이터 → 오늘 할 일 1개) ──────────────
+// 신뢰 가능한 신호로 우선순위 액션 1개를 정함. 정밀 결제단계는 결제슉 대시보드 보완.
+function buildPaymentAction({ dailyOrders, ga4Daily, adAudit, segments }) {
+  const cf = ga4Daily && ga4Daily.checkoutFunnel;
+  // 1순위: 광고 URL 깨짐 = 유입 오염 → 전환 논하기 전에 광고부터
+  if (adAudit && adAudit.total > 0 && adAudit.broken && adAudit.broken.length / adAudit.total > 0.3) {
+    return `👉 <b>액션:</b> 광고 URL ${adAudit.broken.length}/${adAudit.total}개 깨짐 먼저 정상화 — 유입이 오염되면 전환은 못 믿어요. 광고관리자에서 깨진 URL 교체/일시중지.`;
+  }
+  // 2순위: 결제진입 이탈 큼 → 결제슉에서 정밀 확인 후 디자인 1개
+  if (cf && cf.addToCart > 0 && cf.beginCheckout / cf.addToCart < 0.6) {
+    const dropPct = Math.round((1 - cf.beginCheckout / cf.addToCart) * 100);
+    return `👉 <b>액션:</b> 장바구니→결제진입 ${dropPct}% 이탈. 결제슉 대시보드에서 방문→클릭→완료 중 가장 큰 이탈 단계 1개 골라 디자인 수정.`;
+  }
+  // 3순위: 게스트 비중 높음 → 회원전환 누수
+  if (segments && segments.totalOrders > 0) {
+    const g = segments.guest, total = segments.totalOrders;
+    const guestShare = (g.newCount + g.repeatCount) / total;
+    if (guestShare > 0.4) {
+      return `👉 <b>액션:</b> 게스트 비중 ${Math.round(guestShare * 100)}%. 결제완료 화면에 회원가입 유도(쿠폰) 노출돼 있는지 점검 — 재구매 LTV 누수.`;
+    }
+  }
+  return `👉 <b>액션:</b> 전환 신호 안정. 결제슉 대시보드로 결제페이지 이탈(방문→클릭→완료)을 주 1회 점검하며 큰 이탈 단계 1개씩 개선.`;
+}
+
 // ── 데이터 자가점검 (발송 전 검증, 이상 시 리포트에 표시) ──────
 // 목적: 데이터 소스가 조용히 실패(null·0)하거나 숫자가 안 맞을 때 사람이 아니라 봇이 먼저 잡는다.
 function buildDataHealthWarnings(d) {
@@ -1314,6 +1338,7 @@ async function dailyReport() {
       const cf = ga4Daily.checkoutFunnel;
       salesSection += `\nGA4 장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout} (사이트 이탈 참고용)`;
     }
+    salesSection += `\n${buildPaymentAction({ dailyOrders, ga4Daily, adAudit, segments })}`;
   } else if (ga4Daily?.checkoutFunnel) {
     const cf = ga4Daily.checkoutFunnel;
     salesSection = `\n\n💳 <b>결제 퍼널</b> (GA4)\n장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout} → 구매 ${cf.purchase}`;
