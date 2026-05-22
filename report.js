@@ -1204,11 +1204,9 @@ async function dailyReport() {
   ]);
   if (segments) segments = await enrichGuestSegmentsWithCRM(segments);
 
-  // P0: 메타 광고 URL 검증 (dailyReport에서 병렬 fetch)
-  const [adAudit, analysis] = await Promise.all([
-    auditMetaAdUrls(),
-    getClaudeAnalysis('daily', { clarity, ga4Daily, cafe24, segments, restock, voc, songmamans, adAudit }),
-  ]);
+  // P0: 메타 광고 URL 검증 (Claude 분석이 adAudit을 입력으로 받으므로 순차 실행)
+  const adAudit = await auditMetaAdUrls();
+  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, cafe24, segments, restock, voc, songmamans, adAudit });
 
   // 🚦 사이트 (Clarity 우선, 한도 시 GA4 트래픽 채널 백업)
   const healthSection = clarity
