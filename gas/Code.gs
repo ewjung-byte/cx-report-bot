@@ -50,10 +50,15 @@ function pollTelegramUpdates() {
   var updates = data.result;
   for (var i = 0; i < updates.length; i++) {
     var u = updates[i];
-    if (u.callback_query) {
-      handleCallbackQuery(u.callback_query);
-    } else {
-      handleTelegramUpdate(u);
+    try {
+      if (u.callback_query) {
+        handleCallbackQuery(u.callback_query);
+      } else {
+        handleTelegramUpdate(u);
+      }
+    } catch (err) {
+      // 업데이트 하나의 처리 실패가 폴링 전체를 막지 않도록(offset 무조건 전진). 에러는 은우 DM에 노출.
+      try { sendTGMessage(EUNWOO_CHAT_ID, '⚠️ 처리 오류 (update ' + u.update_id + ')\n' + (err && err.stack ? err.stack : err)); } catch (e2) {}
     }
     if (u.update_id > lastId) lastId = u.update_id;
   }
