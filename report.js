@@ -400,6 +400,14 @@ async function getSheetsTasks() {
   } catch(e) { console.error('Sheets 오류:', e.message); return null; }
 }
 
+// ── 주문별 실매출 (네이버페이·카카오페이는 payment_amount=0이라 못 씀) ──
+// actual_order_amount.order_price_amount(상품금액) + shipping_fee 가 모든 결제수단에 기록됨.
+// 검증(2026-05-21): canceled=F 합계 = 카페24 대시보드 매출 2,043,300원과 정확히 일치.
+function cafe24OrderRevenue(o) {
+  const a = (o && o.actual_order_amount) || {};
+  return parseFloat(a.order_price_amount || 0) + parseFloat(a.shipping_fee || 0);
+}
+
 // ── 카페24 매출 (단순 합계) ────────────────────────────
 async function getCafe24Sales(startDate, endDate) {
   endDate = endDate || startDate;
@@ -413,8 +421,8 @@ async function getCafe24Sales(startDate, endDate) {
       if (data.orders.length < 100) break;
       offset += 100;
     }
-    const valid = allOrders.filter(o => o.paid === 'T' && o.canceled === 'F');
-    return { sales: valid.reduce((s, o) => s + parseFloat(o.payment_amount || 0), 0), count: valid.length };
+    const valid = allOrders.filter(o => o.canceled === 'F');
+    return { sales: valid.reduce((s, o) => s + cafe24OrderRevenue(o), 0), count: valid.length };
   } catch(e) { console.error('Cafe24 오류:', e.message); return { sales: 0, count: 0 }; }
 }
 
@@ -479,7 +487,7 @@ async function getRepurchaseStats(lookbackDays, periodStart, periodEnd) {
       const mid = (o.member_id || '').trim();
       if (!mid) return;
       const d = String(o.order_date || '').slice(0, 10);
-      const amt = parseFloat(o.payment_amount || 0);
+      const amt = cafe24OrderRevenue(o);
       (byMember[mid] = byMember[mid] || []).push({ date: d, amt });
     });
     Object.values(byMember).forEach(list => list.sort((a, b) => a.date < b.date ? -1 : 1));
@@ -503,7 +511,7 @@ async function getRepurchaseStats(lookbackDays, periodStart, periodEnd) {
     valid.forEach(o => {
       const od = String(o.order_date || '').slice(0, 10);
       if (od < periodStart || od > periodEnd) return;
-      const amt = parseFloat(o.payment_amount || 0);
+      const amt = cafe24OrderRevenue(o);
       const mid = (o.member_id || '').trim();
       if (!mid) { guestCount++; guestAmt += amt; return; }
       const hist = byMember[mid] || [];
@@ -592,7 +600,7 @@ async function getCafe24CustomerSegments(date, lookbackDays = 90) {
     const returnMemberIds = []; // 재방문 회원 list (디버그용)
     const repeatGuestPhones = []; // 반복 게스트 list (디버그용)
     todayOrders.forEach(o => {
-      const amt = parseFloat(o.payment_amount || 0);
+      const amt = cafe24OrderRevenue(o);
       const mid = (o.member_id || '').trim();
       if (mid) {
         const first = firstOrderByMember[mid];
@@ -608,7 +616,7 @@ async function getCafe24CustomerSegments(date, lookbackDays = 90) {
     return {
       date, lookbackDays,
       totalOrders: todayOrders.length,
-      totalAmt: todayOrders.reduce((s, o) => s + parseFloat(o.payment_amount || 0), 0),
+      totalAmt: todayOrders.reduce((s, o) => s + cafe24OrderRevenue(o), 0),
       member, guest,
       memberShare: todayOrders.length ? ((member.newCount + member.retCount) / todayOrders.length) : 0,
       memberRetRate: (member.newCount + member.retCount) > 0 ? (member.retCount / (member.newCount + member.retCount)) : 0,
