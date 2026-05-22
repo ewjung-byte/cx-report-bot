@@ -41,28 +41,35 @@ function doGet(e) {
 function pollTelegramUpdates() {
   var token = _botToken();
   if (!token) return;
-  var props = PropertiesService.getScriptProperties();
-  var lastId = parseInt(props.getProperty('TG_LAST_UPDATE_ID') || '0');
-  var url = 'https://api.telegram.org/bot' + token + '/getUpdates?timeout=0&limit=100&offset=' + (lastId + 1);
-  var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-  var data = JSON.parse(res.getContentText());
-  if (!data.ok || !data.result || !data.result.length) return;
-  var updates = data.result;
-  for (var i = 0; i < updates.length; i++) {
-    var u = updates[i];
-    try {
-      if (u.callback_query) {
-        handleCallbackQuery(u.callback_query);
-      } else {
-        handleTelegramUpdate(u);
+  // 동시 실행 방지: 1분 트리거가 겹치면 같은 미확정 업데이트를 둘이 재처리하며 offset이 안 넘어감.
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(2000)) return;
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var lastId = parseInt(props.getProperty('TG_LAST_UPDATE_ID') || '0');
+    var url = 'https://api.telegram.org/bot' + token + '/getUpdates?timeout=0&limit=100&offset=' + (lastId + 1);
+    var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    var data = JSON.parse(res.getContentText());
+    if (!data.ok || !data.result || !data.result.length) return;
+    var updates = data.result;
+    for (var i = 0; i < updates.length; i++) {
+      var u = updates[i];
+      try {
+        if (u.callback_query) {
+          handleCallbackQuery(u.callback_query);
+        } else {
+          handleTelegramUpdate(u);
+        }
+      } catch (err) {
+        // 업데이트 하나의 처리 실패가 폴링 전체를 막지 않도록. 에러는 은우 DM에 노출.
+        try { sendTGMessage(EUNWOO_CHAT_ID, '⚠️ 처리 오류 (update ' + u.update_id + ')\n' + (err && err.stack ? err.stack : err)); } catch (e2) {}
       }
-    } catch (err) {
-      // 업데이트 하나의 처리 실패가 폴링 전체를 막지 않도록(offset 무조건 전진). 에러는 은우 DM에 노출.
-      try { sendTGMessage(EUNWOO_CHAT_ID, '⚠️ 처리 오류 (update ' + u.update_id + ')\n' + (err && err.stack ? err.stack : err)); } catch (e2) {}
+      // 업데이트마다 즉시 offset 저장: 중간에 끊겨도 처리 끝난 건 재처리 안 됨.
+      if (u.update_id > lastId) { lastId = u.update_id; props.setProperty('TG_LAST_UPDATE_ID', String(lastId)); }
     }
-    if (u.update_id > lastId) lastId = u.update_id;
+  } finally {
+    lock.releaseLock();
   }
-  props.setProperty('TG_LAST_UPDATE_ID', String(lastId));
 }
 
 function setupPollingTrigger() {
@@ -386,27 +393,29 @@ function addMemo(content, chatId, date) {
 
 function updateMemoStatus(memoId, act, chatId, callbackQuery) {
   var sheet = getMemoSheet();
-  if (sheet.getLastRow() < 2) { sendTGMessage(chatId, '메모 ' + memoId + ' 못 찾음'); return; }
-  var data = sheet.getDataRange().getValues();
+  var data = sheet.getLastRow() >= 2 ? sheet.getDataRange().getValues() : [];
+  var rowIdx = -1, content = '';
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === memoId) {
-      var content = data[i][2];
-      if (act === 'DONE') {
-        sheet.deleteRow(i + 1);
-        var doneText = '📝 <s>' + content + '</s>\n✅ 완료';
-        if (callbackQuery) editTGMessage(chatId, callbackQuery.message.message_id, doneText);
-        else sendTGMessage(chatId, doneText);
-      } else if (act === 'URGENT') {
-        sheet.getRange(i + 1, 4).setValue('Y');
-        var urgentText = '📝 <b>메모 🚨 긴급</b> (' + memoId + ')\n' + content;
-        var keyboard = { inline_keyboard: [[ { text: '✅ 완료', callback_data: 'memo:DONE:' + memoId } ]]};
-        if (callbackQuery) editTGMessage(chatId, callbackQuery.message.message_id, urgentText, keyboard);
-        else sendTGMessage(chatId, urgentText, keyboard);
-      }
-      return;
-    }
+    if (String(data[i][0]) === memoId) { rowIdx = i + 1; content = data[i][2]; break; }
   }
-  sendTGMessage(chatId, '메모 ' + memoId + ' 못 찾음');
+  if (act === 'DONE') {
+    // 중복 클릭 대비: 이미 지워졌어도 메시지는 완료 상태로 정리 (못 찾음 스팸 X).
+    if (rowIdx > 0) sheet.deleteRow(rowIdx);
+    var doneText = '📝 <s>' + (content || '메모') + '</s>\n✅ 완료';
+    if (callbackQuery) editTGMessage(chatId, callbackQuery.message.message_id, doneText);
+    else sendTGMessage(chatId, doneText);
+    return;
+  }
+  // URGENT
+  if (rowIdx > 0) {
+    sheet.getRange(rowIdx, 4).setValue('Y');
+    var urgentText = '📝 <b>메모 🚨 긴급</b> (' + memoId + ')\n' + content;
+    var keyboard = { inline_keyboard: [[ { text: '✅ 완료', callback_data: 'memo:DONE:' + memoId } ]]};
+    if (callbackQuery) editTGMessage(chatId, callbackQuery.message.message_id, urgentText, keyboard);
+    else sendTGMessage(chatId, urgentText, keyboard);
+  } else if (callbackQuery) {
+    editTGMessage(chatId, callbackQuery.message.message_id, '📝 ✅ 완료 (이미 처리됨)');
+  }
 }
 
 function listMemos(chatId) {
