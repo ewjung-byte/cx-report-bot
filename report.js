@@ -17,11 +17,11 @@ const _cl  = tryReadJson('../claude_api.json') || {};
 const _ga  = tryReadJson('../ga4_oauth.json') || {};
 const _cla = (() => { try { return fs.readFileSync('../clarity_token.txt', 'utf8').trim(); } catch(e) { return ''; } })();
 
-function getMemos() {
+async function getMemos() {
   try {
-    const data = readJson('../memo.json');
-    return data.tasks || [];
-  } catch(e) { return []; }
+    const res = await postToAppsScript({ action: 'get_memos' }, APPS_SCRIPT_URL);
+    return res.memos || [];
+  } catch(e) { console.error('[메모 조회 오류]', e.message); return []; }
 }
 
 // ── 리마인드 (GAS Sheets 기반) ────────────────────────
@@ -1448,7 +1448,7 @@ ${sideSkuSection}${adAuditSection}${restockSection}${vocSection}`;
     }
   }
 
-  const memos = getMemos();
+  const memos = await getMemos();
   let memoSection = '';
   if (memos.length > 0) {
     const urgentItems = memos.filter(t => t.urgent && !t.done);

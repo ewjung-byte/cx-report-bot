@@ -191,6 +191,9 @@ function doPost(e) {
     if (action === 'get_activities') {
       return jsonOut(getActivitiesData(contents.hours || 24));
     }
+    if (action === 'get_memos') {
+      return jsonOut(getMemosData());
+    }
     return jsonOut({ok: false, error: 'unknown action'});
   } catch(err) {
     return jsonOut({ok: false, error: err.message});
@@ -234,8 +237,10 @@ function handleEunwooDM(msg) {
   if ((m = text.match(/^\/작업중단\s+([A-Z0-9-]+)/))) { updateWorkStatus(m[1].trim(), 'STOP', chatId); return; }
   if ((m = text.match(/^\/작업보류\s+([A-Z0-9-]+)/))) { updateWorkStatus(m[1].trim(), 'HOLD', chatId); return; }
   if (text === '/작업목록') { listActiveWorks(chatId); return; }
+  if ((m = text.match(/^\/메모\s+([\s\S]+)/))) { addMemo(m[1].trim(), chatId, date); return; }
+  if (text === '/메모목록') { listMemos(chatId); return; }
   if (text === '/도움' || text === '/help') {
-    sendTGMessage(chatId, '<b>은우봇 명령어</b>\n/작업 [내용] — 새 작업 등록\n/작업목록 — 진행 중 작업 보기\n버튼으로 완료/중단/보류 처리');
+    sendTGMessage(chatId, '<b>은우봇 명령어</b>\n/작업 [내용] — 새 작업 등록\n/작업목록 — 진행 중 작업 보기\n/메모 [내용] — 메모 추가 (매일 아침 DM에 표시)\n/메모목록 — 메모 전체 보기\n버튼으로 완료/중단/보류 처리');
     return;
   }
 }
@@ -243,13 +248,20 @@ function handleEunwooDM(msg) {
 function handleCallbackQuery(query) {
   var data = String(query.data || '');
   var parts = data.split(':');
-  if (parts[0] !== 'work') return;
-  var status = parts[1]; // GO|STOP|HOLD
-  var workId = parts[2];
   var chatId = query.message.chat.id;
-  updateWorkStatus(workId, status, chatId, query);
+  var label = '';
+  if (parts[0] === 'work') {
+    var status = parts[1]; // GO|STOP|HOLD
+    updateWorkStatus(parts[2], status, chatId, query);
+    label = status === 'GO' ? '완료 ✅' : status === 'STOP' ? '중단 ❌' : '보류 ⏸';
+  } else if (parts[0] === 'memo') {
+    var act = parts[1]; // DONE|URGENT
+    updateMemoStatus(parts[2], act, chatId, query);
+    label = act === 'DONE' ? '완료 ✅' : '긴급 🚨';
+  } else {
+    return;
+  }
   // answerCallbackQuery: spinner 끔
-  var label = status === 'GO' ? '완료 ✅' : status === 'STOP' ? '중단 ❌' : '보류 ⏸';
   UrlFetchApp.fetch('https://api.telegram.org/bot' + _botToken() + '/answerCallbackQuery', {
     method: 'post', contentType: 'application/json',
     payload: JSON.stringify({ callback_query_id: query.id, text: label }),
@@ -335,6 +347,89 @@ function getActivitiesData(hours) {
   return { ok: true, activities: out };
 }
 
+// ===== 은우 메모 (개인 DM, 매일 아침 리포트에 노출) =====
+function getMemoSheet() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sheet = ss.getSheetByName('메모');
+  if (!sheet) {
+    sheet = ss.insertSheet('메모');
+    sheet.appendRow(['ID', '날짜', '내용', '긴급', '상태']);
+    sheet.getRange('B:B').setNumberFormat('@');
+    // 최초 생성 시 기존 memo.json 5건 시드 (유실 방지). 불필요한 건 버튼으로 완료 처리.
+    var seed = [
+      ['MEMO04', '2026-05-14', '여백 줄이기', 'N', '진행중'],
+      ['MEMO05', '2026-05-14', 'Oracle VPS 셋업 이어서 하기 (방화벽 → Node.js → 파일 업로드 → cron) IP: 168.107.29.222', 'N', '진행중'],
+      ['MEMO06', '2026-05-20', '최작가랑 촬영 일정 조율', 'N', '진행중'],
+      ['MEMO07', '2026-05-21', '바질페스토 소량 소분 아이디어 패키지 구상', 'N', '진행중'],
+      ['MEMO08', '2026-05-21', '택배에 들어갈 엽서 → 미주 기획 중', 'N', '진행중']
+    ];
+    sheet.getRange(2, 1, seed.length, 5).setValues(seed);
+  }
+  return sheet;
+}
+
+function addMemo(content, chatId, date) {
+  var sheet = getMemoSheet();
+  var memoId = generateWorkId();
+  sheet.appendRow([memoId, date, content, 'N', '진행중']);
+  var keyboard = { inline_keyboard: [[
+    { text: '🚨 긴급', callback_data: 'memo:URGENT:' + memoId },
+    { text: '✅ 완료', callback_data: 'memo:DONE:' + memoId }
+  ]]};
+  sendTGMessage(chatId, '📝 <b>메모 등록</b> (' + memoId + ')\n' + content, keyboard);
+}
+
+function updateMemoStatus(memoId, act, chatId, callbackQuery) {
+  var sheet = getMemoSheet();
+  if (sheet.getLastRow() < 2) { sendTGMessage(chatId, '메모 ' + memoId + ' 못 찾음'); return; }
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === memoId) {
+      var content = data[i][2];
+      if (act === 'DONE') {
+        sheet.deleteRow(i + 1);
+        var doneText = '📝 <s>' + content + '</s>\n✅ 완료';
+        if (callbackQuery) editTGMessage(chatId, callbackQuery.message.message_id, doneText);
+        else sendTGMessage(chatId, doneText);
+      } else if (act === 'URGENT') {
+        sheet.getRange(i + 1, 4).setValue('Y');
+        var urgentText = '📝 <b>메모 🚨 긴급</b> (' + memoId + ')\n' + content;
+        var keyboard = { inline_keyboard: [[ { text: '✅ 완료', callback_data: 'memo:DONE:' + memoId } ]]};
+        if (callbackQuery) editTGMessage(chatId, callbackQuery.message.message_id, urgentText, keyboard);
+        else sendTGMessage(chatId, urgentText, keyboard);
+      }
+      return;
+    }
+  }
+  sendTGMessage(chatId, '메모 ' + memoId + ' 못 찾음');
+}
+
+function listMemos(chatId) {
+  var sheet = getMemoSheet();
+  if (sheet.getLastRow() < 2) { sendTGMessage(chatId, '메모 없음'); return; }
+  var data = sheet.getDataRange().getValues();
+  var lines = [];
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][4]) === '완료') continue;
+    var flag = String(data[i][3]) === 'Y' ? '🚨 ' : '• ';
+    lines.push(flag + data[i][2] + '  (' + data[i][0] + ')');
+  }
+  if (!lines.length) { sendTGMessage(chatId, '메모 없음'); return; }
+  sendTGMessage(chatId, '📝 <b>메모 ' + lines.length + '건</b>\n' + lines.join('\n'));
+}
+
+function getMemosData() {
+  var sheet = getMemoSheet();
+  if (sheet.getLastRow() < 2) return { ok: true, memos: [] };
+  var data = sheet.getDataRange().getValues();
+  var out = [];
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][4]) === '완료') continue;
+    out.push({ id: String(data[i][0]), text: String(data[i][2]), urgent: String(data[i][3]) === 'Y', done: false });
+  }
+  return { ok: true, memos: out };
+}
+
 function sendTGMessage(chatId, text, replyMarkup) {
   var payload = { chat_id: chatId, text: text, parse_mode: 'HTML' };
   if (replyMarkup) payload.reply_markup = replyMarkup;
@@ -344,10 +439,12 @@ function sendTGMessage(chatId, text, replyMarkup) {
   });
 }
 
-function editTGMessage(chatId, messageId, text) {
+function editTGMessage(chatId, messageId, text, replyMarkup) {
+  var payload = { chat_id: chatId, message_id: messageId, text: text, parse_mode: 'HTML' };
+  if (replyMarkup) payload.reply_markup = replyMarkup;
   UrlFetchApp.fetch('https://api.telegram.org/bot' + _botToken() + '/editMessageText', {
     method: 'post', contentType: 'application/json',
-    payload: JSON.stringify({ chat_id: chatId, message_id: messageId, text: text, parse_mode: 'HTML' }),
+    payload: JSON.stringify(payload),
     muteHttpExceptions: true
   });
 }
