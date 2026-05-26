@@ -1115,6 +1115,63 @@ async function getClarityData() {
   } catch(e) { console.error('Clarity 오류:', e.message); return null; }
 }
 
+// 일별 스냅샷 — Before/After 측정 + 7일 이동평균 폭증 감지용
+function buildDailySnapshot(date, { clarity, dailyOrders, segments, meta, adAudit, pageStats }) {
+  const findP = (pno) => pickClarityPage(pageStats?.byUrl, v => v.url.includes(`product_no=${pno}`) || v.url.includes(`/surl/p/${pno}`));
+  const findCO = (prefix) => pickClarityPage(pageStats?.byUrl, v => v.url.startsWith(prefix));
+  const basket = findCO('/order/basket'), orderform = findCO('/order/orderform'), login = findCO('/member/login');
+  const p87 = findP('87'), p83 = findP('83'), p84 = findP('84'), p27 = findP('27');
+  const blended = meta?.spend > 0 ? Math.round((dailyOrders?.revenue || 0) / meta.spend * 100) : 0;
+  const metaShare = dailyOrders?.revenue > 0 ? Math.round((meta?.revenue || 0) / dailyOrders.revenue * 100) : 0;
+  return {
+    date,
+    카페24매출: dailyOrders?.revenue || 0,
+    카페24주문: dailyOrders?.totalCount || 0,
+    광고비: Math.round(meta?.spend || 0),
+    메타픽셀매출: Math.round(meta?.revenue || 0),
+    메타ROAS: parseInt(meta?.roas) || 0,
+    실제ROAS: blended,
+    메타주장비중: metaShare,
+    사이트_스크립트에러: clarity?.scriptErrorPct || 0,
+    사이트_뒤로: clarity?.quickbackPct || 0,
+    사이트_데드: clarity?.deadClickPct || 0,
+    사이트_레이지: clarity?.rageClickPct || 0,
+    사이트_인스타인앱: clarity?.instagramPct || 0,
+    결제_장바구니_데드: basket?.dead || 0,
+    결제_장바구니_뒤로: basket?.quick || 0,
+    결제_결제폼_데드: orderform?.dead || 0,
+    결제_결제폼_뒤로: orderform?.quick || 0,
+    결제_로그인_데드: login?.dead || 0,
+    결제_로그인_뒤로: login?.quick || 0,
+    제품87_스크롤: p87?.scroll || 0,
+    제품87_뒤로: p87?.quick || 0,
+    제품83_스크롤: p83?.scroll || 0,
+    제품83_뒤로: p83?.quick || 0,
+    제품84_스크롤: p84?.scroll || 0,
+    제품84_뒤로: p84?.quick || 0,
+    제품27_스크롤: p27?.scroll || 0,
+    제품27_뒤로: p27?.quick || 0,
+    회원_신규: segments?.member?.newCount || 0,
+    회원_재방문: segments?.member?.retCount || 0,
+    게스트_신규: segments?.guest?.newCount || 0,
+    게스트_반복: segments?.guest?.repeatCount || 0,
+    광고URL_정상: adAudit?.healthy || 0,
+    광고URL_깨짐: adAudit?.broken?.length || 0,
+  };
+}
+
+async function saveDailySnapshot(snapshot) {
+  try { return await postToAppsScript({ action: 'save_daily_snapshot', ...snapshot }, APPS_SCRIPT_URL); }
+  catch (e) { console.error('[일별 스냅샷 저장 실패]', e.message); return null; }
+}
+
+async function getDailyBaseline(daysBack = 7) {
+  try {
+    const res = await postToAppsScript({ action: 'get_daily_baseline', daysBack }, APPS_SCRIPT_URL);
+    return res && res.ok ? { baseline: res.baseline || {}, count: res.count || 0 } : { baseline: {}, count: 0 };
+  } catch (e) { return { baseline: {}, count: 0 }; }
+}
+
 // 꿀동이 공구 일정 (구글 캘린더에서 키워드 검색 — GAS 경유)
 async function getKkulDongYiSchedule() {
   try {
@@ -1173,7 +1230,7 @@ function pickClarityPage(byUrl, predicate) {
 
 // ── Claude 분석 ────────────────────────────────────────
 async function getClaudeAnalysis(mode, data) {
-  const { meta, cafe24, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit } = data;
+  const { meta, cafe24, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit, baseline, baselineN, pageStats } = data;
   const f = clarity?.funnel;
 
   let prompt;
@@ -1258,6 +1315,39 @@ ${(() => {
 
 [부정/중립 VOC — CRM 시트 (어제+오늘)]
 ${voc && voc.negCount > 0 ? voc.items.map(i=>`- ${i.cls} ${i.rating} ${i.product}: "${i.excerpt}"`).join('\n') : '- 없음 (긍정만 ' + (voc?.totalToday||0) + '건)'}
+
+[직전 7일 평균 대비 어제 (자동 폭증 감지 — 진짜 신호용)]
+${(() => {
+  if (!baseline || !baselineN) return '- 데이터 부족 (스냅샷 누적 시작 단계, 7일 모이면 자동 비교)';
+  const findP = (pno) => pickClarityPage(pageStats?.byUrl, v => v.url.includes(`product_no=${pno}`) || v.url.includes(`/surl/p/${pno}`));
+  const findCO = (prefix) => pickClarityPage(pageStats?.byUrl, v => v.url.startsWith(prefix));
+  const today = {
+    '카페24매출': dailyOrders?.revenue || 0,
+    '회원_재방문': segments?.member?.retCount || 0,
+    '게스트_신규': segments?.guest?.newCount || 0,
+    '사이트_스크립트에러': clarity?.scriptErrorPct || 0,
+    '사이트_데드': clarity?.deadClickPct || 0,
+    '사이트_레이지': clarity?.rageClickPct || 0,
+    '결제_장바구니_데드': findCO('/order/basket')?.dead || 0,
+    '결제_장바구니_뒤로': findCO('/order/basket')?.quick || 0,
+    '결제_결제폼_데드': findCO('/order/orderform')?.dead || 0,
+    '제품87_스크롤': findP('87')?.scroll || 0,
+    '제품87_뒤로': findP('87')?.quick || 0,
+  };
+  const lines = [];
+  Object.entries(today).forEach(([k, v]) => {
+    const b = baseline[k];
+    if (!b || b.n < 3) return; // 비교 표본 3일 미만이면 스킵
+    const diff = v - b.avg;
+    const pct = b.avg !== 0 ? Math.abs(diff / b.avg * 100) : 0;
+    // 폭증/폭락 기준: 절대치 +5%p 이상이거나 +30% 상대변화
+    if (Math.abs(diff) >= 5 || pct >= 30) {
+      const arrow = diff > 0 ? '↑' : '↓';
+      lines.push(`- ${k}: 어제 ${v.toFixed(1)} vs 7일평균 ${b.avg.toFixed(1)} ${arrow} (${diff > 0 ? '+' : ''}${diff.toFixed(1)})`);
+    }
+  });
+  return lines.length ? lines.join('\n') + '\n※ 위 폭증·폭락이 진짜 신호. 일상 노이즈와 구분해서 다뤄.' : '- 7일 평균 대비 큰 변화 없음 (정상 범위)';
+})()}
 
 [송마망 회의록 — 인식만, 출력 X]
 ${songCtx}
@@ -1479,7 +1569,11 @@ async function dailyReport() {
 
   // P0: 메타 광고 URL 검증 (Claude 분석이 adAudit을 입력으로 받으므로 순차 실행)
   const adAudit = await auditMetaAdUrls();
-  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, dailyOrders, cafe24, segments, restock, voc, songmamans, adAudit });
+  // 메타 광고 일일 통계도 fetch (스냅샷·baseline 비교용)
+  const metaToday = await getMetaStats(today, today);
+  // 직전 7일 baseline 가져와서 Claude 프롬프트 컨텍스트로 주입 (자동 폭증 감지)
+  const baselineRes = await getDailyBaseline(7);
+  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, dailyOrders, cafe24, segments, restock, voc, songmamans, adAudit, baseline: baselineRes.baseline, baselineN: baselineRes.count, pageStats });
 
   // 🚦 사이트 (Clarity 우선, 한도 시 GA4 트래픽 채널 백업) + GA4 결제 퍼널 통합
   // 매출·유입경로는 송마망봇이 통합 발송하므로 여기선 행동·퍼널 신호만.
@@ -1695,6 +1789,13 @@ ${productSalesSection}`;
   } else {
     console.error('발송 실패 ❌:', JSON.stringify(groupResult));
   }
+
+  // 📊 일별 스냅샷 저장 (Before/After 측정 + 7일 이동평균 baseline용)
+  try {
+    const snap = buildDailySnapshot(today, { clarity, dailyOrders, segments, meta: metaToday, adAudit, pageStats });
+    const res = await saveDailySnapshot(snap);
+    console.log(`[일별 스냅샷] ${today} 저장 → ${res && res.ok ? 'OK' : JSON.stringify(res)}`);
+  } catch (e) { console.error('[일별 스냅샷] 실패:', e.message); }
 }
 
 // ── 주간 스냅샷 (Looker Studio 다차원 보고서용) ──────────
@@ -1933,6 +2034,9 @@ module.exports = {
   getClarityData,
   getClarityPageStats,
   getKkulDongYiSchedule,
+  buildDailySnapshot,
+  saveDailySnapshot,
+  getDailyBaseline,
   getMemos,
   getCXManagerAnalysis,
   getRecentActivities,

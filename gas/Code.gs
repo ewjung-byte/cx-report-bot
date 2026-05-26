@@ -215,6 +215,15 @@ function doPost(e) {
     if (action === 'get_calendar_events') {
       return jsonOut(getCalendarEvents_(contents.query || '', contents.daysAhead || 30, contents.daysBack || 7));
     }
+    if (action === 'save_daily_snapshot') {
+      return jsonOut(saveDailySnapshot_(contents));
+    }
+    if (action === 'get_daily_baseline') {
+      return jsonOut(getDailyBaseline_(contents.daysBack || 7));
+    }
+    if (action === 'cafe24_webhook' || (contents.resource && (contents.resource.order_id || contents.resource.order_no))) {
+      return jsonOut(handleCafe24Webhook_(contents));
+    }
     return jsonOut({ok: false, error: 'unknown action'});
   } catch(err) {
     return jsonOut({ok: false, error: err.message});
@@ -472,6 +481,98 @@ function formatWeeklyTabs_() {
     done.push(cfg.name);
   });
   return { ok: true, formatted: done };
+}
+
+// ===== 일별 스냅샷 (Before/After 측정 + 7일 이동평균 폭증 감지) =====
+// CX 개선 액션 전후 비교 측정 가능: 액션 날짜 메모 + 일별 데이터로 직접 비교
+var DAILY_SNAPSHOT_HEADERS = ['일자', '카페24매출', '카페24주문', '광고비', '메타픽셀매출', '메타ROAS', '실제ROAS', '메타주장비중',
+  '사이트_스크립트에러', '사이트_뒤로', '사이트_데드', '사이트_레이지', '사이트_인스타인앱',
+  '결제_장바구니_데드', '결제_장바구니_뒤로', '결제_결제폼_데드', '결제_결제폼_뒤로', '결제_로그인_데드', '결제_로그인_뒤로',
+  '제품87_스크롤', '제품87_뒤로', '제품83_스크롤', '제품83_뒤로', '제품84_스크롤', '제품84_뒤로', '제품27_스크롤', '제품27_뒤로',
+  '회원_신규', '회원_재방문', '게스트_신규', '게스트_반복', '광고URL_정상', '광고URL_깨짐'];
+
+function getDailySnapshotTab_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ss.getSheetByName('일별_스냅샷');
+  if (!sh) {
+    sh = ss.insertSheet('일별_스냅샷');
+    sh.appendRow(DAILY_SNAPSHOT_HEADERS);
+    sh.getRange('A:A').setNumberFormat('@');
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, 1, DAILY_SNAPSHOT_HEADERS.length).setFontWeight('bold').setBackground('#1f2a44').setFontColor('#ffffff');
+  }
+  return sh;
+}
+
+function saveDailySnapshot_(contents) {
+  var date = String(contents.date || '');
+  if (!date) return { ok: false, error: 'no date' };
+  var sh = getDailySnapshotTab_();
+  var data = sh.getDataRange().getValues();
+  for (var i = data.length - 1; i >= 1; i--) {
+    if (String(data[i][0]) === date) sh.deleteRow(i + 1);
+  }
+  var row = DAILY_SNAPSHOT_HEADERS.map(function (h) {
+    var v = contents[h]; return v !== undefined && v !== null ? v : '';
+  });
+  sh.appendRow(row);
+  return { ok: true, date: date };
+}
+
+function getDailyBaseline_(daysBack) {
+  var sh = getDailySnapshotTab_();
+  if (sh.getLastRow() < 2) return { ok: true, baseline: null, count: 0 };
+  var data = sh.getDataRange().getValues();
+  var headers = data[0];
+  var rows = data.slice(1).sort(function (a, b) { return String(a[0]).localeCompare(String(b[0])); });
+  // 어제 행은 제외하고 그 이전 daysBack 일의 평균 (오늘 vs 직전 7일 비교용)
+  var todayStr = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
+  var yesterdayStr = Utilities.formatDate(new Date(Date.now() - 86400000), 'Asia/Seoul', 'yyyy-MM-dd');
+  var historicalRows = rows.filter(function (r) { return String(r[0]) !== todayStr && String(r[0]) !== yesterdayStr; }).slice(-daysBack);
+  var baseline = {};
+  headers.forEach(function (h, idx) {
+    if (idx === 0) return;
+    var vals = historicalRows.map(function (r) { return parseFloat(r[idx]); }).filter(function (v) { return !isNaN(v); });
+    if (vals.length) {
+      var sum = vals.reduce(function (s, v) { return s + v; }, 0);
+      baseline[h] = { avg: Math.round(sum / vals.length * 100) / 100, n: vals.length };
+    }
+  });
+  return { ok: true, baseline: baseline, count: historicalRows.length };
+}
+
+// ===== Cafe24 결제 webhook → GA4 Measurement Protocol (외부결제 전환 보완) =====
+// 네이버페이·톡 등 외부결제는 GA4가 자체적으로 못 잡아서 ~15%만 추적되는 문제
+// → cafe24 결제완료 webhook → 이 함수 → GA4 MP로 purchase 이벤트 강제 발화
+function handleCafe24Webhook_(contents) {
+  var props = PropertiesService.getScriptProperties();
+  var mid = props.getProperty('GA4_MEASUREMENT_ID');
+  var sec = props.getProperty('GA4_API_SECRET');
+  if (!mid || !sec) {
+    return { ok: false, error: 'GA4_MEASUREMENT_ID / GA4_API_SECRET Script Property 설정 필요' };
+  }
+  var resource = contents.resource || contents.order || contents;
+  var orderId = String(resource.order_id || resource.order_no || resource.order_code || '');
+  var amount = parseFloat(resource.payment_amount || resource.total_price || resource.order_price || 0);
+  if (!orderId) return { ok: false, error: 'order_id 추출 실패', received: Object.keys(contents).join(',') };
+  var clientId = 'cafe24-' + orderId;
+  var body = {
+    client_id: clientId,
+    events: [{
+      name: 'purchase',
+      params: {
+        transaction_id: orderId,
+        value: amount,
+        currency: 'KRW',
+      }
+    }]
+  };
+  var ga4Url = 'https://www.google-analytics.com/mp/collect?api_secret=' + encodeURIComponent(sec) + '&measurement_id=' + encodeURIComponent(mid);
+  var resp = UrlFetchApp.fetch(ga4Url, {
+    method: 'post', contentType: 'application/json',
+    payload: JSON.stringify(body), muteHttpExceptions: true
+  });
+  return { ok: resp.getResponseCode() < 300, status: resp.getResponseCode(), transaction_id: orderId, value: amount };
 }
 
 // ===== 구글 캘린더 검색 (꿀동이 공구 일정 등 자동 조회) =====
