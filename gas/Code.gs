@@ -541,6 +541,22 @@ function getDailyBaseline_(daysBack) {
   return { ok: true, baseline: baseline, count: historicalRows.length };
 }
 
+// ===== GA4 MP 1회 셋업 — 편집기에서 setupGA4MP() 한 번 실행 =====
+// measurement_id는 코드에 박힘. api_secret만 사용자가 GA4 admin에서 발급해 setupGA4MP_secret('xxx') 호출
+function setupGA4MP() {
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('GA4_MEASUREMENT_ID', 'G-28L9WNSJ9J');
+  var hasSecret = !!props.getProperty('GA4_API_SECRET');
+  return 'GA4_MEASUREMENT_ID 저장됨 ✅. GA4_API_SECRET 상태: ' + (hasSecret ? '이미 있음 ✅ (webhook 정상 작동 가능)' : '❌ 아직 없음. GA4 관리 → 데이터 스트림 → 웹 → Measurement Protocol API 비밀번호 만든 후 setupGA4MP_secret(\'발급된값\') 실행');
+}
+
+// api_secret 발급 후 이 함수를 인자로 호출 (또는 Script Properties UI에서 직접 추가)
+function setupGA4MP_secret(apiSecret) {
+  if (!apiSecret) return '❌ apiSecret 인자가 비었습니다. setupGA4MP_secret(\'sk_xxx...\') 식으로 호출하세요.';
+  PropertiesService.getScriptProperties().setProperty('GA4_API_SECRET', String(apiSecret));
+  return 'GA4_API_SECRET 저장됨 ✅. webhook 활성화됨 (cafe24 admin에서 webhook URL만 등록하면 끝)';
+}
+
 // ===== Cafe24 결제 webhook → GA4 Measurement Protocol (외부결제 전환 보완) =====
 // 네이버페이·톡 등 외부결제는 GA4가 자체적으로 못 잡아서 ~15%만 추적되는 문제
 // → cafe24 결제완료 webhook → 이 함수 → GA4 MP로 purchase 이벤트 강제 발화
