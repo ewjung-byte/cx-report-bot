@@ -224,6 +224,19 @@ function doPost(e) {
     if (action === 'cafe24_webhook' || (contents.resource && (contents.resource.order_id || contents.resource.order_no))) {
       return jsonOut(handleCafe24Webhook_(contents));
     }
+    if (action === 'setup_ga4_mp') {
+      return jsonOut({ ok: true, result: setupGA4MP() });
+    }
+    if (action === 'setup_ga4_secret') {
+      return jsonOut({ ok: true, result: setupGA4MP_secret(contents.secret || '') });
+    }
+    if (action === 'check_ga4_mp') {
+      var p = PropertiesService.getScriptProperties();
+      return jsonOut({ ok: true, measurement_id: p.getProperty('GA4_MEASUREMENT_ID') || null, api_secret_set: !!p.getProperty('GA4_API_SECRET') });
+    }
+    if (action === 'push_ga4_orders') {
+      return jsonOut(pushGa4Orders_(contents));
+    }
     return jsonOut({ok: false, error: 'unknown action'});
   } catch(err) {
     return jsonOut({ok: false, error: err.message});
@@ -555,6 +568,48 @@ function setupGA4MP_secret(apiSecret) {
   if (!apiSecret) return '❌ apiSecret 인자가 비었습니다. setupGA4MP_secret(\'sk_xxx...\') 식으로 호출하세요.';
   PropertiesService.getScriptProperties().setProperty('GA4_API_SECRET', String(apiSecret));
   return 'GA4_API_SECRET 저장됨 ✅. webhook 활성화됨 (cafe24 admin에서 webhook URL만 등록하면 끝)';
+}
+
+// ===== Cafe24 외부결제 daily polling → GA4 MP (네이버페이·톡 등 외부 attribution 회복) =====
+var GA4_PUSH_HEADERS = ['주문ID', '일자', '금액', '채널', '푸시일시', '상태'];
+function getGa4PushTab_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ss.getSheetByName('GA4_푸시이력');
+  if (!sh) {
+    sh = ss.insertSheet('GA4_푸시이력');
+    sh.appendRow(GA4_PUSH_HEADERS);
+    sh.getRange('A:B').setNumberFormat('@');
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, 1, GA4_PUSH_HEADERS.length).setFontWeight('bold').setBackground('#1f2a44').setFontColor('#ffffff');
+  }
+  return sh;
+}
+
+function pushGa4Orders_(contents) {
+  var props = PropertiesService.getScriptProperties();
+  var mid = props.getProperty('GA4_MEASUREMENT_ID');
+  var sec = props.getProperty('GA4_API_SECRET');
+  if (!mid || !sec) return { ok: false, error: 'GA4_MEASUREMENT_ID/GA4_API_SECRET 누락' };
+  var orders = contents.orders || [];
+  var date = String(contents.date || '');
+  if (!orders.length) return { ok: true, sent: 0, skipped: 0, total: 0 };
+  var sh = getGa4PushTab_();
+  var existing = sh.getDataRange().getValues();
+  var sentSet = {};
+  for (var i = 1; i < existing.length; i++) sentSet[String(existing[i][0])] = true;
+  var newRows = [], sentN = 0, skipped = 0, failed = 0;
+  var ga4Url = 'https://www.google-analytics.com/mp/collect?api_secret=' + encodeURIComponent(sec) + '&measurement_id=' + encodeURIComponent(mid);
+  orders.forEach(function (o) {
+    var id = String(o.id || '');
+    if (!id || sentSet[id]) { skipped++; return; }
+    var body = { client_id: 'cafe24-' + id, events: [{ name: 'purchase', params: { transaction_id: id, value: parseFloat(o.value || 0), currency: 'KRW' } }] };
+    var resp = UrlFetchApp.fetch(ga4Url, { method: 'post', contentType: 'application/json', payload: JSON.stringify(body), muteHttpExceptions: true });
+    var ok = resp.getResponseCode() < 300;
+    newRows.push([id, date, parseFloat(o.value || 0), o.channel || '', new Date().toISOString(), ok ? 'sent' : 'fail ' + resp.getResponseCode()]);
+    if (ok) sentN++; else failed++;
+  });
+  if (newRows.length) sh.getRange(sh.getLastRow() + 1, 1, newRows.length, GA4_PUSH_HEADERS.length).setValues(newRows);
+  return { ok: true, sent: sentN, skipped: skipped, failed: failed, total: orders.length };
 }
 
 // ===== Cafe24 결제 webhook → GA4 Measurement Protocol (외부결제 전환 보완) =====

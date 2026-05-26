@@ -1115,6 +1115,23 @@ async function getClarityData() {
   } catch(e) { console.error('Clarity 오류:', e.message); return null; }
 }
 
+// Cafe24 외부결제(네이버페이·톡 등) → GA4 MP push (gtag로 추적 불가한 결제 attribution 회복)
+async function pushExternalOrdersToGA4(date) {
+  try {
+    const all = await fetchCafe24OrdersRange(date, date);
+    const paid = all.filter(o => o.paid === 'T' && o.canceled === 'F');
+    // 외부결제 필터: order_place_name이 모바일웹/PC쇼핑몰이 아닌 것 (gtag 추적 못 함)
+    const external = paid.filter(o => {
+      const ch = String(o.order_place_name || '');
+      return ch && !/^모바일웹$|^PC쇼핑몰$|^PC.?웹$/i.test(ch);
+    });
+    if (!external.length) return { ok: true, sent: 0, total: paid.length, note: '외부결제 없음' };
+    const orders = external.map(o => ({ id: String(o.order_id), value: cafe24OrderRevenue(o), channel: o.order_place_name || '' }));
+    const res = await postToAppsScript({ action: 'push_ga4_orders', date, orders }, APPS_SCRIPT_URL);
+    return res;
+  } catch (e) { console.error('[GA4 외부결제 push 실패]', e.message); return null; }
+}
+
 // 일별 스냅샷 — Before/After 측정 + 7일 이동평균 폭증 감지용
 function buildDailySnapshot(date, { clarity, dailyOrders, segments, meta, adAudit, pageStats }) {
   const findP = (pno) => pickClarityPage(pageStats?.byUrl, v => v.url.includes(`product_no=${pno}`) || v.url.includes(`/surl/p/${pno}`));
@@ -1796,6 +1813,12 @@ ${productSalesSection}`;
     const res = await saveDailySnapshot(snap);
     console.log(`[일별 스냅샷] ${today} 저장 → ${res && res.ok ? 'OK' : JSON.stringify(res)}`);
   } catch (e) { console.error('[일별 스냅샷] 실패:', e.message); }
+
+  // 🔁 Cafe24 외부결제 → GA4 MP push (attribution 정확도 회복)
+  try {
+    const r = await pushExternalOrdersToGA4(today);
+    console.log(`[GA4 외부결제 push] ${today} → ${JSON.stringify(r)}`);
+  } catch (e) { console.error('[GA4 외부결제 push] 실패:', e.message); }
 }
 
 // ── 주간 스냅샷 (Looker Studio 다차원 보고서용) ──────────
@@ -2037,6 +2060,7 @@ module.exports = {
   buildDailySnapshot,
   saveDailySnapshot,
   getDailyBaseline,
+  pushExternalOrdersToGA4,
   getMemos,
   getCXManagerAnalysis,
   getRecentActivities,
