@@ -589,7 +589,10 @@ async function fetchCafe24OrdersRange(startDate, endDate) {
   return all.filter(o => o.paid === 'T' && o.canceled === 'F');
 }
 
-async function getCafe24CustomerSegments(date, lookbackDays = 90) {
+// ⚠️ cafe24 customers API에 first_order_date 필드 X (검증 2026-05-26). 주문 raw lookback이 유일한 정확 경로.
+// 그래서 기본 lookback을 365일로 확대 — 베이스라인(5개월) 코호트 비교 충분 커버.
+
+async function getCafe24CustomerSegments(date, lookbackDays = 365) {
   try {
     // 1) 어제 주문 raw
     const todayOrders = await fetchCafe24OrdersRange(date, date);
@@ -607,7 +610,7 @@ async function getCafe24CustomerSegments(date, lookbackDays = 90) {
       }
     });
 
-    // 3) 이전 lookback 윈도우 주문 raw (어제 제외)
+    // 3) lookback 윈도우 내 모든 prior 주문 fetch (회원·게스트 둘 다 식별용)
     const lookbackStart = new Date(new Date(date + 'T00:00:00Z').getTime() - lookbackDays * 86400000).toISOString().slice(0, 10);
     const lookbackEnd = new Date(new Date(date + 'T00:00:00Z').getTime() - 86400000).toISOString().slice(0, 10);
     const priorOrders = await fetchCafe24OrdersRange(lookbackStart, lookbackEnd);
@@ -1012,7 +1015,24 @@ async function getCafe24Reviews(startDate, endDate) {
 }
 
 // ── GA4 일간 (어제 채널·상품 페이지·짧은URL 손실 감지) ─
-const PRODUCT_NAME = { '83': '바질페스토', '27': '클래식 바질페스토(#27 구버전)', '84': '광고랜딩 #84' };
+// 유입 출처(채널) 기준 라벨 — 사용자 확정 매핑 (2026-05-26)
+// 같은 SKU도 어떤 채널로 들어왔는지로 분류해야 의미있음. cafe24 진열명이 아니라 트래픽 출처로.
+const PRODUCT_NAME = {
+  '27': '오가닉',
+  '38': '생활작가 콜라보 (판매중지)',
+  '40': '요진편 공구',
+  '41': '쿠코 공구 (판매중지)',
+  '42': '비밀링크',
+  '50': '예닮 공구 (판매중지)',
+  '51': '찬밥 공구 (판매중지)',
+  '52': '메가쇼 특가 (판매중지)',
+  '83': '메타광고',
+  '84': '메타광고',
+  '85': 'LG 임직원 특가',
+  '87': '꿀동이 공구',
+};
+// 꿀동이 = #87 only (확정). 다른 채널별 공구 SKU는 별도 카운트.
+const KKUL_PRODUCT_NO = '87';
 const CHANNEL_KR = { 'Paid Social':'유료SNS', 'Organic Social':'자연SNS', 'Direct':'직접유입', 'Organic Search':'검색', 'Paid Other':'기타광고', 'Referral':'추천', 'Organic Shopping':'쇼핑', 'Unassigned':'미분류' };
 
 async function getGA4Daily(dateStrYmd) {
@@ -1095,6 +1115,42 @@ async function getClarityData() {
   } catch(e) { console.error('Clarity 오류:', e.message); return null; }
 }
 
+// 꿀동이 공구 일정 (구글 캘린더에서 키워드 검색 — GAS 경유)
+async function getKkulDongYiSchedule() {
+  try {
+    const res = await postToAppsScript({ action: 'get_calendar_events', query: '꿀동이', daysAhead: 60, daysBack: 30 }, APPS_SCRIPT_URL);
+    if (!res || res.error || !res.events) return null;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    // 현재 진행 또는 예정 이벤트 1개 선택 (가장 가까운 끝나는 날)
+    const upcoming = res.events
+      .map(e => ({ ...e, startD: new Date(e.start), endD: new Date(e.end) }))
+      .filter(e => e.endD >= today)
+      .sort((a, b) => a.endD - b.endD);
+    return upcoming[0] || null;
+  } catch (e) { return null; }
+}
+
+// Clarity URL별 마찰 페이지 (DeadClick + Quickback) — 결제 마찰의 진짜 지점 자동 진단
+async function getClarityFrictionPages(daysBack = 1) {
+  try {
+    const url = `https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${CLARITY_PROJECT_ID}&numOfDays=${daysBack}&dimension1=URL`;
+    const data = await fetchJson(url, { 'Authorization': `Bearer ${clarityToken}` });
+    if (!Array.isArray(data)) return null;
+    const pick = (n) => data.find(m => m.metricName === n);
+    const dead = pick('DeadClickCount')?.information || [];
+    const quick = pick('QuickbackClick')?.information || [];
+    const map = {};
+    const norm = (u) => String(u || '').replace(/^https?:\/\/[^/]+/, '').slice(0, 55);
+    dead.forEach(x => { const u = norm(x.URL || x.url || x.name); if (!u) return; (map[u] ||= { sessions: parseInt(x.sessionsCount || 0) }).dead = x.sessionsWithMetricPercentage || 0; });
+    quick.forEach(x => { const u = norm(x.URL || x.url || x.name); if (!u) return; (map[u] ||= { sessions: parseInt(x.sessionsCount || 0) }).quick = x.sessionsWithMetricPercentage || 0; });
+    // 진짜 마찰: 데드 ≥10% 또는 빠른뒤로 ≥50%, 최소 10세션
+    return Object.entries(map).map(([u, v]) => ({ url: u, dead: v.dead || 0, quick: v.quick || 0, sessions: v.sessions || 0 }))
+      .filter(x => x.sessions >= 10 && (x.dead >= 10 || x.quick >= 50))
+      .sort((a, b) => (b.dead + b.quick * 0.3) - (a.dead + a.quick * 0.3))
+      .slice(0, 2);
+  } catch (e) { console.error('[Clarity 마찰 페이지 오류]', e.message); return null; }
+}
+
 // ── Claude 분석 ────────────────────────────────────────
 async function getClaudeAnalysis(mode, data) {
   const { meta, cafe24, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit } = data;
@@ -1123,7 +1179,9 @@ async function getClaudeAnalysis(mode, data) {
       return `[열린 액션]\n${acts}\n[최근 결정]\n${decs}\n[RAW 시트 최근]\n${raw}\n[단톡방 직접 (사람 메시지 최근 30건)]\n${tg}\n${botSummary}`;
     })();
 
-    prompt = `너는 이태리정미소 CX 관리자야. 광고·매출 절대값 통합 보고는 송마망 봇 영역이라 분석 X. 너는 (1) 사이트 건강 (2) 리텐션 (Cafe24 raw) (3) 비#83 매출 (4) 재입고알림 신호 (5) 부정 VOC 다섯 축만 보고 즉시 행동 필요한 신호만 짚어내.
+    prompt = `너는 이태리정미소 CX 관리자야. 송마망봇이 매일 통합 발송하는 영역(매출·메타광고·VOC수집·재입고알림·재고경보)은 분석·🚨 X. 너는 (1) 사이트 행동·결제퍼널 (Clarity·GA4) (2) 리텐션 (Cafe24 raw 세그먼트) (3) 상품별 매출 분포 — **이 세 축만** 1차 분석 대상.
+
+재입고·VOC·광고URL 데이터는 컨텍스트로 인식하되 그것만으로 🚨 띄우지 마. CX·리텐션·상품믹스 통찰과 결합될 때(예: 게스트 비중↑ + 재입고 대기↑ → 회원전환 후크)만 결합해서 한 신호로 다뤄.
 
 송마망 회의록 컨텍스트는 인식만 하고 메시지에 출력 X. 단, 신호 판단할 때 "오늘 회사 분위기·진행중인 일"을 알고 행동 제안에 반영해.
 
@@ -1147,7 +1205,7 @@ async function getClaudeAnalysis(mode, data) {
 
 [사이트 장바구니 이탈 — GA4 (참고용, 외부결제 미포함)]
 - 장바구니 ${ga4Daily?.checkoutFunnel?.addToCart||0} → 결제진입 ${ga4Daily?.checkoutFunnel?.beginCheckout||0}(${ga4Daily?.checkoutFunnel?.cartToCheckoutPct??'-'}%)
-※ GA4 '구매'는 네이버페이/톡 등 외부결제가 안 잡혀 실제보다 적음 → 구매·매출은 위 Cafe24 숫자만 신뢰. GA4는 장바구니→결제 이탈 신호로만 사용.
+※ ⚠️ GA4 결제진입 이탈은 네이버페이·톡 등 외부결제가 begin_checkout 이벤트 안 쏴서 항상 과소집계됨(어제 cafe24 실주문 85건 vs GA4 결제진입 27 같은 구조). **GA4 이탈% 단독으로는 🚨 절대 X.** 결제 마찰은 아래 Clarity 마찰 페이지로만 판단.
 
 [메타 광고 URL 검증]
 - ACTIVE ${adAudit?.total||'-'}개 중 정상 ${adAudit?.healthy||'-'}개 / 진짜 깨짐 ${adAudit?.broken?.length||0}개 / 비표준(작동 OK·UTM 없음) ${adAudit?.nonStandard?.length||0}개
@@ -1161,9 +1219,17 @@ ${adAudit?.broken?.length ? adAudit.broken.slice(0,3).map(a=>`- ${a.name}: ${a.r
 - CRM 고객목록 매칭 게스트: ${seg.crmMatchedGuests ?? '-'}/${seg.guestPhones?.length || 0}
 ※ GA4 ecommercePurchases는 카페24 실주문의 15%만 잡혀 측정 신뢰 X — 무조건 위 Cafe24 raw 사용.
 
-[비#83 매출 — 카페24 자사몰]
-- #83 바질페스토(메인): ${formatMoney(cafeMain.amount)}·${cafeMain.count}건
-- #83 외 합계: ${formatMoney(cafeOthers.amount)}·${cafeOthers.count}건 (파파넬라 EVOO·룽고 등)
+[상품별 매출 분포 — 카페24 자사몰, 매출순 top 6 (#83 포함)]
+${(() => {
+  if (!cafe24 || !cafe24.byProduct) return '- 데이터 없음';
+  const all = Object.values(cafe24.byProduct).filter(v => v.count > 0).sort((a, b) => b.amount - a.amount).slice(0, 6);
+  if (!all.length) return '- 데이터 없음';
+  return all.map(p => {
+    const nm = PRODUCT_NAME[String(p.productNo)] || p.name || `#${p.productNo}`;
+    return `- ${nm}: ${formatMoney(p.amount)}·${p.count}건`;
+  }).join('\n');
+})()}
+※ #83이 메인이나 다른 SKU 매출 비중·CVR이 의미있는 신호. 단순 합계가 아니라 분포 변화에 주목.
 
 [바질페스토 재입고알림 — CRM 시트]
 - 오늘 +${restock?.todayCount||0}건 / 누적 ${restock?.totalCount||0}건 / 대기 ${restock?.pendingCount||0}건
@@ -1183,10 +1249,28 @@ ${songCtx}
 - "데이터 미수집"은 신호 X
 - 게스트 비중 60%↑면 식별·전환 신호 가치 있음
 
-신호 형식 (최대 3개): 🚨 <항목> — <근거 수치> ▶ <행동>
-모두 정상이면 한 줄: ✅ 특이사항 없음 — <회의록 컨텍스트 반영해 오늘 본업 한 줄>
+신호 형식 (있는 만큼만, 최대 3개. 진짜 신호 없으면 1개 또는 ✅ 한 줄로 끝):
+🚨 <한 줄 진단 — 항목·핵심수치만, 30자 이내>
+근거: <수치 2~3개 콤마 구분, 50자 이내>
+액션: <담당자(Jung/경태/소망 중 하나)> · <기한(오늘/이번주)> · <구체 행동 한 가지>
 
-마크다운 기호 금지(#, *, **, ---, >). 일반 텍스트만.`;
+[담당자 배정 룰 — 매우 중요. 정확히 지킬 것]
+- **Jung**: 자사몰 UI 수정(상세페이지·결제·주문완료·이메일/팝업 템플릿·테마 코드), CX 행동 분석, 디자인/마케팅 콘텐츠 제작. 자사몰 안에서 손대는 건 전부 Jung.
+- **경태**: CRM 시트, CS 응대, 쿠팡/네이버 채널 운영, 재입고알림 시트 발송 추적.
+- **소망**: 시딩 인플루언서 팔로우업, 쓰레드 발행.
+- ❌ **미주에게 액션 절대 배정 X.** 미주 영역(메타광고 수정·솔라피 알림톡·사입품질·통합매출·VOC·재입고·OAuth)은 송마망봇이 매일 통합 발송하므로 우리 봇은 액션 X. 미주 이름 자체를 액션에 쓰지 마.
+- 자사몰 UI 수정처럼 보이는 액션이면 무조건 Jung. "회원가입 후크 삽입"·"상세페이지 수정"·"주문완료 페이지" 같은 건 전부 Jung.
+
+모두 정상이면 한 줄: ✅ 특이사항 없음 — <오늘 본업 한 줄>
+
+규칙:
+- **신호 갯수 채우려고 노이즈 만들지 마.** 진짜 행동이 필요한 것만. 0~3개 사이 자유.
+- 신호당 최대 3줄. 장황한 맥락 설명 금지. 회의록 컨텍스트는 액션의 담당자·기한 결정에만 활용.
+- 액션은 반드시 행동 가능한 한 가지로 압축. "검토 필요"·"확인 필요" 같은 모호한 말 X.
+- **GA4 결제이탈%는 외부결제 미포함이라 단독 🚨 절대 X.** Clarity 마찰페이지(데드/뒤로)가 같이 높을 때만 결제 마찰 신호.
+- ScriptError·Quickback 단독 🚨 X. DeadClick·RageClick 같이 임계 초과일 때만.
+- **마크다운/구분선 절대 금지**: #, *, **, ---, ===, >, 어떤 구분선도 X. 신호 사이는 빈 줄 1개로만 구분. 일반 텍스트만.
+- 도입부 멘트("확인했어요"·"분석합니다"·요약 줄) X. 바로 첫 신호 🚨로 시작.`;
   } else {
     prompt = `너는 이태리정미소(프리미엄 이탈리안 식품 쇼핑몰) CX 분석가야.
 이번 주 데이터를 분석하고 세 파트로 답해줘.
@@ -1357,16 +1441,18 @@ async function dailyReport() {
   console.log(`[일간] ${today}`);
 
   // 데이터 fetch — Cafe24 raw 중심 (GA4 newVsReturning은 측정 누락 신뢰 X)
-  let [clarity, sheetsTasks, ga4Daily, cafe24, dailyOrders, segments, restock, voc, songmamans] = await Promise.all([
+  let [clarity, sheetsTasks, ga4Daily, cafe24, dailyOrders, segments, restock, voc, songmamans, frictionPages, kkulSchedule] = await Promise.all([
     getClarityData(),
     getSheetsTasks(),
     getGA4Daily(today),
     getCafe24SalesByProduct(today),
     getCafe24DailyOrders(today),
-    getCafe24CustomerSegments(today, 90),
+    getCafe24CustomerSegments(today, 365),
     fetchRestockRequests(),
     fetchNegativeVOC(today),
     fetchSongmamansContext(),
+    getClarityFrictionPages(1),
+    getKkulDongYiSchedule(),
   ]);
   if (segments) segments = await enrichGuestSegmentsWithCRM(segments);
 
@@ -1374,40 +1460,28 @@ async function dailyReport() {
   const adAudit = await auditMetaAdUrls();
   const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, dailyOrders, cafe24, segments, restock, voc, songmamans, adAudit });
 
-  // 🚦 사이트 (Clarity 우선, 한도 시 GA4 트래픽 채널 백업)
-  const healthSection = clarity
-    ? `에러 ${clarity.scriptErrorPct.toFixed(1)}%${icon(clarity.scriptErrorPct, 10, 30)} · 뒤로 ${clarity.quickbackPct.toFixed(1)}%${icon(clarity.quickbackPct, 8, 15)} · 인스타인앱 ${clarity.instagramPct}%${parseFloat(clarity.instagramPct) > 80 ? '⚠️인앱마찰' : ''}\n체류 ${clarity.activeTimeSec}초 · 스크롤 ${clarity.scrollDepth.toFixed(0)}%${clarity.funnel ? ` · 결제 ${clarity.funnel.checkout}세션` : ''}`
-    : (ga4Daily && ga4Daily.channels && ga4Daily.channels.length
-        ? `⚠️ Clarity 한도 — 트래픽: ${ga4Daily.channels.slice(0,3).map(c=>`${c.name} ${c.sessions}`).join(' / ')}`
-        : '⚠️ 데이터 없음');
-
-  // 💳 매출·주문 (Cafe24 실데이터 — 네이버페이/톡 포함 100% 집계)
-  // GA4 구매는 외부결제(네이버페이 등) 미발화로 과소 → 카페24 실주문으로 대체.
-  let salesSection = '';
-  if (dailyOrders && dailyOrders.totalCount > 0) {
-    const d = dailyOrders;
-    // 전환율 = 카페24 주문(100% 정확) ÷ GA4 방문 → 양 끝이 다 정확한 유일한 신뢰 퍼널 지표
-    const sessions = (ga4Daily?.channels || []).reduce((s, c) => s + (c.sessions || 0), 0);
-    const cvr = sessions ? (d.totalCount / sessions * 100) : null;
-    salesSection = `\n\n💳 <b>매출</b> ${formatMoney(d.revenue)}\n주문 ${d.totalCount}건 (결제 ${d.paidCount} · 취소 ${d.canceledCount})`;
-    if (cvr != null) salesSection += `\n전환율 ${cvr.toFixed(1)}% (주문 ${d.totalCount} ÷ 방문 ${sessions})`;
+  // 🚦 사이트 (Clarity 우선, 한도 시 GA4 트래픽 채널 백업) + GA4 결제 퍼널 통합
+  // 매출·유입경로는 송마망봇이 통합 발송하므로 여기선 행동·퍼널 신호만.
+  let healthSection;
+  if (clarity) {
+    healthSection = `에러 ${clarity.scriptErrorPct.toFixed(1)}%${icon(clarity.scriptErrorPct, 10, 30)} · 뒤로 ${clarity.quickbackPct.toFixed(1)}%${icon(clarity.quickbackPct, 8, 15)} · 인스타인앱 ${clarity.instagramPct}%${parseFloat(clarity.instagramPct) > 80 ? '⚠️인앱마찰' : ''}\n체류 ${clarity.activeTimeSec}초 · 스크롤 ${clarity.scrollDepth.toFixed(0)}%${clarity.funnel ? ` · 결제 ${clarity.funnel.checkout}세션` : ''}`;
     if (ga4Daily?.checkoutFunnel) {
       const cf = ga4Daily.checkoutFunnel;
-      salesSection += `\nGA4 장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout} (사이트 이탈 참고용)`;
+      const dropPct = cf.addToCart > 0 ? ((cf.addToCart - cf.beginCheckout) / cf.addToCart * 100) : 0;
+      healthSection += `\nGA4 결제퍼널: 장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout} (이탈 ${dropPct.toFixed(0)}%, 외부결제 미포함)`;
     }
-    salesSection += `\n${buildPaymentAction({ dailyOrders, ga4Daily, adAudit, segments })}`;
-  } else if (ga4Daily?.checkoutFunnel) {
-    const cf = ga4Daily.checkoutFunnel;
-    salesSection = `\n\n💳 <b>결제 퍼널</b> (GA4)\n장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout} → 구매 ${cf.purchase}`;
+    if (frictionPages && frictionPages.length) {
+      const fpLines = frictionPages.map(p => `${p.url} — 데드 ${p.dead.toFixed(0)}%·뒤로 ${p.quick.toFixed(0)}% (${p.sessions}세션)`);
+      healthSection += `\n🔴 마찰 페이지:\n  ${fpLines.join('\n  ')}`;
+    }
+  } else {
+    healthSection = (ga4Daily && ga4Daily.channels && ga4Daily.channels.length)
+      ? `⚠️ Clarity 한도 — 트래픽: ${ga4Daily.channels.slice(0,3).map(c=>`${c.name} ${c.sessions}`).join(' / ')}`
+      : '⚠️ 데이터 없음';
   }
 
-  // 🛒 유입경로 (Cafe24 order_place_name — 어디서 주문했는지. 광고소재별 아님)
-  let channelSection = '';
-  if (dailyOrders && dailyOrders.channels && dailyOrders.channels.length) {
-    channelSection = `\n\n🛒 <b>유입경로</b> (카페24)\n${dailyOrders.channels.map(c => `${c.name} ${c.count}`).join(' · ')}`;
-  }
-
-  // 🔁 리텐션 (Cafe24 raw — 회원 first_order_date + 게스트 buyer_tel 식별)
+  // 🔁 리텐션 (Cafe24 raw — 365일 lookback 윈도우 내 식별)
+  // ⚠️ cafe24 customers API에 first_order_date 필드 없음(검증 5/26) → orders raw lookback이 유일 정확 경로.
   let retentionSection;
   if (segments && segments.totalOrders > 0) {
     const total = segments.totalOrders;
@@ -1420,23 +1494,39 @@ async function dailyReport() {
     const crmMatch = segments.crmMatchedGuests != null
       ? ` · CRM매칭 ${segments.crmMatchedGuests}/${segments.guestPhones.length}`
       : '';
-    // P0-3: OKR 진행률 (재구매자 분기 목표 300명)
-    const OKR_TARGET = 300;
-    const cumRepurchasers = m.retCount; // 오늘 재방문 회원 (누적은 repurchase stats에서 가져오면 더 정확하나 segments로 근사)
-    retentionSection = `회원 ${memberTotal}건 (${memberSharePct.toFixed(0)}%) → 재방문 ${m.retCount}건 (${memberRetPct.toFixed(1)}%)\n게스트 ${guestTotal}건 → 반복구매 ${g.repeatCount}건 (${guestRepeatPct.toFixed(1)}%)${crmMatch}`;
+    const lb = segments.lookbackDays || 365;
+    retentionSection = `회원 ${memberTotal}건 → 재방문 ${m.retCount}건 (${memberRetPct.toFixed(1)}%, ${lb}일 lookback)\n게스트 ${guestTotal}건 → 반복 ${g.repeatCount}건${crmMatch}`;
   } else {
     retentionSection = '⚠️ Cafe24 데이터 미수집';
   }
 
-  // 🌱 비#83 매출 시그널
-  let sideSkuSection = '0건 (모두 #83)';
+  // 🛍️ 상품별 매출 분포 (#83 포함 전체 SKU, 매출순 top 6) — 송마망봇이 안 다루는 차원
+  // 꿀동이 공구(#83) vs 자체 SKU 의존도 라인 + 항상 (#N) 라벨 (이름 중복 SKU 구분)
+  let productSalesSection = '데이터 없음';
   if (cafe24 && cafe24.byProduct) {
-    const nonMain = Object.entries(cafe24.byProduct).filter(([k]) => k !== '83').map(([k,v])=>v).filter(v=>v.count>0);
-    if (nonMain.length) {
-      sideSkuSection = nonMain.sort((a,b)=>b.amount-a.amount).slice(0,4).map(p => {
-        const nm = PRODUCT_NAME[String(p.productNo)] || p.name || `#${p.productNo}`;
-        return `${nm}: ${formatMoney(p.amount)}·${p.count}건`;
-      }).join(' / ');
+    const all = Object.values(cafe24.byProduct).filter(v => v.count > 0).sort((a, b) => b.amount - a.amount);
+    if (all.length) {
+      const topN = all.slice(0, 6);
+      const topAmt = topN.reduce((s, p) => s + p.amount, 0);
+      const lines = topN.map(p => {
+        const id = String(p.productNo);
+        const customNm = PRODUCT_NAME[id];
+        const label = customNm ? `${customNm} (#${id})` : `${(p.name || '제품').replace(/^\[.*?\]\s*/, '')} (#${id})`;
+        return `${label}: ${formatMoney(p.amount)}·${p.count}건`;
+      });
+      // 공구 일정 (캘린더 권한 승인 후 자동 표시 — 권한 없으면 라인 생략)
+      let scheduleLine = '';
+      if (kkulSchedule) {
+        const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+        const endD = new Date(kkulSchedule.end); endD.setHours(0, 0, 0, 0);
+        const startD = new Date(kkulSchedule.start); startD.setHours(0, 0, 0, 0);
+        const dToEnd = Math.ceil((endD - today0) / 86400000);
+        const dToStart = Math.ceil((startD - today0) / 86400000);
+        if (dToStart > 0) scheduleLine = `📅 ${kkulSchedule.title} — 시작 D-${dToStart} (${kkulSchedule.start.slice(0, 10)} ~ ${kkulSchedule.end.slice(0, 10)})\n`;
+        else if (dToEnd > 0) scheduleLine = `📅 ${kkulSchedule.title} — 종료 D-${dToEnd} (~${kkulSchedule.end.slice(0, 10)})\n`;
+        else scheduleLine = `📅 ${kkulSchedule.title} — 오늘 종료\n`;
+      }
+      productSalesSection = `${scheduleLine}합계 ${formatMoney(topAmt)}\n${lines.join('\n')}`;
     }
   }
 
@@ -1469,16 +1559,18 @@ async function dailyReport() {
     vocSection = `\n\n📢 <b>부정/중립 후기</b> ${voc.negCount}건\n${list}`;
   }
 
+  // 단톡방 메시지 — 송마망봇과 중복되는 섹션(매출·유입경로·VOC·재입고·광고URL)은 제거.
+  // 송마망봇이 매일 통합 발송하므로 은우봇은 CX 고유 차원(사이트행동·리텐션·상품믹스·CX판단)만.
   const msg = `🔎 <b>CX 일간</b> · ${display}
 ━━━━━━━━━━━━━━━━━
 🚦 <b>사이트</b>
-${healthSection}${salesSection}${channelSection}
+${healthSection}
 
 🔁 <b>리텐션</b> (Cafe24 raw)
 ${retentionSection}
 
-🌱 <b>비#83 매출</b>
-${sideSkuSection}${adAuditSection}${restockSection}${vocSection}`;
+🛍️ <b>상품별 매출</b> (Top 6)
+${productSalesSection}`;
 
   const analysisMsg = analysis ? `🤖 <b>CX 판단</b>\n${analysis}` : null;
 
@@ -1787,6 +1879,12 @@ module.exports = {
   getGA4Daily,
   getGA4Slices,
   getClarityData,
+  getClarityFrictionPages,
+  getKkulDongYiSchedule,
+  getMemos,
+  getCXManagerAnalysis,
+  getRecentActivities,
+  getDailyMessagesFromSheet,
   getSheetsTasks,
   getClaudeAnalysis,
   buildWeeklySnapshot,

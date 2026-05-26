@@ -212,6 +212,9 @@ function doPost(e) {
     if (action === 'format_weekly') {
       return jsonOut(formatWeeklyTabs_());
     }
+    if (action === 'get_calendar_events') {
+      return jsonOut(getCalendarEvents_(contents.query || '', contents.daysAhead || 30, contents.daysBack || 7));
+    }
     return jsonOut({ok: false, error: 'unknown action'});
   } catch(err) {
     return jsonOut({ok: false, error: err.message});
@@ -469,6 +472,32 @@ function formatWeeklyTabs_() {
     done.push(cfg.name);
   });
   return { ok: true, formatted: done };
+}
+
+// ===== 구글 캘린더 검색 (꿀동이 공구 일정 등 자동 조회) =====
+function getCalendarEvents_(query, daysAhead, daysBack) {
+  try {
+    var now = new Date();
+    var start = new Date(now.getTime() - daysBack * 86400000);
+    var end = new Date(now.getTime() + daysAhead * 86400000);
+    var cals = CalendarApp.getAllCalendars();
+    var out = [];
+    cals.forEach(function (cal) {
+      try {
+        var events = query ? cal.getEvents(start, end, { search: query }) : cal.getEvents(start, end);
+        events.forEach(function (e) {
+          out.push({
+            cal: cal.getName(),
+            title: e.getTitle(),
+            start: Utilities.formatDate(e.getStartTime(), 'Asia/Seoul', 'yyyy-MM-dd HH:mm'),
+            end: Utilities.formatDate(e.getEndTime(), 'Asia/Seoul', 'yyyy-MM-dd HH:mm'),
+            allDay: e.isAllDayEvent(),
+          });
+        });
+      } catch (e) { /* 캘린더 접근 권한 없으면 스킵 */ }
+    });
+    return { ok: true, count: out.length, events: out };
+  } catch (e) { return { ok: false, error: e.message }; }
 }
 
 // ===== 은우 메모 (개인 DM, 매일 아침 리포트에 노출) =====
