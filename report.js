@@ -1253,6 +1253,151 @@ async function calculateLTVMetrics(asOfDate) {
   };
 }
 
+// ── UX 사례 보고서 (월·목 단톡방) ─────────────────────────
+// [[insights-not-reports]] 룰 적용: 검증→자가검토→인사이트. 송마망봇 화요일 보고와 같은 형식이되 카테고리는 UI/UX.
+const UX_CATEGORIES = [
+  '결제·체크아웃 (Shop Pay·Stripe·1탭 결제·passwordless)',
+  '상품 페이지 (사회적 증거·image gallery·video-first PDP·micro-interaction)',
+  '모바일 UX (sticky CTA·bottom sheet·인앱 브라우저 fallback·thumb zone)',
+  '온보딩·회원전환 (post-purchase account·magic link·OAuth 1탭)',
+  '장바구니 (persistent cart·optimistic UI·1-page checkout·empty state)',
+  '신뢰 신호 (trust badges·review summary·shipping policy·return policy)',
+  '리텐션 UX (윈백·D+N 후크·empty state engagement·notification design)',
+  '검색·발견성 (search-as-you-type·filter UX·zero result design)',
+];
+
+async function generateUXInsight(usedTechniques) {
+  if (!CLAUDE_API_KEY) return null;
+  const usedList = (usedTechniques || []).slice(-20).map(t => `- ${t.기법명} (${t.카테고리})`).join('\n');
+  const prompt = `너는 이태리정미소(한국 프리미엄 식료품 D2C) CX 매니저야. UI/UX 개선 사례를 매주 월·목 2회 단톡방에 공유한다.
+
+이번 보고서 1편을 작성해. 송마망봇 화요일 마케팅/심리학 기법 보고와 같은 형식 — 단 카테고리는 UI/UX 인터페이스 패턴 한정 (가격심리학·앵커링 X).
+
+이미 다룬 기법 (중복 회피 필수):
+${usedList || '(아직 없음)'}
+
+[이태리정미소 자사몰 이미 반영/계획된 UX — 사례 선택 시 제외 필수]
+- 카카오 채널 친구추가 + 자동 웰컴메시지 (배포 완료)
+- GA4 모바일 버튼 클릭 트래킹 (상단 vs 하단 CTA 분석 인프라)
+- 구매하기 옵션 바텀시트 (모바일 결제 마찰 감소, skin8 배포)
+- Sticky CTA 3개 (바로구매·장바구니·선물하기, 모바일 thumb zone)
+- 자사몰 폰트 통일 (디자인 토큰 시스템, 진행 중)
+- 게스트 체크아웃 (카페24 기본 활성)
+이미 로드맵 박힌 9개 액션 — 사례로 다시 surface 금지:
+- 게스트→회원 후크 · 장바구니 데드 진단 · 인스타 인앱 fallback · 꿀동이 종료 시퀀스
+- 상품 페이지 사회적 증거 · 신규 D+14 후크 · 휴면 윈백 · VIP 차별화 · 첫 주문 AOV 끌어올리기
+
+위 패턴이 사례 후보로 등장하면 다른 카테고리/기법으로 자체적으로 교체. 면밀히 검토.
+
+카테고리 풀:
+${UX_CATEGORIES.map((c, i) => `${i+1}. ${c}`).join('\n')}
+
+위 풀에서 카테고리 1개 골라 그 안의 구체적 기법 1개 선택. 형식 엄수:
+
+[제목] 기법명 (영어 병기)
+
+[정의] 2~3줄, 정확히 무엇을 의미하는지
+
+━━━━━━━━━━━━
+
+[숨은 메커니즘] 행동경제학·UX 원리·인지부하 등 작동 원리. 5~8줄.
+
+━━━━━━━━━━━━
+
+[기성 검증] 실제 회사 + 연도 + 정확한 결과 수치
+- 회사명·국가·업종
+- 문제 상황
+- 실행 (구체)
+- 결과 (CVR·매출·이탈률 등 정량)
+
+━━━━━━━━━━━━
+
+[실리콘밸리 변형] 최신 D2C·SaaS 사례 (2020년 이후)
+- 회사명·실행
+- 임팩트 (정량)
+
+━━━━━━━━━━━━
+
+[두 시대 공통 / 차이]
+원리는 같지만 어떻게 진화했는지. 4~6줄.
+
+━━━━━━━━━━━━
+
+[이태리정미소 변형 적용]
+자사몰 현재 데이터(게스트 53%·1회 구매자 97.5%·재구매 2.5%·인스타 인앱 50%·꿀동이 #87 53%)를 명시적으로 참조하면서 구체적 실행안 2~3개. 각 액션의 예상 임팩트 추정치 포함.
+
+━━━━━━━━━━━━
+
+[예상 누적 임팩트] 1~2줄. 현재 데이터 기반 정량.
+
+규칙:
+- 마크다운 기호(#, *, **) 사용 금지. 일반 텍스트.
+- 숫자 출처 명시 (Baymard·NN Group·Shopify 공식 등 인용 가능)
+- 가정·한계 솔직히 명시 (예: "한국 시장 검증 안 됨")
+- 보고/체크리스트 형식 X — 패턴·메커니즘·액션·임팩트 흐름`;
+
+  try {
+    const res = await postJson('api.anthropic.com', '/v1/messages',
+      { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01' },
+      { model: CLAUDE_MODEL, max_tokens: 4000, messages: [{ role: 'user', content: prompt }] });
+    return res.content?.[0]?.text || null;
+  } catch (e) { console.error('UX Claude 오류:', e.message); return null; }
+}
+
+async function uxDraftFlow() {
+  const date = dateStr(0);
+  const today = new Date();
+  const dow = today.getDay(); // 0=Sun, 1=Mon, 4=Thu
+  const dowKR = ['일', '월', '화', '수', '목', '금', '토'][dow];
+
+  // 사용된 기법 목록 fetch (중복 회피)
+  let history = [];
+  try {
+    const r = await postToAppsScript({ action: 'get_ux_history' }, APPS_SCRIPT_URL);
+    if (r && r.ok) history = r.history || [];
+  } catch (e) { console.error('[UX history] 실패:', e.message); }
+
+  const insight = await generateUXInsight(history);
+  if (!insight) { console.error('UX 초안 생성 실패 — 종료'); return; }
+
+  // 제목 추출 (첫 줄에서 기법명)
+  const firstLine = insight.split('\n').find(l => l.trim()) || '(제목 추출 실패)';
+  const technique = firstLine.replace(/^\[제목\]\s*/, '').trim();
+
+  // 시트 저장 (상태: draft)
+  await postToAppsScript({
+    action: 'save_ux_draft',
+    date, dow: dowKR, technique,
+    body: insight,
+    status: 'draft',
+  }, APPS_SCRIPT_URL);
+
+  // 개인 DM 발송
+  const dmMsg = `📚 <b>UX 사례 초안 (${date} ${dowKR})</b>\n\n${escapeHtml(insight)}\n\n━━━━━━━━━━\n검토 후 명령어로 응답:\n/UX 발송 → 단톡방에 보냄\n/UX 보류 → 이번 회차 스킵\n/UX 수정 [요청] → 다시 생성`;
+  await sendTelegram(dmMsg);
+  console.log(`[UX draft] ${date} ${dowKR} ${technique} → 개인 DM + 시트 저장`);
+}
+
+async function uxSendFlow() {
+  // 대기 중 초안 fetch + 단톡방 발송 + mark sent
+  let draft = null;
+  try {
+    const r = await postToAppsScript({ action: 'get_ux_pending' }, APPS_SCRIPT_URL);
+    if (r && r.ok && r.draft) draft = r.draft;
+  } catch (e) { console.error('[UX pending] 실패:', e.message); return; }
+
+  if (!draft) { console.log('대기 중 UX 초안 없음'); return; }
+
+  const groupMsg = `📚 <b>UX 사례 — ${draft.technique}</b>\n\n${escapeHtml(draft.body)}`;
+  const r = await sendTelegramGroup(groupMsg);
+  if (r && r.ok) {
+    await postToAppsScript({ action: 'mark_ux_sent', date: draft.date }, APPS_SCRIPT_URL);
+    console.log(`[UX send] ${draft.date} ${draft.technique} → 단톡방 발송 완료`);
+  } else {
+    console.error('UX 단톡방 발송 실패:', JSON.stringify(r));
+  }
+}
+
 // 공구·콜라보 일정 — 메모리 [[gongu-schedule]] 단일 진실 소스. 새 공구 들어오면 여기 갱신.
 const PROMO_SCHEDULE = [
   { title: '꿀동이 공구 (바질 #87)',      productNo: '87', start: '2026-05-25', end: '2026-05-31' },
@@ -2121,6 +2266,8 @@ async function main() {
   const mode = process.argv[2] || (isMonday() ? 'weekly' : 'daily');
   console.log(`모드: ${mode}`);
   if (mode === 'weekly') await weeklyReport();
+  else if (mode === 'ux_draft') await uxDraftFlow();
+  else if (mode === 'ux_send') await uxSendFlow();
   else await dailyReport();
 }
 
@@ -2156,6 +2303,9 @@ module.exports = {
   saveDailySnapshot,
   getDailyBaseline,
   calculateLTVMetrics,
+  generateUXInsight,
+  uxDraftFlow,
+  uxSendFlow,
   pushExternalOrdersToGA4,
   getMemos,
   getCXManagerAnalysis,

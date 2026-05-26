@@ -237,6 +237,11 @@ function doPost(e) {
     if (action === 'push_ga4_orders') {
       return jsonOut(pushGa4Orders_(contents));
     }
+    if (action === 'save_ux_draft')  return jsonOut(saveUXDraft_(contents));
+    if (action === 'get_ux_history') return jsonOut(getUXHistory_());
+    if (action === 'get_ux_pending') return jsonOut(getUXPending_());
+    if (action === 'mark_ux_sent')   return jsonOut(markUXSent_(contents.date));
+    if (action === 'mark_ux_skip')   return jsonOut(markUXSkip_(contents.date));
     return jsonOut({ok: false, error: 'unknown action'});
   } catch(err) {
     return jsonOut({ok: false, error: err.message});
@@ -891,30 +896,110 @@ function jsonOut(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
+// ===== UX 사례 (월·목 발송) =====
+var UX_HEADERS = ['일자', '요일', '기법명', '카테고리', '본문', '상태', '발송일시'];
+function getUXTab_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ss.getSheetByName('UX_사례');
+  if (!sh) {
+    sh = ss.insertSheet('UX_사례');
+    sh.appendRow(UX_HEADERS);
+    sh.getRange('A:A').setNumberFormat('@');
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, 1, UX_HEADERS.length).setFontWeight('bold').setBackground('#1f2a44').setFontColor('#ffffff');
+  }
+  return sh;
+}
+function saveUXDraft_(contents) {
+  var sh = getUXTab_();
+  var date = String(contents.date || '');
+  if (!date) return { ok: false, error: 'no date' };
+  // 같은 날짜 draft 있으면 덮어씀
+  var data = sh.getDataRange().getValues();
+  for (var i = data.length - 1; i >= 1; i--) {
+    if (String(data[i][0]) === date && String(data[i][5]) === 'draft') sh.deleteRow(i + 1);
+  }
+  sh.appendRow([date, contents.dow || '', contents.technique || '', contents.category || '', contents.body || '', contents.status || 'draft', '']);
+  return { ok: true, date: date };
+}
+function getUXHistory_() {
+  var sh = getUXTab_();
+  if (sh.getLastRow() < 2) return { ok: true, history: [] };
+  var rows = sh.getDataRange().getValues().slice(1);
+  var history = rows.filter(function (r) { return String(r[5]) === 'sent'; }).map(function (r) {
+    return { 일자: String(r[0]), 기법명: String(r[2]), 카테고리: String(r[3]) };
+  });
+  return { ok: true, history: history };
+}
+function getUXPending_() {
+  var sh = getUXTab_();
+  if (sh.getLastRow() < 2) return { ok: true, draft: null };
+  var rows = sh.getDataRange().getValues().slice(1);
+  // 가장 최근 draft 1개
+  for (var i = rows.length - 1; i >= 0; i--) {
+    if (String(rows[i][5]) === 'draft') {
+      return { ok: true, draft: { date: String(rows[i][0]), dow: String(rows[i][1]), technique: String(rows[i][2]), body: String(rows[i][4]) } };
+    }
+  }
+  return { ok: true, draft: null };
+}
+function markUXSent_(date) {
+  var sh = getUXTab_();
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(date) && String(data[i][5]) === 'draft') {
+      sh.getRange(i + 1, 6).setValue('sent');
+      sh.getRange(i + 1, 7).setValue(new Date());
+      return { ok: true };
+    }
+  }
+  return { ok: false, error: 'no draft for date' };
+}
+function markUXSkip_(date) {
+  var sh = getUXTab_();
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(date) && String(data[i][5]) === 'draft') {
+      sh.getRange(i + 1, 6).setValue('skipped');
+      sh.getRange(i + 1, 7).setValue(new Date());
+      return { ok: true };
+    }
+  }
+  return { ok: false, error: 'no draft for date' };
+}
+
 // ===== 외부 cron 핑거: GAS 시간 트리거 -> GitHub Actions 강제 실행 =====
-function triggerCXWorkflow_(workflowFile) {
+function triggerCXWorkflow_(workflowFile, mode) {
   var token = PropertiesService.getScriptProperties().getProperty('GH_TOKEN');
   if (!token) { console.log('GH_TOKEN 없음'); return -1; }
   var url = 'https://api.github.com/repos/ewjung-byte/cx-report-bot/actions/workflows/' + workflowFile + '/dispatches';
+  var payload = { ref: 'main' };
+  if (mode) payload.inputs = { mode: mode };
   var res = UrlFetchApp.fetch(url, {
     method: 'post',
     contentType: 'application/json',
     headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'User-Agent': 'cx-gas-trigger' },
-    payload: JSON.stringify({ ref: 'main' }),
+    payload: JSON.stringify(payload),
     muteHttpExceptions: true
   });
   var code = res.getResponseCode();
-  console.log(workflowFile + ' -> HTTP ' + code);
+  console.log(workflowFile + (mode ? ' (' + mode + ')' : '') + ' -> HTTP ' + code);
   return code;
 }
 function triggerDailyReport() { return triggerCXWorkflow_('daily-report.yml'); }
+function triggerUXDraft()     { return triggerCXWorkflow_('daily-report.yml', 'ux_draft'); }
+function triggerUXSend()      { return triggerCXWorkflow_('daily-report.yml', 'ux_send'); }
 function triggerCollector()   { return triggerCXWorkflow_('collect-messages.yml'); }
 function setupCXTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     var f = t.getHandlerFunction();
-    if (f === 'triggerDailyReport' || f === 'triggerCollector') ScriptApp.deleteTrigger(t);
+    if (f === 'triggerDailyReport' || f === 'triggerCollector' || f === 'triggerUXDraftMon' || f === 'triggerUXDraftThu') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('triggerDailyReport').timeBased().atHour(9).everyDays(1).create();
   ScriptApp.newTrigger('triggerCollector').timeBased().everyHours(2).create();
+  ScriptApp.newTrigger('triggerUXDraftMon').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(8).create();
+  ScriptApp.newTrigger('triggerUXDraftThu').timeBased().onWeekDay(ScriptApp.WeekDay.THURSDAY).atHour(8).create();
   console.log('트리거 등록 완료');
 }
+function triggerUXDraftMon() { return triggerCXWorkflow_('daily-report.yml', 'ux_draft'); }
+function triggerUXDraftThu() { return triggerCXWorkflow_('daily-report.yml', 'ux_draft'); }
