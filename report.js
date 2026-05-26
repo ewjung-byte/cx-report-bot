@@ -1266,11 +1266,72 @@ const UX_CATEGORIES = [
   '검색·발견성 (search-as-you-type·filter UX·zero result design)',
 ];
 
+// UX 권위 source RSS fetch — 학습 데이터 cutoff 우회용 fresh signal
+// 실패해도 graceful — 빈 array 반환하고 Claude 학습 데이터만으로 fallback
+async function fetchRecentUXArticles() {
+  const sources = [
+    { name: 'NN/g',          url: 'https://www.nngroup.com/feed/rss/' },
+    { name: 'Baymard',       url: 'https://baymard.com/blog.atom' },
+    { name: 'Built for Mars', url: 'https://builtformars.com/feed/' },
+    { name: 'CXL',           url: 'https://cxl.com/blog/feed/' },
+  ];
+  const results = [];
+  for (const src of sources) {
+    try {
+      const xml = await new Promise((resolve, reject) => {
+        const u = new URL(src.url);
+        const req = https.request({ hostname: u.hostname, path: u.pathname + u.search, method: 'GET', headers: { 'User-Agent': 'cx-report-bot/1.0' }, timeout: 10000 }, (res) => {
+          let data = '';
+          res.on('data', (c) => data += c);
+          res.on('end', () => resolve(data));
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+        req.end();
+      });
+      // RSS·Atom 둘 다 — 최근 3개 item·entry 추출
+      const itemRe = /<(?:item|entry)>([\s\S]*?)<\/(?:item|entry)>/g;
+      const titleRe = /<title[^>]*>(?:<!\[CDATA\[)?([^<\]]+)/;
+      const linkRe = /<link[^>]*(?:href="([^"]+)"|>([^<]+)<\/link>)/;
+      const descRe = /<(?:description|summary|content[^>]*)>(?:<!\[CDATA\[)?([\s\S]{0,400})/;
+      const dateRe = /<(?:pubDate|published|updated)>([^<]+)/;
+      let m, count = 0;
+      while ((m = itemRe.exec(xml)) && count < 3) {
+        const body = m[1];
+        const t = (body.match(titleRe) || [])[1] || '';
+        const l = (body.match(linkRe) || [])[1] || (body.match(linkRe) || [])[2] || '';
+        const d = (body.match(descRe) || [])[1] || '';
+        const date = (body.match(dateRe) || [])[1] || '';
+        if (t.trim()) {
+          results.push({
+            source: src.name,
+            title: t.trim().slice(0, 160),
+            url: l.trim(),
+            date: date.trim().slice(0, 24),
+            summary: d.replace(/<[^>]+>/g, '').replace(/\]\]>/g, '').trim().slice(0, 280),
+          });
+          count++;
+        }
+      }
+    } catch (e) {
+      console.error(`[UX RSS ${src.name}] 실패:`, e.message);
+    }
+  }
+  return results;
+}
+
 async function generateUXInsight(usedTechniques, feedback) {
   if (!CLAUDE_API_KEY) return null;
   const usedList = (usedTechniques || []).slice(-20).map(t => `- ${t.기법명} (${t.카테고리})`).join('\n');
   const feedbackBlock = feedback ? `\n\n[사용자 수정 요청 — 이번 회차 반드시 반영]\n${feedback}\n` : '';
-  const prompt = `너는 이태리정미소(한국 프리미엄 식료품 D2C) CX 매니저야. UI/UX 개선 사례를 매주 월·목 2회 단톡방에 공유한다.${feedbackBlock}
+
+  // 최근 권위 source 글 fetch — 학습 데이터 cutoff 우회
+  const articles = await fetchRecentUXArticles();
+  const articleBlock = articles.length > 0
+    ? `\n[최근 권위 UX source 새 글 — 가능하면 인용 또는 영감으로 활용]\n${articles.map((a, i) => `${i+1}. "${a.title}" (${a.source}, ${a.date})\n   URL: ${a.url}\n   요약: ${a.summary}`).join('\n\n')}\n`
+    : '';
+
+  const prompt = `너는 이태리정미소(한국 프리미엄 식료품 D2C) CX 매니저야. UI/UX 개선 사례를 매주 월·목 2회 단톡방에 공유한다.${feedbackBlock}${articleBlock}
 
 이번 보고서 1편을 작성해. 송마망봇 화요일 마케팅/심리학 기법 보고와 같은 형식 — 단 카테고리는 UI/UX 인터페이스 패턴 한정 (가격심리학·앵커링 X).
 
@@ -1293,7 +1354,17 @@ ${usedList || '(아직 없음)'}
 카테고리 풀:
 ${UX_CATEGORIES.map((c, i) => `${i+1}. ${c}`).join('\n')}
 
-위 풀에서 카테고리 1개 골라 그 안의 구체적 기법 1개 선택. 형식 엄수:
+위 풀에서 카테고리 1개 골라 그 안의 구체적 기법 1개 선택.
+
+[사례 선정 엄격 룰 — 위반 시 다시 작성]
+1. 뻔한 클래식 회사 풀에서 자제 (이미 자주 인용됨): ASOS · Shop Pay · Amazon One-Click · Stripe Checkout · Booking.com · Glossier · Allbirds · Stitch Fix · Williams-Sonoma. 위 회사를 쓸 경우 *덜 알려진 실험·구체적 페이지·정량 데이터* 위주로 새 각도여야 함.
+2. 한국 D2C/커머스 사례 적극 surface: 마뗑킴 · 생활공작소 · 해녀가깨 · 앤캐럿 · 이파리 · 논픽션 · 무신사 · 29CM · 마켓컬리 · 오늘의집 · 와디즈 · 윙잇 · 매스프레소 · 핏앤펑크 · 도서출판 사이드웨이 등. 한국 시장 행동 패턴(인앱 브라우저 · 카카오톡 · 토스/네이버페이) 구체 사례 우선.
+3. 다른 vertical에서 *식료품에 변환* 강조: B2B SaaS(Linear·Notion·Figma) · 핀테크(토스·뱅크샐러드·Stripe Atlas) · 여행(Klook·트리플·마이리얼트립) · 교육(클래스101·코드잇·매스프레소) · 콘텐츠(왓챠·티빙·라프텔)의 UX 패턴이 식료품 D2C에 어떻게 작동하는지.
+4. 학술·권위 source 인용 우선: Baymard Institute · Nielsen Norman Group · Built for Mars · Growth.Design · CXL ConversionXL · UX Research conference (CHI·UIST). 위 [최근 권위 source 새 글] 블록이 있으면 그 글 1개를 명시적으로 인용·참조.
+5. 정량 데이터 필수: A/B test 결과·CVR·이탈률·LTV 등 숫자 동반. 출처 명시. 모르면 "검증 안 됨"으로 솔직히.
+6. 이미 다룬 기법 (위 history) 반복 X. 각 카테고리 안에서 다른 패턴.
+
+형식 엄수:
 
 [제목] 기법명 (영어 병기)
 
@@ -2339,6 +2410,7 @@ module.exports = {
   generateUXInsight,
   uxDraftFlow,
   uxSendFlow,
+  fetchRecentUXArticles,
   pushExternalOrdersToGA4,
   getMemos,
   getCXManagerAnalysis,

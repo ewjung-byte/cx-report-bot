@@ -297,6 +297,11 @@ function handleEunwooDM(msg) {
   if (text === '/UX 발송' || text === '/UX발송') { handleUXSend(chatId); return; }
   if (text === '/UX 보류' || text === '/UX보류') { handleUXSkip(chatId, date); return; }
   if ((m = text.match(/^\/UX\s*수정\s+([\s\S]+)/))) { handleUXRevise(m[1].trim(), chatId); return; }
+  if (text === '/UX 셋업' || text === '/UX셋업') {
+    try { setupCXTriggers(); sendTGMessage(chatId, '✅ 트리거 등록 완료 — 월·목 8:00 KST 자동 발화. 첫 발송 5/28 (목).'); }
+    catch (e) { sendTGMessage(chatId, '⚠️ 셋업 실패: ' + e.message); }
+    return;
+  }
   if (text === '/도움' || text === '/help') {
     sendTGMessage(chatId, '<b>은우봇 명령어</b>\n/작업 [내용] — 새 작업 등록\n/작업목록 — 진행 중 작업 보기\n/메모 [내용] — 메모 추가 (매일 아침 DM에 표시)\n/메모목록 — 메모 전체 보기\n/UX 발송 — 대기 중 UX 초안을 단톡방에 보냄\n/UX 보류 — 이번 회차 UX 초안 스킵\n/UX 수정 [요청] — UX 초안 다시 생성\n버튼으로 완료/중단/보류 처리');
     return;
