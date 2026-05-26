@@ -1130,8 +1130,9 @@ async function getKkulDongYiSchedule() {
   } catch (e) { return null; }
 }
 
-// Clarity URL별 마찰 페이지 (DeadClick + Quickback) — 결제 마찰의 진짜 지점 자동 진단
-async function getClarityFrictionPages(daysBack = 1) {
+// Clarity URL별 페이지 데이터 (DeadClick + Quickback + ScrollDepth) — 1회 호출로 다 받음
+// 결제 흐름·상품 페이지·자동 마찰 진단 모두 이 한 번의 응답에서 분기
+async function getClarityPageStats(daysBack = 1) {
   try {
     const url = `https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${CLARITY_PROJECT_ID}&numOfDays=${daysBack}&dimension1=URL`;
     const data = await fetchJson(url, { 'Authorization': `Bearer ${clarityToken}` });
@@ -1139,16 +1140,35 @@ async function getClarityFrictionPages(daysBack = 1) {
     const pick = (n) => data.find(m => m.metricName === n);
     const dead = pick('DeadClickCount')?.information || [];
     const quick = pick('QuickbackClick')?.information || [];
-    const map = {};
-    const norm = (u) => String(u || '').replace(/^https?:\/\/[^/]+/, '').slice(0, 55);
-    dead.forEach(x => { const u = norm(x.URL || x.url || x.name); if (!u) return; (map[u] ||= { sessions: parseInt(x.sessionsCount || 0) }).dead = x.sessionsWithMetricPercentage || 0; });
-    quick.forEach(x => { const u = norm(x.URL || x.url || x.name); if (!u) return; (map[u] ||= { sessions: parseInt(x.sessionsCount || 0) }).quick = x.sessionsWithMetricPercentage || 0; });
-    // 진짜 마찰: 데드 ≥10% 또는 빠른뒤로 ≥50%, 최소 10세션
-    return Object.entries(map).map(([u, v]) => ({ url: u, dead: v.dead || 0, quick: v.quick || 0, sessions: v.sessions || 0 }))
-      .filter(x => x.sessions >= 10 && (x.dead >= 10 || x.quick >= 50))
-      .sort((a, b) => (b.dead + b.quick * 0.3) - (a.dead + a.quick * 0.3))
-      .slice(0, 2);
-  } catch (e) { console.error('[Clarity 마찰 페이지 오류]', e.message); return null; }
+    const scroll = pick('ScrollDepth')?.information || [];
+    const norm = (u) => String(u || '').replace(/^https?:\/\/[^/]+/, '').slice(0, 80);
+    const byUrl = {};
+    const upsert = (raw, sessions) => {
+      const u = norm(raw); if (!u) return null;
+      if (!byUrl[u]) byUrl[u] = { url: u, sessions };
+      else if (sessions > byUrl[u].sessions) byUrl[u].sessions = sessions;
+      return byUrl[u];
+    };
+    dead.forEach(x => { const o = upsert(x.URL || x.url || x.name, parseInt(x.sessionsCount || 0)); if (o) o.dead = x.sessionsWithMetricPercentage || 0; });
+    quick.forEach(x => { const o = upsert(x.URL || x.url || x.name, parseInt(x.sessionsCount || 0)); if (o) o.quick = x.sessionsWithMetricPercentage || 0; });
+    scroll.forEach(x => { const o = upsert(x.URL || x.url || x.name, parseInt(x.sessionsCount || 0)); if (o) o.scroll = x.averageScrollDepth || 0; });
+    const all = Object.values(byUrl);
+    // 자동 마찰(결제·상품 페이지 제외 = 그 외 페이지에서 폭증한 것): 데드 ≥10% 또는 뒤로 ≥50%, 세션 10+
+    const isCheckout = (u) => /\/(order\/basket|order\/orderform|member\/login)/.test(u);
+    const isProduct = (u) => /(product_no=|surl\/p\/)/.test(u);
+    const friction = all.filter(x => x.sessions >= 10 && !isCheckout(x.url) && !isProduct(x.url) && ((x.dead || 0) >= 10 || (x.quick || 0) >= 50))
+      .sort((a, b) => ((b.dead || 0) + (b.quick || 0) * 0.3) - ((a.dead || 0) + (a.quick || 0) * 0.3))
+      .slice(0, 1);
+    return { byUrl, friction };
+  } catch (e) { console.error('[Clarity 페이지 데이터 오류]', e.message); return null; }
+}
+
+// 결제 흐름 3페이지 + 상품 페이지(매출 top SKU) Clarity 데이터 조회 헬퍼
+function pickClarityPage(byUrl, predicate) {
+  if (!byUrl) return null;
+  const matches = Object.values(byUrl).filter(predicate);
+  if (!matches.length) return null;
+  return matches.sort((a, b) => b.sessions - a.sessions)[0];
 }
 
 // ── Claude 분석 ────────────────────────────────────────
@@ -1441,7 +1461,7 @@ async function dailyReport() {
   console.log(`[일간] ${today}`);
 
   // 데이터 fetch — Cafe24 raw 중심 (GA4 newVsReturning은 측정 누락 신뢰 X)
-  let [clarity, sheetsTasks, ga4Daily, cafe24, dailyOrders, segments, restock, voc, songmamans, frictionPages, kkulSchedule] = await Promise.all([
+  let [clarity, sheetsTasks, ga4Daily, cafe24, dailyOrders, segments, restock, voc, songmamans, pageStats, kkulSchedule] = await Promise.all([
     getClarityData(),
     getSheetsTasks(),
     getGA4Daily(today),
@@ -1451,9 +1471,10 @@ async function dailyReport() {
     fetchRestockRequests(),
     fetchNegativeVOC(today),
     fetchSongmamansContext(),
-    getClarityFrictionPages(1),
+    getClarityPageStats(1),
     getKkulDongYiSchedule(),
   ]);
+  // pageStats = { byUrl: { url: {dead, quick, scroll, sessions} }, friction: [...top1] }
   if (segments) segments = await enrichGuestSegmentsWithCRM(segments);
 
   // P0: 메타 광고 URL 검증 (Claude 분석이 adAudit을 입력으로 받으므로 순차 실행)
@@ -1470,9 +1491,9 @@ async function dailyReport() {
       const dropPct = cf.addToCart > 0 ? ((cf.addToCart - cf.beginCheckout) / cf.addToCart * 100) : 0;
       healthSection += `\nGA4 결제퍼널: 장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout} (이탈 ${dropPct.toFixed(0)}%, 외부결제 미포함)`;
     }
-    if (frictionPages && frictionPages.length) {
-      const fpLines = frictionPages.map(p => `${p.url} — 데드 ${p.dead.toFixed(0)}%·뒤로 ${p.quick.toFixed(0)}% (${p.sessions}세션)`);
-      healthSection += `\n🔴 마찰 페이지:\n  ${fpLines.join('\n  ')}`;
+    if (pageStats?.friction?.length) {
+      const fpLines = pageStats.friction.map(p => `${p.url} — 데드 ${(p.dead || 0).toFixed(0)}%·뒤로 ${(p.quick || 0).toFixed(0)}% (${p.sessions}세션)`);
+      healthSection += `\n🔴 마찰 페이지(결제·상품 외):\n  ${fpLines.join('\n  ')}`;
     }
   } else {
     healthSection = (ga4Daily && ga4Daily.channels && ga4Daily.channels.length)
@@ -1559,12 +1580,43 @@ async function dailyReport() {
     vocSection = `\n\n📢 <b>부정/중립 후기</b> ${voc.negCount}건\n${list}`;
   }
 
+  // 💳 결제 흐름 3페이지 — 매일 같은 자리 추적해 추세 폭증 즉시 감지
+  let checkoutSection = '';
+  if (pageStats?.byUrl) {
+    const m = pageStats.byUrl;
+    const basket = pickClarityPage(m, v => v.url.startsWith('/order/basket'));
+    const orderform = pickClarityPage(m, v => v.url.startsWith('/order/orderform'));
+    const login = pickClarityPage(m, v => v.url.startsWith('/member/login'));
+    const fmt = (p) => p ? `데드 ${(p.dead || 0).toFixed(0)}%·뒤로 ${(p.quick || 0).toFixed(0)}% (${p.sessions}세션)` : '데이터 없음';
+    if (basket || orderform || login) {
+      checkoutSection = `\n\n💳 <b>결제 흐름 마찰</b>
+  장바구니: ${fmt(basket)}
+  결제폼: ${fmt(orderform)}
+  로그인: ${fmt(login)}`;
+    }
+  }
+
+  // 📜 매출 SKU 페이지 행동 — top 매출 SKU 4개 페이지의 스크롤·뒤로 추적 (Jung 자사몰 수정 신호)
+  let productPageSection = '';
+  if (pageStats?.byUrl && cafe24 && cafe24.byProduct) {
+    const topSkus = Object.values(cafe24.byProduct).filter(v => v.count > 0).sort((a, b) => b.amount - a.amount).slice(0, 4).map(p => String(p.productNo));
+    const lines = [];
+    topSkus.forEach(pno => {
+      const p = pickClarityPage(pageStats.byUrl, v => v.url.includes(`product_no=${pno}`) || v.url.includes(`/surl/p/${pno}`));
+      if (p && p.sessions >= 5) {
+        const label = PRODUCT_NAME[pno] || `상품 #${pno}`;
+        lines.push(`  ${label} (#${pno}): 스크롤 ${(p.scroll || 0).toFixed(0)}%·뒤로 ${(p.quick || 0).toFixed(0)}% (${p.sessions}세션)`);
+      }
+    });
+    if (lines.length) productPageSection = `\n\n📜 <b>매출 SKU 페이지 행동</b>\n${lines.join('\n')}`;
+  }
+
   // 단톡방 메시지 — 송마망봇과 중복되는 섹션(매출·유입경로·VOC·재입고·광고URL)은 제거.
-  // 송마망봇이 매일 통합 발송하므로 은우봇은 CX 고유 차원(사이트행동·리텐션·상품믹스·CX판단)만.
+  // 송마망봇이 매일 통합 발송하므로 은우봇은 CX 고유 차원(사이트행동·결제흐름·상품페이지·리텐션·상품믹스·CX판단)만.
   const msg = `🔎 <b>CX 일간</b> · ${display}
 ━━━━━━━━━━━━━━━━━
 🚦 <b>사이트</b>
-${healthSection}
+${healthSection}${checkoutSection}${productPageSection}
 
 🔁 <b>리텐션</b> (Cafe24 raw)
 ${retentionSection}
@@ -1879,7 +1931,7 @@ module.exports = {
   getGA4Daily,
   getGA4Slices,
   getClarityData,
-  getClarityFrictionPages,
+  getClarityPageStats,
   getKkulDongYiSchedule,
   getMemos,
   getCXManagerAnalysis,
