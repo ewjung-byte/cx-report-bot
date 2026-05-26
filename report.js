@@ -1080,6 +1080,7 @@ async function getClarityData() {
       quickbackPct: get('QuickbackClick')?.information[0]?.sessionsWithMetricPercentage || 0,
       scriptErrorPct: get('ScriptErrorCount')?.information[0]?.sessionsWithMetricPercentage || 0,
       deadClickPct: get('DeadClickCount')?.information[0]?.sessionsWithMetricPercentage || 0,
+      rageClickPct: get('RageClickCount')?.information[0]?.sessionsWithMetricPercentage || 0,
       scrollDepth: get('ScrollDepth')?.information[0]?.averageScrollDepth || 0,
       activeTimeSec: parseInt(get('EngagementTime')?.information[0]?.activeTime || 0),
       instagramPct: parseFloat(instagramPct),
@@ -1127,11 +1128,17 @@ async function getClaudeAnalysis(mode, data) {
 송마망 회의록 컨텍스트는 인식만 하고 메시지에 출력 X. 단, 신호 판단할 때 "오늘 회사 분위기·진행중인 일"을 알고 행동 제안에 반영해.
 
 [사이트 — Microsoft Clarity]
-- 세션 ${clarity?.totalSessions||'-'} / 스크립트에러 ${clarity?.scriptErrorPct?.toFixed(1)||'-'}% (정상 10↓) / 빠른뒤로 ${clarity?.quickbackPct?.toFixed(1)||'-'}% (정상 8↓)
-- 인스타 인앱 ${clarity?.instagramPct||'-'}% (80↑ 시 결제 마찰)
+- 세션 ${clarity?.totalSessions||'-'} / 스크립트에러 ${clarity?.scriptErrorPct?.toFixed(1)||'-'}% / 빠른뒤로 ${clarity?.quickbackPct?.toFixed(1)||'-'}%
+- 데드클릭 ${clarity?.deadClickPct?.toFixed(1)||'-'}% (정상 10↓) / 레이지클릭 ${clarity?.rageClickPct?.toFixed(2)||'-'}% (정상 2↓)
+- 인스타 인앱 ${clarity?.instagramPct||'-'}% (트래픽 비중. 50↑면 인앱 노이즈가 ScriptError 부풀림)
 - 체류 ${clarity?.activeTimeSec||'-'}초 / 스크롤 ${clarity?.scrollDepth?.toFixed(0)||'-'}%
 - 결제 페이지 ${clarity?.funnel?.checkout||0}세션 / 장바구니 ${clarity?.funnel?.cart||0}
 - (Clarity 한도 시) GA4 트래픽: ${trafficLine}
+
+[Clarity 해석 가이드 — 매우 중요. 노이즈는 🚨 X]
+- ScriptError와 Quickback은 인스타 인앱브라우저·픽셀·서드파티가 늘 뱉는 비차단 노이즈가 큼. 단독 수치만 보고 🚨 띄우지 마.
+- 진짜 사이트 막힘은 **데드클릭과 레이지클릭이 같이 임계 초과**할 때만. 둘 다 정상이면 ScriptError 50%·Quickback 15%여도 막힘 아님(노이즈).
+- 인스타 인앱 50%↑이면 ScriptError가 자연히 30~50% 범위 나옴(못 고치는 환경). 임계치 10% 기계적 적용 금지.
 
 [매출·주문 — Cafe24 실데이터 (네이버페이/톡 포함 100%)]
 - 매출 ${formatMoney(dailyOrders?.revenue||0)} / 주문 ${dailyOrders?.totalCount||0}건 (결제 ${dailyOrders?.paidCount||0} · 취소 ${dailyOrders?.canceledCount||0})
@@ -1142,10 +1149,10 @@ async function getClaudeAnalysis(mode, data) {
 - 장바구니 ${ga4Daily?.checkoutFunnel?.addToCart||0} → 결제진입 ${ga4Daily?.checkoutFunnel?.beginCheckout||0}(${ga4Daily?.checkoutFunnel?.cartToCheckoutPct??'-'}%)
 ※ GA4 '구매'는 네이버페이/톡 등 외부결제가 안 잡혀 실제보다 적음 → 구매·매출은 위 Cafe24 숫자만 신뢰. GA4는 장바구니→결제 이탈 신호로만 사용.
 
-[메타 광고 URL 검증 — P0]
-- ACTIVE ${adAudit?.total||'-'}개 중 정상 ${adAudit?.healthy||'-'}개 / 이상 ${adAudit?.broken?.length||0}개
-${adAudit?.broken?.length ? adAudit.broken.slice(0,3).map(a=>`- 🚨 ${a.name}: ${a.reason}`).join('\n') : '- 모두 정상'}
-※ 이상 1개라도 있으면 즉시 행동 신호. 어제 incident(23개 전부 공백URL)처럼 매출 정상이어도 JS에러 폭증 유발.
+[메타 광고 URL 검증]
+- ACTIVE ${adAudit?.total||'-'}개 중 정상 ${adAudit?.healthy||'-'}개 / 진짜 깨짐 ${adAudit?.broken?.length||0}개 / 비표준(작동 OK·UTM 없음) ${adAudit?.nonStandard?.length||0}개
+${adAudit?.broken?.length ? adAudit.broken.slice(0,3).map(a=>`- ${a.name}: ${a.reason}`).join('\n') : '- 모두 정상'}
+※ broken은 %20·공백·여러 URL 합침 같은 진짜 깨진 것만. broken이 3개 미만이거나 전체의 10% 미만이면 노이즈 수준이라 🚨 X (그냥 해당 광고만 미주에게 핸드오프 메모). nonStandard는 작동하는 표준 상품URL이라 🚨 절대 X(UTM 보강은 측정 갭, 별개 이슈).
 
 [리텐션 — Cafe24 raw 기준, OKR "재구매자 300명"]
 - 어제 주문 ${seg.totalOrders||0}건 / 매출 ${formatMoney(seg.totalAmt||0)}
@@ -1433,12 +1440,14 @@ async function dailyReport() {
     }
   }
 
-  // 🔗 광고 URL 검증 (P0: 깨진 광고 있으면 항상 표시)
+  // 🔗 광고 URL 검증 — broken ≥3 또는 전체의 10% 이상일 때만 🚨 노출 (1~2개 깨짐은 노이즈 수준이라 매일 헛경보 방지)
   let adAuditSection = '';
   if (adAudit) {
-    if (adAudit.broken.length > 0) {
+    const brokenN = adAudit.broken.length;
+    const significant = adAudit.total > 0 && (brokenN >= 3 || brokenN / adAudit.total > 0.1);
+    if (significant) {
       const names = adAudit.broken.slice(0, 3).map(a => a.name.slice(0, 20)).join(', ');
-      adAuditSection = `\n\n🚨 <b>광고 URL 이상</b> ${adAudit.broken.length}개/${adAudit.total}개\n${names}${adAudit.broken.length > 3 ? ` 외 ${adAudit.broken.length - 3}개` : ''}\n→ 메타 광고 매니저 URL 즉시 확인`;
+      adAuditSection = `\n\n🚨 <b>광고 URL 이상</b> ${brokenN}개/${adAudit.total}개\n${names}${brokenN > 3 ? ` 외 ${brokenN - 3}개` : ''}\n→ 메타 광고 매니저 URL 즉시 확인`;
     }
   }
 
