@@ -1189,20 +1189,36 @@ async function getDailyBaseline(daysBack = 7) {
   } catch (e) { return { baseline: {}, count: 0 }; }
 }
 
-// 꿀동이 공구 일정 (구글 캘린더에서 키워드 검색 — GAS 경유)
-async function getKkulDongYiSchedule() {
-  try {
-    const res = await postToAppsScript({ action: 'get_calendar_events', query: '꿀동이', daysAhead: 60, daysBack: 30 }, APPS_SCRIPT_URL);
-    if (!res || res.error || !res.events) return null;
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    // 현재 진행 또는 예정 이벤트 1개 선택 (가장 가까운 끝나는 날)
-    const upcoming = res.events
-      .map(e => ({ ...e, startD: new Date(e.start), endD: new Date(e.end) }))
-      .filter(e => e.endD >= today)
-      .sort((a, b) => a.endD - b.endD);
-    return upcoming[0] || null;
-  } catch (e) { return null; }
+// 공구·콜라보 일정 — 메모리 [[gongu-schedule]] 단일 진실 소스. 새 공구 들어오면 여기 갱신.
+const PROMO_SCHEDULE = [
+  { title: '꿀동이 공구 (바질 #87)',      productNo: '87', start: '2026-05-25', end: '2026-05-31' },
+  { title: '찬밥 공구 (바질 #51)',         productNo: '51', start: '2026-06-04', end: '2026-06-10' },
+  { title: '유나레시피 공구 (엘가팬 #60)', productNo: '60', start: '2026-06-11', end: '2026-06-14' },
+];
+
+// 활성·예정 공구 목록 (오늘 기준 진행 중 또는 30일 이내 시작 예정)
+function getActivePromos() {
+  const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+  const out = [];
+  PROMO_SCHEDULE.forEach(p => {
+    const startD = new Date(p.start + 'T00:00:00');
+    const endD = new Date(p.end + 'T00:00:00');
+    const dToStart = Math.ceil((startD - t0) / 86400000);
+    const dToEnd = Math.ceil((endD - t0) / 86400000);
+    if (dToEnd < 0) return; // 종료된 공구
+    if (dToStart > 30) return; // 30일 이상 미래 제외
+    let dDay;
+    if (dToStart > 0) dDay = `시작 D-${dToStart} (${p.start})`;
+    else if (dToEnd > 0) dDay = `종료 D-${dToEnd} (~${p.end})`;
+    else dDay = `오늘 종료 (${p.end})`;
+    out.push({ ...p, dToStart, dToEnd, dDay, active: dToStart <= 0 && dToEnd >= 0 });
+  });
+  // 활성 먼저, 그 다음 가까운 예정 순
+  return out.sort((a, b) => (b.active - a.active) || (a.dToStart - b.dToStart));
 }
+
+// 이전 GCal 호출 함수는 안 쓰지만 외부 export 호환 위해 빈 함수로 유지
+async function getKkulDongYiSchedule() { return null; }
 
 // Clarity URL별 페이지 데이터 (DeadClick + Quickback + ScrollDepth) — 1회 호출로 다 받음
 // 결제 흐름·상품 페이지·자동 마찰 진단 모두 이 한 번의 응답에서 분기
@@ -1247,7 +1263,7 @@ function pickClarityPage(byUrl, predicate) {
 
 // ── Claude 분석 ────────────────────────────────────────
 async function getClaudeAnalysis(mode, data) {
-  const { meta, cafe24, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit, baseline, baselineN, pageStats, memos } = data;
+  const { meta, cafe24, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit, baseline, baselineN, pageStats, memos, promos } = data;
   const f = clarity?.funnel;
 
   let prompt;
@@ -1365,6 +1381,9 @@ ${(() => {
   });
   return lines.length ? lines.join('\n') + '\n※ 위 폭증·폭락이 진짜 신호. 일상 노이즈와 구분해서 다뤄.' : '- 7일 평균 대비 큰 변화 없음 (정상 범위)';
 })()}
+
+[활성·예정 공구 일정 — 종료 D-3 이내면 대기열 #4(꿀동이 종료 시퀀스) 트리거 강함]
+${promos && promos.length ? promos.map(p => `- ${p.title}: ${p.dDay}${p.active ? ' [진행 중]' : ''}`).join('\n') : '- 진행/예정 공구 없음'}
 
 [Jung 현재 진행 중 메모 — CX 대기열 surface 결정 시 참고. 메모에 항목 키워드 들어있으면 그 항목 surface X]
 ${memos && memos.length ? memos.map(m => `- ${m.text}`).join('\n') : '- 없음'}
@@ -1593,8 +1612,8 @@ async function dailyReport() {
     fetchNegativeVOC(today),
     fetchSongmamansContext(),
     getClarityPageStats(1),
-    getKkulDongYiSchedule(),
   ]);
+  const promos = getActivePromos(); // 공구·콜라보 활성/예정 일정 (sync — 메모리에서 즉시 로드)
   // pageStats = { byUrl: { url: {dead, quick, scroll, sessions} }, friction: [...top1] }
   if (segments) segments = await enrichGuestSegmentsWithCRM(segments);
 
@@ -1606,7 +1625,7 @@ async function dailyReport() {
   const baselineRes = await getDailyBaseline(7);
   // Jung 진행 중 메모 fetch — Claude가 CX 개선 대기열 surface 결정 시 참고
   const memosForClaude = await getMemos();
-  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, dailyOrders, cafe24, segments, restock, voc, songmamans, adAudit, baseline: baselineRes.baseline, baselineN: baselineRes.count, pageStats, memos: memosForClaude });
+  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, dailyOrders, cafe24, segments, restock, voc, songmamans, adAudit, baseline: baselineRes.baseline, baselineN: baselineRes.count, pageStats, memos: memosForClaude, promos });
 
   // 🚦 사이트 (Clarity 우선, 한도 시 GA4 트래픽 채널 백업) + GA4 결제 퍼널 통합
   // 매출·유입경로는 송마망봇이 통합 발송하므로 여기선 행동·퍼널 신호만.
@@ -1662,17 +1681,10 @@ async function dailyReport() {
         const label = customNm ? `${customNm} (#${id})` : `${(p.name || '제품').replace(/^\[.*?\]\s*/, '')} (#${id})`;
         return `${label}: ${formatMoney(p.amount)}·${p.count}건`;
       });
-      // 공구 일정 (캘린더 권한 승인 후 자동 표시 — 권한 없으면 라인 생략)
+      // 공구 일정 (PROMO_SCHEDULE 메모리 단일 소스) — 활성·예정 모두 표시
       let scheduleLine = '';
-      if (kkulSchedule) {
-        const today0 = new Date(); today0.setHours(0, 0, 0, 0);
-        const endD = new Date(kkulSchedule.end); endD.setHours(0, 0, 0, 0);
-        const startD = new Date(kkulSchedule.start); startD.setHours(0, 0, 0, 0);
-        const dToEnd = Math.ceil((endD - today0) / 86400000);
-        const dToStart = Math.ceil((startD - today0) / 86400000);
-        if (dToStart > 0) scheduleLine = `📅 ${kkulSchedule.title} — 시작 D-${dToStart} (${kkulSchedule.start.slice(0, 10)} ~ ${kkulSchedule.end.slice(0, 10)})\n`;
-        else if (dToEnd > 0) scheduleLine = `📅 ${kkulSchedule.title} — 종료 D-${dToEnd} (~${kkulSchedule.end.slice(0, 10)})\n`;
-        else scheduleLine = `📅 ${kkulSchedule.title} — 오늘 종료\n`;
+      if (promos && promos.length) {
+        scheduleLine = promos.map(p => `📅 ${p.title} — ${p.dDay}`).join('\n') + '\n';
       }
       productSalesSection = `${scheduleLine}합계 ${formatMoney(topAmt)}\n${lines.join('\n')}`;
     }
