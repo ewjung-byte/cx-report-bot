@@ -502,7 +502,8 @@ var DAILY_SNAPSHOT_HEADERS = ['일자', '카페24매출', '카페24주문', '광
   '사이트_스크립트에러', '사이트_뒤로', '사이트_데드', '사이트_레이지', '사이트_인스타인앱',
   '결제_장바구니_데드', '결제_장바구니_뒤로', '결제_결제폼_데드', '결제_결제폼_뒤로', '결제_로그인_데드', '결제_로그인_뒤로',
   '제품87_스크롤', '제품87_뒤로', '제품83_스크롤', '제품83_뒤로', '제품84_스크롤', '제품84_뒤로', '제품27_스크롤', '제품27_뒤로',
-  '회원_신규', '회원_재방문', '게스트_신규', '게스트_반복', '광고URL_정상', '광고URL_깨짐'];
+  '회원_신규', '회원_재방문', '게스트_신규', '게스트_반복', '광고URL_정상', '광고URL_깨짐',
+  'LTV_회원수_365d', 'LTV_재구매율', 'LTV_상위10_점유', 'LTV_휴면_91_180d', 'LTV_신규_D30_retention'];
 
 function getDailySnapshotTab_() {
   var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
@@ -513,6 +514,15 @@ function getDailySnapshotTab_() {
     sh.getRange('A:A').setNumberFormat('@');
     sh.setFrozenRows(1);
     sh.getRange(1, 1, 1, DAILY_SNAPSHOT_HEADERS.length).setFontWeight('bold').setBackground('#1f2a44').setFontColor('#ffffff');
+    return sh;
+  }
+  // 기존 시트 — 신규 컬럼 자동 추가 (헤더 마이그레이션)
+  var lastCol = sh.getLastColumn();
+  var existing = lastCol > 0 ? sh.getRange(1, 1, 1, lastCol).getValues()[0].map(String) : [];
+  var toAdd = DAILY_SNAPSHOT_HEADERS.filter(function (h) { return existing.indexOf(h) === -1; });
+  if (toAdd.length) {
+    sh.getRange(1, lastCol + 1, 1, toAdd.length).setValues([toAdd])
+      .setFontWeight('bold').setBackground('#1f2a44').setFontColor('#ffffff');
   }
   return sh;
 }
@@ -521,11 +531,13 @@ function saveDailySnapshot_(contents) {
   var date = String(contents.date || '');
   if (!date) return { ok: false, error: 'no date' };
   var sh = getDailySnapshotTab_();
+  var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
   var data = sh.getDataRange().getValues();
   for (var i = data.length - 1; i >= 1; i--) {
     if (String(data[i][0]) === date) sh.deleteRow(i + 1);
   }
-  var row = DAILY_SNAPSHOT_HEADERS.map(function (h) {
+  var row = headers.map(function (h) {
+    if (h === '일자') return date;
     var v = contents[h]; return v !== undefined && v !== null ? v : '';
   });
   sh.appendRow(row);

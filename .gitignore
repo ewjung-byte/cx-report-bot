@@ -7,3 +7,5 @@ reminders.json
 *_oauth.json
 memo.json
 .env
+_ltv_*.json
+gas/.clasp.json

@@ -1133,7 +1133,7 @@ async function pushExternalOrdersToGA4(date) {
 }
 
 // 일별 스냅샷 — Before/After 측정 + 7일 이동평균 폭증 감지용
-function buildDailySnapshot(date, { clarity, dailyOrders, segments, meta, adAudit, pageStats }) {
+function buildDailySnapshot(date, { clarity, dailyOrders, segments, meta, adAudit, pageStats, ltv }) {
   const findP = (pno) => pickClarityPage(pageStats?.byUrl, v => v.url.includes(`product_no=${pno}`) || v.url.includes(`/surl/p/${pno}`));
   const findCO = (prefix) => pickClarityPage(pageStats?.byUrl, v => v.url.startsWith(prefix));
   const basket = findCO('/order/basket'), orderform = findCO('/order/orderform'), login = findCO('/member/login');
@@ -1174,6 +1174,11 @@ function buildDailySnapshot(date, { clarity, dailyOrders, segments, meta, adAudi
     게스트_반복: segments?.guest?.repeatCount || 0,
     광고URL_정상: adAudit?.healthy || 0,
     광고URL_깨짐: adAudit?.broken?.length || 0,
+    LTV_회원수_365d: ltv?.회원_총수_365d || 0,
+    LTV_재구매율: ltv?.회원_재구매율 || 0,
+    LTV_상위10_점유: ltv?.상위10_매출점유 || 0,
+    LTV_휴면_91_180d: ltv?.휴면_91_180d || 0,
+    LTV_신규_D30_retention: ltv?.신규_D30_retention || 0,
   };
 }
 
@@ -1187,6 +1192,65 @@ async function getDailyBaseline(daysBack = 7) {
     const res = await postToAppsScript({ action: 'get_daily_baseline', daysBack }, APPS_SCRIPT_URL);
     return res && res.ok ? { baseline: res.baseline || {}, count: res.count || 0 } : { baseline: {}, count: 0 };
   } catch (e) { return { baseline: {}, count: 0 }; }
+}
+
+// LTV 메트릭 — 365일 lookback 회원 단위 (cafe24 phone 마스킹으로 게스트 미측정, [[ltv-measurement-limits]])
+// 매일 적재. 신규 D+30 retention은 30일 전 신규의 30일 안 재구매율.
+async function calculateLTVMetrics(asOfDate) {
+  const end = asOfDate;
+  const start = new Date(new Date(end + 'T00:00:00Z').getTime() - 365 * 86400000).toISOString().slice(0, 10);
+  const orders = await fetchCafe24OrdersRange(start, end);
+  if (!orders.length) return null;
+
+  const byMember = {};
+  for (const o of orders) {
+    const mid = (o.member_id || '').trim();
+    if (!mid) continue;
+    if (!byMember[mid]) byMember[mid] = { orders: [], revenue: 0 };
+    byMember[mid].orders.push(o);
+    byMember[mid].revenue += Number(o.payment_amount || 0);
+  }
+  const list = Object.entries(byMember).map(([id, c]) => {
+    const dates = c.orders.map(o => String(o.order_date || '').slice(0,10)).filter(d => d).sort();
+    return { id, count: c.orders.length, revenue: c.revenue, first: dates[0] || '', last: dates[dates.length - 1] || '', dates };
+  });
+
+  const total = list.length;
+  if (!total) return null;
+  const sortedByRev = [...list].sort((a, b) => b.revenue - a.revenue);
+  const totalRev = list.reduce((a, c) => a + c.revenue, 0);
+  const top10Count = Math.ceil(total * 0.1);
+  const top10Rev = sortedByRev.slice(0, top10Count).reduce((a, c) => a + c.revenue, 0);
+
+  const repurchasers = list.filter(c => c.count >= 2).length;
+  const nowMs = new Date(end + 'T00:00:00Z').getTime();
+  const dormant91_180 = list.filter(c => {
+    if (!c.last) return false;
+    const ds = Math.floor((nowMs - new Date(c.last + 'T00:00:00Z').getTime()) / 86400000);
+    return ds >= 91 && ds <= 180;
+  }).length;
+
+  // 신규 D+30 retention — 30~60일 전 첫구매자 중 첫구매 후 30일 안 재구매한 비율
+  const thirty = new Date(nowMs - 30 * 86400000).toISOString().slice(0, 10);
+  const sixty = new Date(nowMs - 60 * 86400000).toISOString().slice(0, 10);
+  const d30Cohort = list.filter(c => c.first >= sixty && c.first < thirty);
+  const d30Retained = d30Cohort.filter(c => {
+    if (c.count < 2) return false;
+    const firstMs = new Date(c.first + 'T00:00:00Z').getTime();
+    const secondDate = c.dates[1];
+    if (!secondDate) return false;
+    const secondMs = new Date(secondDate + 'T00:00:00Z').getTime();
+    return (secondMs - firstMs) <= 30 * 86400000;
+  }).length;
+
+  return {
+    회원_총수_365d: total,
+    회원_재구매율: Number((repurchasers / total * 100).toFixed(2)),
+    상위10_매출점유: Number((top10Rev / totalRev * 100).toFixed(2)),
+    휴면_91_180d: dormant91_180,
+    신규_D30_retention: d30Cohort.length > 0 ? Number((d30Retained / d30Cohort.length * 100).toFixed(2)) : 0,
+    신규_D30_cohort_size: d30Cohort.length,
+  };
 }
 
 // 공구·콜라보 일정 — 메모리 [[gongu-schedule]] 단일 진실 소스. 새 공구 들어오면 여기 갱신.
@@ -1837,7 +1901,10 @@ ${productSalesSection}`;
 
   // 📊 일별 스냅샷 저장 (Before/After 측정 + 7일 이동평균 baseline용)
   try {
-    const snap = buildDailySnapshot(today, { clarity, dailyOrders, segments, meta: metaToday, adAudit, pageStats });
+    let ltv = null;
+    try { ltv = await calculateLTVMetrics(today); }
+    catch (e) { console.error('[LTV 계산] 실패:', e.message); }
+    const snap = buildDailySnapshot(today, { clarity, dailyOrders, segments, meta: metaToday, adAudit, pageStats, ltv });
     const res = await saveDailySnapshot(snap);
     console.log(`[일별 스냅샷] ${today} 저장 → ${res && res.ok ? 'OK' : JSON.stringify(res)}`);
   } catch (e) { console.error('[일별 스냅샷] 실패:', e.message); }
@@ -2088,6 +2155,7 @@ module.exports = {
   buildDailySnapshot,
   saveDailySnapshot,
   getDailyBaseline,
+  calculateLTVMetrics,
   pushExternalOrdersToGA4,
   getMemos,
   getCXManagerAnalysis,
