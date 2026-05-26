@@ -242,6 +242,13 @@ function doPost(e) {
     if (action === 'get_ux_pending') return jsonOut(getUXPending_());
     if (action === 'mark_ux_sent')   return jsonOut(markUXSent_(contents.date));
     if (action === 'mark_ux_skip')   return jsonOut(markUXSkip_(contents.date));
+    if (action === 'setup_cx_triggers') { setupCXTriggers(); return jsonOut({ ok: true }); }
+    if (action === 'get_ux_feedback') {
+      var p = PropertiesService.getScriptProperties();
+      var fb = p.getProperty('UX_REVISE_FEEDBACK') || '';
+      if (fb) p.deleteProperty('UX_REVISE_FEEDBACK');
+      return jsonOut({ ok: true, feedback: fb });
+    }
     return jsonOut({ok: false, error: 'unknown action'});
   } catch(err) {
     return jsonOut({ok: false, error: err.message});
@@ -287,10 +294,41 @@ function handleEunwooDM(msg) {
   if (text === '/작업목록') { listActiveWorks(chatId); return; }
   if ((m = text.match(/^\/메모\s+([\s\S]+)/))) { addMemo(m[1].trim(), chatId, date); return; }
   if (text === '/메모목록') { listMemos(chatId); return; }
+  if (text === '/UX 발송' || text === '/UX발송') { handleUXSend(chatId); return; }
+  if (text === '/UX 보류' || text === '/UX보류') { handleUXSkip(chatId, date); return; }
+  if ((m = text.match(/^\/UX\s*수정\s+([\s\S]+)/))) { handleUXRevise(m[1].trim(), chatId); return; }
   if (text === '/도움' || text === '/help') {
-    sendTGMessage(chatId, '<b>은우봇 명령어</b>\n/작업 [내용] — 새 작업 등록\n/작업목록 — 진행 중 작업 보기\n/메모 [내용] — 메모 추가 (매일 아침 DM에 표시)\n/메모목록 — 메모 전체 보기\n버튼으로 완료/중단/보류 처리');
+    sendTGMessage(chatId, '<b>은우봇 명령어</b>\n/작업 [내용] — 새 작업 등록\n/작업목록 — 진행 중 작업 보기\n/메모 [내용] — 메모 추가 (매일 아침 DM에 표시)\n/메모목록 — 메모 전체 보기\n/UX 발송 — 대기 중 UX 초안을 단톡방에 보냄\n/UX 보류 — 이번 회차 UX 초안 스킵\n/UX 수정 [요청] — UX 초안 다시 생성\n버튼으로 완료/중단/보류 처리');
     return;
   }
+}
+
+// ===== UX 명령어 핸들러 =====
+function handleUXSend(chatId) {
+  var p = getUXPending_();
+  if (!p.ok || !p.draft) { sendTGMessage(chatId, '⚠️ 대기 중 UX 초안 없음.'); return; }
+  var code = triggerUXSend();
+  if (code === 204) sendTGMessage(chatId, '📤 단톡방 발송 중... (' + p.draft.technique + ')');
+  else sendTGMessage(chatId, '⚠️ workflow trigger 실패. 코드 ' + code);
+}
+function handleUXSkip(chatId, date) {
+  // 가장 최근 draft 찾아서 스킵
+  var p = getUXPending_();
+  if (!p.ok || !p.draft) { sendTGMessage(chatId, '⚠️ 대기 중 UX 초안 없음.'); return; }
+  var r = markUXSkip_(p.draft.date);
+  if (r.ok) sendTGMessage(chatId, '✅ UX 초안 스킵 (' + p.draft.date + ' ' + p.draft.technique + ')');
+  else sendTGMessage(chatId, '⚠️ 스킵 실패: ' + (r.error || 'unknown'));
+}
+function handleUXRevise(feedback, chatId) {
+  var p = getUXPending_();
+  if (!p.ok || !p.draft) { sendTGMessage(chatId, '⚠️ 수정할 UX 초안 없음.'); return; }
+  // feedback을 PropertiesService에 임시 저장 → workflow에서 read
+  PropertiesService.getScriptProperties().setProperty('UX_REVISE_FEEDBACK', feedback);
+  // 기존 draft 스킵 처리 (재생성을 위해)
+  markUXSkip_(p.draft.date);
+  var code = triggerCXWorkflow_('daily-report.yml', 'ux_draft');
+  if (code === 204) sendTGMessage(chatId, '🔁 수정 요청 반영 중... feedback: ' + feedback.slice(0, 60));
+  else sendTGMessage(chatId, '⚠️ workflow trigger 실패. 코드 ' + code);
 }
 
 function handleCallbackQuery(query) {

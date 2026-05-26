@@ -1266,10 +1266,11 @@ const UX_CATEGORIES = [
   '검색·발견성 (search-as-you-type·filter UX·zero result design)',
 ];
 
-async function generateUXInsight(usedTechniques) {
+async function generateUXInsight(usedTechniques, feedback) {
   if (!CLAUDE_API_KEY) return null;
   const usedList = (usedTechniques || []).slice(-20).map(t => `- ${t.기법명} (${t.카테고리})`).join('\n');
-  const prompt = `너는 이태리정미소(한국 프리미엄 식료품 D2C) CX 매니저야. UI/UX 개선 사례를 매주 월·목 2회 단톡방에 공유한다.
+  const feedbackBlock = feedback ? `\n\n[사용자 수정 요청 — 이번 회차 반드시 반영]\n${feedback}\n` : '';
+  const prompt = `너는 이태리정미소(한국 프리미엄 식료품 D2C) CX 매니저야. UI/UX 개선 사례를 매주 월·목 2회 단톡방에 공유한다.${feedbackBlock}
 
 이번 보고서 1편을 작성해. 송마망봇 화요일 마케팅/심리학 기법 보고와 같은 형식 — 단 카테고리는 UI/UX 인터페이스 패턴 한정 (가격심리학·앵커링 X).
 
@@ -1357,12 +1358,22 @@ async function uxDraftFlow() {
     if (r && r.ok) history = r.history || [];
   } catch (e) { console.error('[UX history] 실패:', e.message); }
 
-  const insight = await generateUXInsight(history);
+  // 사용자 /UX 수정 feedback fetch + 자동 clear
+  let feedback = '';
+  try {
+    const r = await postToAppsScript({ action: 'get_ux_feedback' }, APPS_SCRIPT_URL);
+    if (r && r.ok && r.feedback) feedback = r.feedback;
+  } catch (e) { console.error('[UX feedback] 실패:', e.message); }
+
+  const insight = await generateUXInsight(history, feedback);
   if (!insight) { console.error('UX 초안 생성 실패 — 종료'); return; }
 
-  // 제목 추출 (첫 줄에서 기법명)
-  const firstLine = insight.split('\n').find(l => l.trim()) || '(제목 추출 실패)';
-  const technique = firstLine.replace(/^\[제목\]\s*/, '').trim();
+  // 제목 추출 (robust — [제목] 패턴 우선, 못 찾으면 첫 줄)
+  const titleMatch = insight.match(/\[제목\]\s*(.+)/);
+  const technique = (titleMatch
+    ? titleMatch[1]
+    : (insight.split('\n').find(l => l.trim()) || '제목 추출 실패')
+  ).trim().slice(0, 120);
 
   // 시트 저장 (상태: draft)
   await postToAppsScript({
@@ -1372,9 +1383,10 @@ async function uxDraftFlow() {
     status: 'draft',
   }, APPS_SCRIPT_URL);
 
-  // 개인 DM 발송
-  const dmMsg = `📚 <b>UX 사례 초안 (${date} ${dowKR})</b>\n\n${escapeHtml(insight)}\n\n━━━━━━━━━━\n검토 후 명령어로 응답:\n/UX 발송 → 단톡방에 보냄\n/UX 보류 → 이번 회차 스킵\n/UX 수정 [요청] → 다시 생성`;
-  await sendTelegram(dmMsg);
+  // 개인 DM 발송 (긴 본문 chunk)
+  const header = `📚 <b>UX 사례 초안 (${date} ${dowKR})</b>\n\n`;
+  const footer = `\n\n━━━━━━━━━━\n검토 후 명령어로 응답:\n/UX 발송 → 단톡방에 보냄\n/UX 보류 → 이번 회차 스킵\n/UX 수정 [요청] → 다시 생성`;
+  await sendTelegramChunked(header + escapeHtml(insight) + footer, false);
   console.log(`[UX draft] ${date} ${dowKR} ${technique} → 개인 DM + 시트 저장`);
 }
 
@@ -1388,8 +1400,8 @@ async function uxSendFlow() {
 
   if (!draft) { console.log('대기 중 UX 초안 없음'); return; }
 
-  const groupMsg = `📚 <b>UX 사례 — ${draft.technique}</b>\n\n${escapeHtml(draft.body)}`;
-  const r = await sendTelegramGroup(groupMsg);
+  const groupMsg = `📚 <b>UX 사례 — ${escapeHtml(draft.technique)}</b>\n\n${escapeHtml(draft.body)}`;
+  const r = await sendTelegramChunked(groupMsg, true);
   if (r && r.ok) {
     await postToAppsScript({ action: 'mark_ux_sent', date: draft.date }, APPS_SCRIPT_URL);
     console.log(`[UX send] ${draft.date} ${draft.technique} → 단톡방 발송 완료`);
@@ -1796,11 +1808,32 @@ function buildDataHealthWarnings(d) {
 }
 
 // ── 텔레그램 발송 ──────────────────────────────────────
+function escapeHtml(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 function sendTelegram(text) {
   return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, { chat_id: TG_CHAT_ID, text, parse_mode: 'HTML' });
 }
 function sendTelegramGroup(text) {
   return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, { chat_id: GROUP_CHAT_ID, text, parse_mode: 'HTML' });
+}
+// 4096자 제한 — 줄 단위로 chunk 발송. 메시지 순서 보장 위해 await 직렬.
+async function sendTelegramChunked(text, group) {
+  const send = group ? sendTelegramGroup : sendTelegram;
+  const MAX = 3800; // 안전 마진
+  if (text.length <= MAX) return await send(text);
+  const lines = text.split('\n');
+  let buf = '', last = null;
+  for (const line of lines) {
+    if ((buf + '\n' + line).length > MAX && buf) {
+      last = await send(buf);
+      buf = line;
+    } else {
+      buf = buf ? buf + '\n' + line : line;
+    }
+  }
+  if (buf) last = await send(buf);
+  return last;
 }
 
 // ── 일간 리포트 ────────────────────────────────────────
