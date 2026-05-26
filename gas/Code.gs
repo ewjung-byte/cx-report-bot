@@ -209,6 +209,9 @@ function doPost(e) {
     if (action === 'save_weekly') {
       return jsonOut(saveWeeklySnapshot_(contents));
     }
+    if (action === 'format_weekly') {
+      return jsonOut(formatWeeklyTabs_());
+    }
     return jsonOut({ok: false, error: 'unknown action'});
   } catch(err) {
     return jsonOut({ok: false, error: err.message});
@@ -404,7 +407,54 @@ function saveWeeklySnapshot_(contents) {
     }
     counts[key] = rows.length;
   });
+  formatWeeklyTabs_();
   return { ok: true, week: week, counts: counts };
+}
+
+// 숫자가 한눈에 들어오게 서식 적용 (콤마·원·%·ROAS 색상·헤더·밴딩)
+var WEEKLY_FORMATS = {
+  '광고비':'#,##0"원"', '메타픽셀매출':'#,##0"원"', '카페24매출':'#,##0"원"', '매출':'#,##0"원"', 'AOV':'#,##0"원"',
+  '메타ROAS':'#,##0"%"', '블렌디드ROAS':'#,##0"%"', 'ROAS':'#,##0"%"',
+  '카페24주문':'#,##0"건"', '구매':'#,##0"건"', '세션':'#,##0', '전환':'#,##0',
+  '전환율':'0.00"%"', 'CTR':'0.00"%"'
+};
+
+function formatWeeklyTabs_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var done = [];
+  Object.keys(WEEKLY_TABS).forEach(function(key) {
+    var cfg = WEEKLY_TABS[key];
+    var sh = ss.getSheetByName(cfg.name);
+    if (!sh || sh.getLastRow() < 2) return;
+    var lastRow = sh.getLastRow();
+    var nCols = cfg.headers.length;
+    // 헤더 스타일 + 고정
+    sh.getRange(1, 1, 1, nCols).setFontWeight('bold').setBackground('#1f2a44').setFontColor('#ffffff');
+    sh.setFrozenRows(1);
+    // 컬럼별 숫자서식
+    cfg.headers.forEach(function(h, idx) {
+      var fmt = WEEKLY_FORMATS[h];
+      if (fmt) sh.getRange(2, idx + 1, lastRow - 1, 1).setNumberFormat(fmt);
+    });
+    // 데이터행 교차 배경(가독성)
+    sh.getBandings().forEach(function(b) { b.remove(); });
+    sh.getRange(2, 1, lastRow - 1, nCols).applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
+    // ROAS 컬럼 색상 스케일 (200 빨강 ~ 350 노랑 ~ 450 초록)
+    var rules = [];
+    cfg.headers.forEach(function(h, idx) {
+      if (h.indexOf('ROAS') >= 0) {
+        rules.push(SpreadsheetApp.newConditionalFormatRule()
+          .setGradientMinpointWithValue('#f4b8b8', SpreadsheetApp.InterpolationType.NUMBER, '200')
+          .setGradientMidpointWithValue('#ffe699', SpreadsheetApp.InterpolationType.NUMBER, '350')
+          .setGradientMaxpointWithValue('#b7e1cd', SpreadsheetApp.InterpolationType.NUMBER, '450')
+          .setRanges([sh.getRange(2, idx + 1, lastRow - 1, 1)]).build());
+      }
+    });
+    sh.setConditionalFormatRules(rules);
+    sh.autoResizeColumns(1, nCols);
+    done.push(cfg.name);
+  });
+  return { ok: true, formatted: done };
 }
 
 // ===== 은우 메모 (개인 DM, 매일 아침 리포트에 노출) =====
