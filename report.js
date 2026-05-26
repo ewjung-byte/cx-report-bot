@@ -1574,14 +1574,18 @@ async function buildWeeklySnapshot(weekStart, weekEnd, label) {
   ]);
   // cafe24 토큰 없으면 sales/count=0 → 실제 0과 구분 위해 blank 처리(주간 0매출은 비현실적)
   const hasCafe24 = cafe24 && (cafe24.sales > 0 || cafe24.count > 0);
-  const blended = hasCafe24 && meta.spend > 0 ? Math.round((cafe24.sales / meta.spend) * 100) : '';
+  // 실제ROAS = 카페24 실매출 ÷ 광고비 (메타 자체 ROAS는 과대측정 경향이라 실매출 기준이 진짜)
+  const realRoas = hasCafe24 && meta.spend > 0 ? Math.round((cafe24.sales / meta.spend) * 100) : '';
+  // 메타주장비중 = 메타픽셀매출 ÷ 카페24 실매출 (높을수록 메타가 전체매출을 과하게 자기공으로 주장 = 과대측정)
+  const metaShare = hasCafe24 && cafe24.sales > 0 ? Math.round((meta.revenue / cafe24.sales) * 100) : '';
 
   const summary = [{
     주차: label,
     광고비: Math.round(meta.spend),
     메타픽셀매출: Math.round(meta.revenue),
     메타ROAS: parseInt(meta.roas) || 0,
-    블렌디드ROAS: blended,
+    실제ROAS: realRoas,
+    메타주장비중: metaShare,
     카페24매출: hasCafe24 ? cafe24.sales : '',
     카페24주문: hasCafe24 ? cafe24.count : '',
     AOV: hasCafe24 && cafe24.count > 0 ? Math.round(cafe24.sales / cafe24.count) : '',

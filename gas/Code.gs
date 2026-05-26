@@ -367,7 +367,7 @@ function getActivitiesData(hours) {
 
 // ===== 주간 스냅샷 (Looker Studio 다차원 보고서) =====
 var WEEKLY_TABS = {
-  summary:  { name: '주간_요약',   headers: ['주차','광고비','메타픽셀매출','메타ROAS','블렌디드ROAS','카페24매출','카페24주문','AOV'] },
+  summary:  { name: '주간_요약',   headers: ['주차','광고비','메타픽셀매출','메타ROAS','실제ROAS','메타주장비중','카페24매출','카페24주문','AOV'] },
   channel:  { name: '주간_채널',   headers: ['주차','채널','세션','전환','전환율'] },
   customer: { name: '주간_고객',   headers: ['주차','구분','세션','전환','전환율'] },
   campaign: { name: '주간_캠페인', headers: ['주차','캠페인','광고비','매출','ROAS','CTR','구매'] }
@@ -382,6 +382,11 @@ function getWeeklyTab_(key) {
     sh.appendRow(cfg.headers);
     sh.getRange('A:A').setNumberFormat('@'); // 주차는 텍스트(날짜 자동변환 방지)
     sh.setFrozenRows(1);
+  } else {
+    // 헤더 동기화(스키마 변경 시 자동 갱신)
+    var cur = sh.getRange(1, 1, 1, cfg.headers.length).getValues()[0];
+    var diff = cfg.headers.some(function(h, i) { return String(cur[i]) !== h; });
+    if (diff) sh.getRange(1, 1, 1, cfg.headers.length).setValues([cfg.headers]);
   }
   return { sh: sh, headers: cfg.headers };
 }
@@ -414,7 +419,7 @@ function saveWeeklySnapshot_(contents) {
 // 숫자가 한눈에 들어오게 서식 적용 (콤마·원·%·ROAS 색상·헤더·밴딩)
 var WEEKLY_FORMATS = {
   '광고비':'#,##0"원"', '메타픽셀매출':'#,##0"원"', '카페24매출':'#,##0"원"', '매출':'#,##0"원"', 'AOV':'#,##0"원"',
-  '메타ROAS':'#,##0"%"', '블렌디드ROAS':'#,##0"%"', 'ROAS':'#,##0"%"',
+  '메타ROAS':'#,##0"%"', '실제ROAS':'#,##0"%"', 'ROAS':'#,##0"%"', '메타주장비중':'#,##0"%"',
   '카페24주문':'#,##0"건"', '구매':'#,##0"건"', '세션':'#,##0', '전환':'#,##0',
   '전환율':'0.00"%"', 'CTR':'0.00"%"'
 };
@@ -442,12 +447,21 @@ function formatWeeklyTabs_() {
     // ROAS 컬럼 색상 스케일 (200 빨강 ~ 350 노랑 ~ 450 초록)
     var rules = [];
     cfg.headers.forEach(function(h, idx) {
+      var rng = sh.getRange(2, idx + 1, lastRow - 1, 1);
       if (h.indexOf('ROAS') >= 0) {
+        // ROAS: 높을수록 초록
         rules.push(SpreadsheetApp.newConditionalFormatRule()
           .setGradientMinpointWithValue('#f4b8b8', SpreadsheetApp.InterpolationType.NUMBER, '200')
           .setGradientMidpointWithValue('#ffe699', SpreadsheetApp.InterpolationType.NUMBER, '350')
           .setGradientMaxpointWithValue('#b7e1cd', SpreadsheetApp.InterpolationType.NUMBER, '450')
-          .setRanges([sh.getRange(2, idx + 1, lastRow - 1, 1)]).build());
+          .setRanges([rng]).build());
+      } else if (h === '메타주장비중') {
+        // 메타 과대측정: 높을수록 빨강(주의)
+        rules.push(SpreadsheetApp.newConditionalFormatRule()
+          .setGradientMinpointWithValue('#b7e1cd', SpreadsheetApp.InterpolationType.NUMBER, '60')
+          .setGradientMidpointWithValue('#ffe699', SpreadsheetApp.InterpolationType.NUMBER, '85')
+          .setGradientMaxpointWithValue('#f4b8b8', SpreadsheetApp.InterpolationType.NUMBER, '110')
+          .setRanges([rng]).build());
       }
     });
     sh.setConditionalFormatRules(rules);
