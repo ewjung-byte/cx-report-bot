@@ -1247,7 +1247,7 @@ function pickClarityPage(byUrl, predicate) {
 
 // ── Claude 분석 ────────────────────────────────────────
 async function getClaudeAnalysis(mode, data) {
-  const { meta, cafe24, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit, baseline, baselineN, pageStats } = data;
+  const { meta, cafe24, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit, baseline, baselineN, pageStats, memos } = data;
   const f = clarity?.funnel;
 
   let prompt;
@@ -1365,6 +1365,20 @@ ${(() => {
   });
   return lines.length ? lines.join('\n') + '\n※ 위 폭증·폭락이 진짜 신호. 일상 노이즈와 구분해서 다뤄.' : '- 7일 평균 대비 큰 변화 없음 (정상 범위)';
 })()}
+
+[Jung 현재 진행 중 메모 — CX 대기열 surface 결정 시 참고. 메모에 항목 키워드 들어있으면 그 항목 surface X]
+${memos && memos.length ? memos.map(m => `- ${m.text}`).join('\n') : '- 없음'}
+
+[CX 개선 대기열 — Jung 영역, 진행 시 매출 직결. 어제 데이터와 맞물리는 1개만 surface]
+1. **게스트→회원 후크** — 주문완료 페이지에 즉시 5천원 쿠폰 + 카카오 채널 친구추가. 사례 정육각·Graza. 예상 +50만원/월. 트리거: 게스트 비중 50%↑ 또는 재방문률 5%↓
+2. **장바구니 페이지 데드클릭 진단·수정** — Clarity 세션 5개 보고 막힘 위치 찾기. 사례 Stripe Checkout·Patagonia. 예상 +12~16만원/일. 트리거: /order/basket 데드 10%↑ 또는 뒤로 50%↑
+3. **인스타 인앱→사파리 fallback 배너** — 인앱 감지 시 상단 1줄 "더 빠른 결제: 사파리에서 열기". 사례 Liquid Death·Allbirds. 예상 +5만원/일. 트리거: 인스타 인앱 50%↑
+4. **꿀동이 공구 종료 시퀀스** — 구매자 → 정가 SKU 5% off 솔라피 시퀀스. 사례 Olipop. 예상 +90만원/일 (종료 후). 트리거: 꿀동이 매출 비중 50%↑ 또는 공구 종료 D-7 이내
+5. **상품 페이지 사회적 증거+퍼스트뷰** — 위 fold에 "320명 구매·평균 4.6점" + 컨셉샷. 사례 Notion·마뗑킴. 예상 +8만원/일. 트리거: 상품페이지 스크롤 50%↓ 또는 뒤로 30%↑
+
+※ 위 5개 중 어제 신호와 직결되는 것이 있으면 액션을 **"[항목명] 빌드 시작 — [구체 위치/단계]"** 형태로 그날 1순위 신호의 액션으로 surface. 직결 안 되면 surface X.
+※ 진행 중·완료 표시: 사용자가 '/메모 게스트 후크 진행 중' 같이 메모 등록하면 그 항목은 매일 다시 surface 안 됨 (메모 본문에 항목명 들어있는지로 판단).
+※ 송마망봇 영역(공구 결정·SKU 운영·메타광고 직접수정·솔라피 발송·통합매출) 신호는 단독 🚨 X. 우리 봇은 Jung이 직접 자사몰에서 손댈 수 있는 액션만 줘.
 
 [송마망 회의록 — 인식만, 출력 X]
 ${songCtx}
@@ -1590,7 +1604,9 @@ async function dailyReport() {
   const metaToday = await getMetaStats(today, today);
   // 직전 7일 baseline 가져와서 Claude 프롬프트 컨텍스트로 주입 (자동 폭증 감지)
   const baselineRes = await getDailyBaseline(7);
-  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, dailyOrders, cafe24, segments, restock, voc, songmamans, adAudit, baseline: baselineRes.baseline, baselineN: baselineRes.count, pageStats });
+  // Jung 진행 중 메모 fetch — Claude가 CX 개선 대기열 surface 결정 시 참고
+  const memosForClaude = await getMemos();
+  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, dailyOrders, cafe24, segments, restock, voc, songmamans, adAudit, baseline: baselineRes.baseline, baselineN: baselineRes.count, pageStats, memos: memosForClaude });
 
   // 🚦 사이트 (Clarity 우선, 한도 시 GA4 트래픽 채널 백업) + GA4 결제 퍼널 통합
   // 매출·유입경로는 송마망봇이 통합 발송하므로 여기선 행동·퍼널 신호만.
