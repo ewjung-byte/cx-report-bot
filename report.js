@@ -805,6 +805,52 @@ async function getMetaStats(since, until) {
   } catch(e) { return { spend:0, impressions:0, reach:0, frequency:0, clicks:0, ctr:0, cpm:0, purchases:0, revenue:0, roas:0, landing:0, viewContent:0, addToCart:0, checkout:0 }; }
 }
 
+// 캠페인별 메타 성과 (주간 스냅샷용) — 메타 자체 추적이라 UTM 불필요·정확
+async function getMetaByCampaign(since, until) {
+  try {
+    const fields = 'campaign_name,spend,ctr,actions,action_values';
+    const url = `https://graph.facebook.com/v19.0/${META_AD_ACCOUNT}/insights?level=campaign&fields=${fields}&time_range={"since":"${since}","until":"${until}"}&limit=200&access_token=${META_TOKEN}`;
+    const data = await fetchJson(url);
+    if (!data.data?.length) return [];
+    return data.data.map(d => {
+      const spend = parseFloat(d.spend || 0);
+      const purchases = parseInt((d.actions || []).find(a => a.action_type === 'purchase')?.value || 0);
+      const revenue = parseFloat((d.action_values || []).find(a => a.action_type === 'purchase')?.value || 0);
+      return {
+        campaign: (d.campaign_name || '(이름없음)').slice(0, 60),
+        spend: Math.round(spend),
+        revenue: Math.round(revenue),
+        roas: spend > 0 ? Math.round((revenue / spend) * 100) : 0,
+        ctr: parseFloat((d.ctr || 0)).toFixed(2),
+        purchases,
+      };
+    }).sort((a, b) => b.spend - a.spend);
+  } catch (e) { console.error('[캠페인별 메타 오류]', e.message); return []; }
+}
+
+// GA4 채널·신규재방문 슬라이스 (임의 주간 범위, 백필 가능)
+async function getGA4Slices(since, until) {
+  try {
+    const token = await getGA4Token();
+    const dr = { startDate: since, endDate: until };
+    const [chRes, utRes] = await Promise.all([
+      ga4Fetch(token, { dateRanges:[dr], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'sessionDefaultChannelGroup'}] }),
+      ga4Fetch(token, { dateRanges:[dr], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'newVsReturning'}] }),
+    ]);
+    const channels = (chRes.rows || []).map(r => ({
+      channel: r.dimensionValues[0].value || '(미지정)',
+      sessions: parseInt(r.metricValues[0].value),
+      conv: parseInt(r.metricValues[1].value),
+    })).sort((a, b) => b.sessions - a.sessions);
+    const userType = (utRes.rows || []).map(r => ({
+      type: r.dimensionValues[0].value,
+      sessions: parseInt(r.metricValues[0].value),
+      conv: parseInt(r.metricValues[1].value),
+    }));
+    return { channels, userType };
+  } catch (e) { console.error('[GA4 슬라이스 오류]', e.message); return { channels: [], userType: [] }; }
+}
+
 async function getMetaLandingPage() {
   try {
     const url = `https://graph.facebook.com/v19.0/${META_AD_ACCOUNT}/ads?fields=creative&filtering=[{"field":"effective_status","operator":"IN","value":["ACTIVE"]}]&limit=1&access_token=${META_TOKEN}`;
@@ -1498,6 +1544,80 @@ ${sideSkuSection}${adAuditSection}${restockSection}${vocSection}`;
   }
 }
 
+// ── 주간 스냅샷 (Looker Studio 다차원 보고서용) ──────────
+const SNAP_CH_MAP = {
+  'Paid Social':'유료SNS(메타)', 'Organic Social':'자연SNS', 'Direct':'직접유입',
+  'Organic Search':'검색', 'Paid Search':'검색광고', 'Referral':'리퍼럴',
+  'Email':'이메일', 'Display':'디스플레이', 'Paid Other':'기타광고',
+  'Organic Shopping':'쇼핑검색', 'Organic Video':'자연동영상', 'Cross-network':'크로스네트워크',
+  'Unassigned':'미지정', '(other)':'기타', '(미지정)':'미지정'
+};
+const snapCh = (ch) => SNAP_CH_MAP[ch] || ch;
+
+// 월~일 주간 범위. weeksAgo=1 → 지난주(완전한 주). 라벨=그 주 월요일(YYYY-MM-DD).
+function weekRange(weeksAgo) {
+  const now = new Date();
+  const day = now.getDay();                  // 0=일 ~ 6=토
+  const mondayOffset = (day === 0 ? 6 : day - 1);
+  const start = new Date(now); start.setDate(now.getDate() - mondayOffset - weeksAgo * 7);
+  const end = new Date(start); end.setDate(start.getDate() + 6);
+  const fmt = (d) => d.toISOString().split('T')[0];
+  return { start: fmt(start), end: fmt(end), label: fmt(start) };
+}
+
+async function buildWeeklySnapshot(weekStart, weekEnd, label) {
+  const [meta, cafe24, ga4, campaigns] = await Promise.all([
+    getMetaStats(weekStart, weekEnd),
+    getCafe24Sales(weekStart, weekEnd),
+    getGA4Slices(weekStart, weekEnd),
+    getMetaByCampaign(weekStart, weekEnd),
+  ]);
+  // cafe24 토큰 없으면 sales/count=0 → 실제 0과 구분 위해 blank 처리(주간 0매출은 비현실적)
+  const hasCafe24 = cafe24 && (cafe24.sales > 0 || cafe24.count > 0);
+  const blended = hasCafe24 && meta.spend > 0 ? Math.round((cafe24.sales / meta.spend) * 100) : '';
+
+  const summary = [{
+    주차: label,
+    광고비: Math.round(meta.spend),
+    메타픽셀매출: Math.round(meta.revenue),
+    메타ROAS: parseInt(meta.roas) || 0,
+    블렌디드ROAS: blended,
+    카페24매출: hasCafe24 ? cafe24.sales : '',
+    카페24주문: hasCafe24 ? cafe24.count : '',
+    AOV: hasCafe24 && cafe24.count > 0 ? Math.round(cafe24.sales / cafe24.count) : '',
+  }];
+  const channel = ga4.channels.map(c => ({
+    주차: label, 채널: snapCh(c.channel), 세션: c.sessions, 전환: c.conv,
+    전환율: c.sessions > 0 ? +((c.conv / c.sessions) * 100).toFixed(2) : 0,
+  }));
+  const customer = ga4.userType.map(u => ({
+    주차: label, 구분: u.type === 'new' ? '신규' : u.type === 'returning' ? '재방문' : '미상',
+    세션: u.sessions, 전환: u.conv,
+    전환율: u.sessions > 0 ? +((u.conv / u.sessions) * 100).toFixed(2) : 0,
+  }));
+  const campaign = campaigns.map(c => ({
+    주차: label, 캠페인: c.campaign, 광고비: c.spend, 매출: c.revenue,
+    ROAS: c.roas, CTR: parseFloat(c.ctr) || 0, 구매: c.purchases,
+  }));
+  return { week: label, summary, channel, customer, campaign };
+}
+
+async function saveWeeklySnapshot(weekStart, weekEnd, label) {
+  const snap = await buildWeeklySnapshot(weekStart, weekEnd, label);
+  const res = await postToAppsScript({ action: 'save_weekly', ...snap }, APPS_SCRIPT_URL);
+  console.log(`[스냅샷 ${label}] 채널 ${snap.channel.length} · 고객 ${snap.customer.length} · 캠페인 ${snap.campaign.length} → ${res && res.ok ? 'OK' : JSON.stringify(res)}`);
+  return { snap, res };
+}
+
+// 지난 N주 백필 (오래된 주부터)
+async function backfillWeeklySnapshots(numWeeks = 8) {
+  for (let w = numWeeks; w >= 1; w--) {
+    const { start, end, label } = weekRange(w);
+    try { await saveWeeklySnapshot(start, end, label); }
+    catch (e) { console.error(`[백필 ${label}] 실패:`, e.message); }
+  }
+}
+
 // ── 주간 리포트 (월요일) ────────────────────────────────
 async function weeklyReport() {
   const thisStart = dateStr(7), thisEnd = dateStr(1);
@@ -1611,6 +1731,12 @@ ${analysis}` : '';
   } else {
     console.error('발송 실패 ❌:', JSON.stringify(r1));
   }
+
+  // 주간 스냅샷 적재 (Looker Studio 다차원 보고서용) — 지난주(완전한 주) 기준
+  try {
+    const wk = weekRange(1);
+    await saveWeeklySnapshot(wk.start, wk.end, wk.label);
+  } catch (e) { console.error('주간 스냅샷 적재 실패:', e.message); }
 }
 
 // ── 실행 ───────────────────────────────────────────────
@@ -1642,12 +1768,18 @@ module.exports = {
   fetchNegativeVOC,
   fetchSongmamansContext,
   getMetaStats,
+  getMetaByCampaign,
   auditMetaAdUrls,
   getGA4Weekly,
   getGA4Daily,
+  getGA4Slices,
   getClarityData,
   getSheetsTasks,
   getClaudeAnalysis,
+  buildWeeklySnapshot,
+  saveWeeklySnapshot,
+  backfillWeeklySnapshots,
+  weekRange,
   dateStr,
   formatDate,
 };

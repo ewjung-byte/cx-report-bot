@@ -206,6 +206,9 @@ function doPost(e) {
     if (action === 'get_memos') {
       return jsonOut(getMemosData());
     }
+    if (action === 'save_weekly') {
+      return jsonOut(saveWeeklySnapshot_(contents));
+    }
     return jsonOut({ok: false, error: 'unknown action'});
   } catch(err) {
     return jsonOut({ok: false, error: err.message});
@@ -357,6 +360,51 @@ function getActivitiesData(hours) {
     }
   }
   return { ok: true, activities: out };
+}
+
+// ===== 주간 스냅샷 (Looker Studio 다차원 보고서) =====
+var WEEKLY_TABS = {
+  summary:  { name: '주간_요약',   headers: ['주차','광고비','메타픽셀매출','메타ROAS','블렌디드ROAS','카페24매출','카페24주문','AOV'] },
+  channel:  { name: '주간_채널',   headers: ['주차','채널','세션','전환','전환율'] },
+  customer: { name: '주간_고객',   headers: ['주차','구분','세션','전환','전환율'] },
+  campaign: { name: '주간_캠페인', headers: ['주차','캠페인','광고비','매출','ROAS','CTR','구매'] }
+};
+
+function getWeeklyTab_(key) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var cfg = WEEKLY_TABS[key];
+  var sh = ss.getSheetByName(cfg.name);
+  if (!sh) {
+    sh = ss.insertSheet(cfg.name);
+    sh.appendRow(cfg.headers);
+    sh.getRange('A:A').setNumberFormat('@'); // 주차는 텍스트(날짜 자동변환 방지)
+    sh.setFrozenRows(1);
+  }
+  return { sh: sh, headers: cfg.headers };
+}
+
+function saveWeeklySnapshot_(contents) {
+  var week = String(contents.week || '');
+  if (!week) return { ok: false, error: 'no week' };
+  var counts = {};
+  ['summary','channel','customer','campaign'].forEach(function(key) {
+    var rows = contents[key] || [];
+    var t = getWeeklyTab_(key);
+    // 같은 주차 기존 행 제거(재실행 중복 방지)
+    var data = t.sh.getDataRange().getValues();
+    for (var i = data.length - 1; i >= 1; i--) {
+      if (String(data[i][0]) === week) t.sh.deleteRow(i + 1);
+    }
+    // 배치 append
+    if (rows.length) {
+      var values = rows.map(function(obj) {
+        return t.headers.map(function(h) { return obj[h] !== undefined && obj[h] !== null ? obj[h] : ''; });
+      });
+      t.sh.getRange(t.sh.getLastRow() + 1, 1, values.length, t.headers.length).setValues(values);
+    }
+    counts[key] = rows.length;
+  });
+  return { ok: true, week: week, counts: counts };
 }
 
 // ===== 은우 메모 (개인 DM, 매일 아침 리포트에 노출) =====
