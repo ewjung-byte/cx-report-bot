@@ -832,8 +832,11 @@ async function auditMetaAdUrls() {
     const data = await fetchJson(url);
     if (!data.data?.length) return { total: 0, broken: [], healthy: 0 };
 
-    const SURL_RE = /^https:\/\/italy-jungmiso\.com\/surl\/p\/\d+(?:\?[^\s%]*)?$/;
-    const broken = [];
+    // 정상으로 인정하는 단일 클린 URL: surl 단축링크 또는 카페24 표준 상품페이지(자사몰 전체가 쓰는 형식)
+    const SURL_RE   = /^https:\/\/italy-jungmiso\.com\/surl\/p\/\d+(?:\?[^\s%]*)?$/;
+    const DETAIL_RE = /^https:\/\/italy-jungmiso\.com\/product\/detail\.html\?product_no=\d+(?:&[^\s%]*)?$/;
+    const broken = [];        // 진짜 깨짐(JS 에러 유발): %20·공백·여러 URL 합침
+    const nonStandard = [];   // 작동은 하나 UTM 단축링크 표준(/surl/p) 아님 — 추적 누락 가능
     let healthy = 0;
 
     for (const ad of data.data) {
@@ -842,18 +845,19 @@ async function auditMetaAdUrls() {
                 || spec.link_data?.link
                 || '';
       if (!link) continue;
-      if (SURL_RE.test(link)) {
-        healthy++;
-      } else {
-        // 깨짐 패턴 진단
-        let reason = 'unknown';
-        if (link.includes('%20') || / /.test(link)) reason = '공백/%20 포함';
-        else if ((link.match(/https?:\/\//g) || []).length > 1) reason = '여러 URL 합침';
-        else if (!/\/surl\/p\/\d+/.test(link)) reason = 'surl/p 형식 아님';
+      const malformed = link.includes('%20') || / /.test(link) || (link.match(/https?:\/\//g) || []).length > 1;
+      if (malformed) {
+        const reason = (link.includes('%20') || / /.test(link)) ? '공백/%20 포함' : '여러 URL 합침';
         broken.push({ id: ad.id, name: ad.name, link: link.slice(0, 120), reason });
+      } else if (SURL_RE.test(link)) {
+        healthy++;
+      } else if (DETAIL_RE.test(link)) {
+        nonStandard.push({ id: ad.id, name: ad.name, link: link.slice(0, 120), reason: '표준 상품URL(작동 OK·UTM 없음)' });
+      } else {
+        broken.push({ id: ad.id, name: ad.name, link: link.slice(0, 120), reason: '알 수 없는 형식' });
       }
     }
-    return { total: data.data.length, broken, healthy };
+    return { total: data.data.length, broken, nonStandard, healthy };
   } catch (e) { console.error('[광고 URL 검증 오류]', e.message); return null; }
 }
 
