@@ -272,7 +272,7 @@ async function refreshCafe24Token() {
     if (await testCafe24Token(drive.access_token)) {
       CAFE24_ACCESS_TOKEN = drive.access_token;
       console.log('[카페24] 토큰 갱신 완료 (drive)');
-      return;
+      return true;
     }
     // 1b) invalid면 Drive의 refresh_token으로 새 access 발급
     if (drive.refresh_token) {
@@ -280,7 +280,7 @@ async function refreshCafe24Token() {
       if (newAt) {
         CAFE24_ACCESS_TOKEN = newAt;
         console.log('[카페24] 토큰 갱신 완료 (drive refresh)');
-        return;
+        return true;
       }
     }
   }
@@ -288,6 +288,7 @@ async function refreshCafe24Token() {
   // fallback refresh 제거 — VPS가 단일 갱신 주체. 여기서 refresh API 직접 호출 시
   // 카페24 refresh_token 소비 → VPS 보유 토큰 폐기 → 22시간 dead zone 발생.
   console.error('[카페24] 토큰 갱신 실패 — Drive 읽기 불가. VPS 상태 확인 필요.');
+  return false;
 }
 
 // ── 날짜 헬퍼 ──────────────────────────────────────────
@@ -1243,6 +1244,12 @@ async function calculateLTVMetrics(asOfDate) {
     return (secondMs - firstMs) <= 30 * 86400000;
   }).length;
 
+  // lookback stale 감지용 — first 분포 폭
+  const firsts = list.map(c => c.first).filter(d => d).sort();
+  const firstSpanDays = firsts.length > 1
+    ? Math.round((new Date(firsts[firsts.length-1] + 'T00:00:00Z') - new Date(firsts[0] + 'T00:00:00Z')) / 86400000)
+    : 0;
+
   return {
     회원_총수_365d: total,
     회원_재구매율: Number((repurchasers / total * 100).toFixed(2)),
@@ -1250,6 +1257,7 @@ async function calculateLTVMetrics(asOfDate) {
     휴면_91_180d: dormant91_180,
     신규_D30_retention: d30Cohort.length > 0 ? Number((d30Retained / d30Cohort.length * 100).toFixed(2)) : 0,
     신규_D30_cohort_size: d30Cohort.length,
+    실제_lookback_일수: firstSpanDays,
   };
 }
 
@@ -1846,36 +1854,103 @@ function buildPaymentAction({ dailyOrders, ga4Daily, adAudit, segments }) {
 // 목적: 데이터 소스가 조용히 실패(null·0)하거나 숫자가 안 맞을 때 사람이 아니라 봇이 먼저 잡는다.
 function buildDataHealthWarnings(d) {
   const w = [];
-  const { dailyOrders, cafe24, segments, ga4Daily, clarity, analysis, cxManagerAnalysis, restock, voc, adAudit } = d;
+  const { dailyOrders, cafe24, segments, ga4Daily, clarity, analysis, cxManagerAnalysis, restock, voc, adAudit, ltv, songmamansSales, meta, promos } = d;
 
-  // 매출/주문
-  if (!dailyOrders || dailyOrders.totalCount === 0) w.push('카페24 주문 미수집(매출 0)');
-  else {
+  // ① 송마망봇 ↔ 은우봇 매출 교차 (메시지 잡혔을 때만)
+  if (songmamansSales && dailyOrders && dailyOrders.revenue > 0) {
+    const diff = Math.abs(dailyOrders.revenue - songmamansSales);
+    const diffPct = diff / songmamansSales * 100;
+    if (diffPct > 5) w.push(`🚨 매출 교차 ${diffPct.toFixed(1)}% 차이 (은우 ${formatMoney(dailyOrders.revenue)} vs 송마망 ${formatMoney(songmamansSales)})`);
+    else if (diffPct > 1) w.push(`매출 교차 ${diffPct.toFixed(1)}% 차이 — cutoff·취소 처리 의심`);
+  }
+  // ② AOV 자체 검증
+  if (dailyOrders && dailyOrders.totalCount > 0 && dailyOrders.revenue > 0) {
+    const expected = Math.round(dailyOrders.revenue / dailyOrders.totalCount);
+    if (dailyOrders.aov && Math.abs(expected - dailyOrders.aov) > 100) {
+      w.push(`AOV 계산 불일치: 매출/주문=${expected.toLocaleString()} vs 보고 AOV ${dailyOrders.aov.toLocaleString()}`);
+    }
+  }
+  // ③ 세그먼트 합계 = 전체 매출
+  if (segments && dailyOrders && dailyOrders.revenue > 0) {
+    const segSum = (segments.member?.newAmt || 0) + (segments.member?.retAmt || 0) + (segments.guest?.newAmt || 0) + (segments.guest?.repeatAmt || 0);
+    if (segSum > 0) {
+      const diffPct = Math.abs(segSum - dailyOrders.revenue) / dailyOrders.revenue * 100;
+      if (diffPct > 5) w.push(`세그먼트 합계 ${formatMoney(segSum)} ≠ 전체 ${formatMoney(dailyOrders.revenue)} (${diffPct.toFixed(1)}%)`);
+    }
+  }
+  // ④ Funnel 단조성 (역전만 alert, drop은 정상)
+  if (ga4Daily?.checkoutFunnel) {
+    const f = ga4Daily.checkoutFunnel;
+    if (f.beginCheckout > f.addToCart) w.push(`funnel 역전: 결제진입(${f.beginCheckout}) > 장바구니(${f.addToCart})`);
+    if (f.purchase && f.purchase > f.beginCheckout) w.push(`funnel 역전: 결제완료(${f.purchase}) > 결제진입(${f.beginCheckout})`);
+  }
+  // ⑤ LTV stale 감지
+  if (ltv && ltv.회원_총수_365d > 100 && ltv.실제_lookback_일수 < 270) {
+    w.push(`LTV lookback stale — 365d 요청·실제 ${ltv.실제_lookback_일수}일만 fetch (토큰·페이지네이션 의심)`);
+  }
+  // ⑥ 토큰 만료 감지 — 발송 중단 신호
+  if (!dailyOrders || dailyOrders.totalCount === 0) {
+    w.push('🚨 카페24 주문 0건 — fetch 실패 또는 진짜 0건. 토큰·VPS 확인');
+  }
+  // ⑦ 공구 active인데 매출 0
+  if (promos && cafe24?.byProduct) {
+    promos.forEach(p => {
+      if (p.status === 'active' || (p.dDay || '').includes('D-')) {
+        const sale = cafe24.byProduct[p.productNo];
+        if (!sale || !sale.amount) {
+          w.push(`${p.title} active인데 매출 0 — 발행/링크/재고 확인`);
+        }
+      }
+    });
+  }
+  // ⑧ 메타 ROAS vs 실제(blended) ROAS
+  if (meta && meta.spend > 0 && meta.roas > 0 && dailyOrders && dailyOrders.revenue > 0) {
+    const blended = Math.round(dailyOrders.revenue / meta.spend * 100);
+    const diffPct = ((meta.roas - blended) / blended) * 100;
+    if (diffPct > 100) w.push(`🚨 메타 ROAS ${meta.roas}% vs 실제 ${blended}% (메타픽셀 ${diffPct.toFixed(0)}% 과대) — 광고 결정 위험`);
+    else if (diffPct > 50) w.push(`메타 ROAS ${meta.roas}% vs 실제 ${blended}% (+${diffPct.toFixed(0)}%) — 자사몰 매출 기여 한계`);
+  }
+
+  // 기존 매출/주문/리텐션/트래픽 자체 점검 유지
+  if (dailyOrders && dailyOrders.totalCount > 0) {
     if (dailyOrders.revenue === 0) w.push('매출 0원인데 주문 있음 → 금액 집계 오류 의심');
     if (dailyOrders.paidCount > dailyOrders.totalCount) w.push('결제건수 > 주문건수 (모순)');
-    // 상품별 합(배송비 제외)은 매출보다 작아야 정상. 더 크면 집계 불일치
     if (cafe24 && cafe24.totalSales > dailyOrders.revenue + 1) w.push('상품별 합 > 총매출 (집계 불일치)');
   }
-  // 리텐션
   if (!segments) w.push('리텐션(세그먼트) 미수집');
   else if (segments.guest && (segments.guest.newCount + segments.guest.repeatCount) > 0 && (!segments.guestPhones || segments.guestPhones.length === 0)) {
     w.push('게스트 주문 있는데 전화번호 0건 → 게스트→회원 매칭 불가(embed=receivers 필요)');
   }
-  // 트래픽·사이트
   if (!ga4Daily || !ga4Daily.checkoutFunnel) w.push('GA4 미수집');
   else if (ga4Daily.checkoutFunnel.addToCart > 0 && ga4Daily.checkoutFunnel.beginCheckout === 0) {
     w.push('결제진입 0 (추적 누락 의심 — 장바구니는 잡히는데 결제진입 이벤트 미발화)');
   }
   if (!clarity) w.push('Clarity 한도/미수집(GA4 백업으로 대체됨)');
-  // 분석
   if (!analysis) w.push('CX 판단(Claude) 비어있음');
   if (!cxManagerAnalysis) w.push('CX 관리자 분석(Claude) 비어있음');
-  // CRM·광고
   if (!restock) w.push('재입고알림(CRM) 미수집');
   if (adAudit && adAudit.total > 0 && adAudit.broken && adAudit.broken.length / adAudit.total > 0.5) {
     w.push(`광고 URL 절반 이상 깨짐 (${adAudit.broken.length}/${adAudit.total})`);
   }
   return w;
+}
+
+// 송마망봇 단톡방 매출 메시지 파싱 — 교차 검증용
+function parseSongmamansSales(songmamans) {
+  if (!songmamans?.tgMessages) return null;
+  // tgMessages는 사람 메시지만. 봇 메시지는 따로 fetch 필요.
+  // 일단 raw 시트 RAW 탭에서 매출 행 탐색
+  if (songmamans.recentRaw && Array.isArray(songmamans.recentRaw)) {
+    for (const row of songmamans.recentRaw) {
+      const text = (row || []).join(' ');
+      const m = text.match(/자사몰\s*매출[^\d]*([\d,]+)\s*원/) || text.match(/매출\s*([\d,]+)\s*원/);
+      if (m) {
+        const v = parseInt(m[1].replace(/,/g, ''));
+        if (v > 100000) return v; // 노이즈 방지
+      }
+    }
+  }
+  return null;
 }
 
 // ── 텔레그램 발송 ──────────────────────────────────────
@@ -1942,17 +2017,21 @@ async function dailyReport() {
 
   // 🚦 사이트 (Clarity 우선, 한도 시 GA4 트래픽 채널 백업) + GA4 결제 퍼널 통합
   // 매출·유입경로는 송마망봇이 통합 발송하므로 여기선 행동·퍼널 신호만.
+  // [[clarity-noise]] 룰: ScriptError·Quickback 단독은 인앱 노이즈. 진짜 막힘은 DeadClick+RageClick 동시 발생만 surface.
+  // 인스타인앱 비중과 GA4 funnel만 핵심 신호로 노출.
   let healthSection;
   if (clarity) {
-    healthSection = `에러 ${clarity.scriptErrorPct.toFixed(1)}%${icon(clarity.scriptErrorPct, 10, 30)} · 뒤로 ${clarity.quickbackPct.toFixed(1)}%${icon(clarity.quickbackPct, 8, 15)} · 인스타인앱 ${clarity.instagramPct}%${parseFloat(clarity.instagramPct) > 80 ? '⚠️인앱마찰' : ''}\n체류 ${clarity.activeTimeSec}초 · 스크롤 ${clarity.scrollDepth.toFixed(0)}%${clarity.funnel ? ` · 결제 ${clarity.funnel.checkout}세션` : ''}`;
+    const inappPct = parseFloat(clarity.instagramPct || 0);
+    healthSection = `인스타인앱 ${inappPct}%${inappPct >= 50 ? '⚠️' : ''}`;
     if (ga4Daily?.checkoutFunnel) {
       const cf = ga4Daily.checkoutFunnel;
       const dropPct = cf.addToCart > 0 ? ((cf.addToCart - cf.beginCheckout) / cf.addToCart * 100) : 0;
       healthSection += `\nGA4 결제퍼널: 장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout} (이탈 ${dropPct.toFixed(0)}%, 외부결제 미포함)`;
     }
+    // 진짜 막힘 페이지만 (friction 함수가 이미 DeadClick 기반 필터링하는 곳에서)
     if (pageStats?.friction?.length) {
       const fpLines = pageStats.friction.map(p => `${p.url} — 데드 ${(p.dead || 0).toFixed(0)}%·뒤로 ${(p.quick || 0).toFixed(0)}% (${p.sessions}세션)`);
-      healthSection += `\n🔴 마찰 페이지(결제·상품 외):\n  ${fpLines.join('\n  ')}`;
+      healthSection += `\n🔥 막힘 페이지:\n  ${fpLines.join('\n  ')}`;
     }
   } else {
     healthSection = (ga4Daily && ga4Daily.channels && ga4Daily.channels.length)
@@ -2063,18 +2142,69 @@ async function dailyReport() {
     if (lines.length) productPageSection = `\n\n📜 <b>매출 SKU 페이지 행동</b>\n${lines.join('\n')}`;
   }
 
+  // 🆕 LTV 3개 surface — 신규 D+30·휴면 91-180·상위10% 점유 (방금 박은 calculateLTVMetrics)
+  let ltvForReport = null;
+  try { ltvForReport = await calculateLTVMetrics(today); }
+  catch (e) { console.error('[LTV daily fetch] 실패:', e.message); }
+  const ltvSection = ltvForReport
+    ? `\n신규 D+30 재구매 ${ltvForReport.신규_D30_retention}% (cohort ${ltvForReport.신규_D30_cohort_size}명) · 휴면 91-180d ${ltvForReport.휴면_91_180d}명 · VIP top10% 매출 ${ltvForReport.상위10_매출점유}%`
+    : '';
+
+  // 🆕 세그먼트 매출 분해 — 신규회원·재방문회원·게스트 매출 비중
+  let segmentSalesSection = '';
+  if (segments && dailyOrders?.revenue > 0) {
+    const m = segments.member, g = segments.guest;
+    const totalRev = (m?.newAmt || 0) + (m?.retAmt || 0) + (g?.newAmt || 0) + (g?.repeatAmt || 0);
+    if (totalRev > 0) {
+      const pct = (v) => (v / totalRev * 100).toFixed(0);
+      segmentSalesSection = `\n📊 <b>세그먼트 매출 분해</b>
+신규 회원: ${formatMoney(m.newAmt)} (${pct(m.newAmt)}%)
+재방문 회원: ${formatMoney(m.retAmt)} (${pct(m.retAmt)}%)
+게스트 신규: ${formatMoney(g.newAmt)} (${pct(g.newAmt)}%)
+게스트 반복: ${formatMoney(g.repeatAmt)} (${pct(g.repeatAmt)}%)`;
+    }
+  }
+
+  // 🆕 인앱 비중 안내문 (50%+일 때만)
+  const inappPct = parseFloat(clarity?.instagramPct || 0);
+  const inappNotice = inappPct >= 50
+    ? `\n⚠️ 인스타인앱 ${inappPct}% — ScriptError·Quickback 단독은 노이즈 가능. 진짜 막힘은 DeadClick+RageClick 동시만 surface.`
+    : '';
+
+  // 🆕 상품 별 매출 (라벨 변경) + 공구 일정 별도 섹션 분리
+  let promoScheduleSection = '';
+  if (promos && promos.length) {
+    promoScheduleSection = `\n\n📅 <b>공구 일정</b>\n${promos.map(p => `${p.title} — ${p.dDay}`).join('\n')}`;
+  }
+  // productSalesSection에서 공구 일정 prepend 제거 — 따로 분리됐으니
+  let productSalesOnly = '데이터 없음';
+  if (cafe24 && cafe24.byProduct) {
+    const all = Object.values(cafe24.byProduct).filter(v => v.count > 0).sort((a, b) => b.amount - a.amount);
+    if (all.length) {
+      const topN = all.slice(0, 6);
+      const topAmt = topN.reduce((s, p) => s + p.amount, 0);
+      const lines = topN.map(p => {
+        const id = String(p.productNo);
+        const customNm = PRODUCT_NAME[id];
+        const label = customNm ? `${customNm} (#${id})` : `${(p.name || '제품').replace(/^\[.*?\]\s*/, '')} (#${id})`;
+        return `${label}: ${formatMoney(p.amount)}·${p.count}건`;
+      });
+      productSalesOnly = `합계 ${formatMoney(topAmt)}\n${lines.join('\n')}`;
+    }
+  }
+
   // 단톡방 메시지 — 송마망봇과 중복되는 섹션(매출·유입경로·VOC·재입고·광고URL)은 제거.
   // 송마망봇이 매일 통합 발송하므로 은우봇은 CX 고유 차원(사이트행동·결제흐름·상품페이지·리텐션·상품믹스·CX판단)만.
   const msg = `🔎 <b>CX 일간</b> · ${display}
 ━━━━━━━━━━━━━━━━━
 🚦 <b>사이트</b>
-${healthSection}${checkoutSection}${productPageSection}
+${healthSection}${inappNotice}${checkoutSection}${productPageSection}
 
 🔁 <b>리텐션</b> (Cafe24 raw)
-${retentionSection}
+${retentionSection}${ltvSection}${segmentSalesSection}
 
-🛍️ <b>상품별 매출</b> (Top 6)
-${productSalesSection}`;
+🛍️ <b>상품 별 매출</b>
+${productSalesOnly}${promoScheduleSection}`;
 
   const analysisMsg = analysis ? `🤖 <b>CX 판단</b>\n${analysis}` : null;
 
@@ -2132,7 +2262,11 @@ ${productSalesSection}`;
     : '';
 
   // 발송 전 자가점검 — 이상 있으면 콘솔 로그 + 개인 DM에 표시
-  const warnings = buildDataHealthWarnings({ dailyOrders, cafe24, segments, ga4Daily, clarity, analysis, cxManagerAnalysis, restock, voc, adAudit });
+  const songmamansSales = parseSongmamansSales(songmamans);
+  const warnings = buildDataHealthWarnings({
+    dailyOrders, cafe24, segments, ga4Daily, clarity, analysis, cxManagerAnalysis, restock, voc, adAudit,
+    ltv: ltvForReport, songmamansSales, meta: metaToday, promos,
+  });
   if (warnings.length) console.error('⚠️ 데이터 점검 경고:\n- ' + warnings.join('\n- '));
   const healthSectionDM = warnings.length ? `\n\n🔧 <b>데이터 점검</b>\n${warnings.map(x => `⚠️ ${x}`).join('\n')}` : '';
 
@@ -2366,7 +2500,12 @@ ${analysis}` : '';
 
 // ── 실행 ───────────────────────────────────────────────
 async function main() {
-  await refreshCafe24Token();
+  const tokenOk = await refreshCafe24Token();
+  if (!tokenOk) {
+    console.error('[FATAL] cafe24 토큰 갱신 실패. 일간 발송 중단 (VPS 점검 필요).');
+    await sendTelegram('🚨 <b>cafe24 토큰 만료</b>\nDrive 토큰 읽기 불가 — VPS 갱신 상태 확인 필요. 일간/주간 리포트 발송 중단.').catch(() => {});
+    process.exit(1);
+  }
   const mode = process.argv[2] || (isMonday() ? 'weekly' : 'daily');
   console.log(`모드: ${mode}`);
   if (mode === 'weekly') await weeklyReport();
