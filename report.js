@@ -283,11 +283,16 @@ async function refreshCafe24Token() {
         return true;
       }
     }
+    // 1c) 검증 step false지만 Drive 토큰은 있는 경우 — 일단 set + 부분 성공 신호
+    // (testCafe24Token이 일부 케이스에서 false 반환하지만 실제 fetch는 되는 케이스 있음)
+    CAFE24_ACCESS_TOKEN = drive.access_token;
+    console.warn('[카페24] 토큰 검증 step 실패 — Drive 토큰 그대로 사용. fetch 단계 결과 의존.');
+    return true;
   }
 
   // fallback refresh 제거 — VPS가 단일 갱신 주체. 여기서 refresh API 직접 호출 시
   // 카페24 refresh_token 소비 → VPS 보유 토큰 폐기 → 22시간 dead zone 발생.
-  console.error('[카페24] 토큰 갱신 실패 — Drive 읽기 불가. VPS 상태 확인 필요.');
+  console.error('[카페24] Drive 토큰 자체 읽기 실패 — VPS 상태 확인 필요.');
   return false;
 }
 
@@ -1957,10 +1962,13 @@ function parseSongmamansSales(songmamans) {
 function escapeHtml(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+const DRY_RUN = process.env.DRY_RUN === '1';
 function sendTelegram(text) {
+  if (DRY_RUN) { console.log('\n[DRY_RUN][개인 DM]\n' + text.replace(/<[^>]+>/g, '') + '\n'); return Promise.resolve({ ok: true, dry: true }); }
   return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, { chat_id: TG_CHAT_ID, text, parse_mode: 'HTML' });
 }
 function sendTelegramGroup(text) {
+  if (DRY_RUN) { console.log('\n[DRY_RUN][단톡방]\n' + text.replace(/<[^>]+>/g, '') + '\n'); return Promise.resolve({ ok: true, dry: true }); }
   return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, { chat_id: GROUP_CHAT_ID, text, parse_mode: 'HTML' });
 }
 // 4096자 제한 — 줄 단위로 chunk 발송. 메시지 순서 보장 위해 await 직렬.
@@ -2501,11 +2509,12 @@ ${analysis}` : '';
 // ── 실행 ───────────────────────────────────────────────
 async function main() {
   const tokenOk = await refreshCafe24Token();
-  if (!tokenOk) {
+  if (!tokenOk && !DRY_RUN) {
     console.error('[FATAL] cafe24 토큰 갱신 실패. 일간 발송 중단 (VPS 점검 필요).');
     await sendTelegram('🚨 <b>cafe24 토큰 만료</b>\nDrive 토큰 읽기 불가 — VPS 갱신 상태 확인 필요. 일간/주간 리포트 발송 중단.').catch(() => {});
     process.exit(1);
   }
+  if (!tokenOk && DRY_RUN) console.warn('[DRY_RUN] 토큰 갱신 실패 — 진행 (메시지 미리보기 목적)');
   const mode = process.argv[2] || (isMonday() ? 'weekly' : 'daily');
   console.log(`모드: ${mode}`);
   if (mode === 'weekly') await weeklyReport();
