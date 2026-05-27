@@ -2158,22 +2158,18 @@ async function dailyReport() {
     ? `\n신규 D+30 재구매 ${ltvForReport.신규_D30_retention}% (cohort ${ltvForReport.신규_D30_cohort_size}명) · 휴면 91-180d ${ltvForReport.휴면_91_180d}명 · VIP top10% 매출 ${ltvForReport.상위10_매출점유}%`
     : '';
 
-  // 🆕 세그먼트 매출 분해 — 신규회원·재방문회원·게스트 매출 비중
+  // 🆕 세그먼트 매출 분해 — 별도 섹션 (빈 줄 분리)
   let segmentSalesSection = '';
   if (segments && dailyOrders?.revenue > 0) {
     const m = segments.member, g = segments.guest;
     const totalRev = (m?.newAmt || 0) + (m?.retAmt || 0) + (g?.newAmt || 0) + (g?.repeatAmt || 0);
     if (totalRev > 0) {
       const pct = (v) => (v / totalRev * 100).toFixed(0);
-      segmentSalesSection = `\n📊 <b>세그먼트 매출 분해</b>
-신규 회원: ${formatMoney(m.newAmt)} (${pct(m.newAmt)}%)
-재방문 회원: ${formatMoney(m.retAmt)} (${pct(m.retAmt)}%)
-게스트 신규: ${formatMoney(g.newAmt)} (${pct(g.newAmt)}%)
-게스트 반복: ${formatMoney(g.repeatAmt)} (${pct(g.repeatAmt)}%)`;
+      segmentSalesSection = `\n\n📊 <b>세그먼트 매출 분해</b>\n신규 회원: ${formatMoney(m.newAmt)} (${pct(m.newAmt)}%)\n재방문 회원: ${formatMoney(m.retAmt)} (${pct(m.retAmt)}%)\n게스트 신규: ${formatMoney(g.newAmt)} (${pct(g.newAmt)}%)\n게스트 반복: ${formatMoney(g.repeatAmt)} (${pct(g.repeatAmt)}%)`;
     }
   }
 
-  // 🆕 인앱 비중 안내문 (50%+일 때만)
+  // 🆕 인앱 비중 안내문 (50%+일 때만) — 사이트 섹션 안 한 단락 내부
   const inappPct = parseFloat(clarity?.instagramPct || 0);
   const inappNotice = inappPct >= 50
     ? `\n⚠️ 인스타인앱 ${inappPct}% — ScriptError·Quickback 단독은 노이즈 가능. 진짜 막힘은 DeadClick+RageClick 동시만 surface.`
