@@ -1333,10 +1333,11 @@ async function fetchRecentUXArticles() {
   return results;
 }
 
-async function generateUXInsight(usedTechniques, feedback) {
+async function generateUXInsight(usedTechniques, feedback, metrics) {
   if (!CLAUDE_API_KEY) return null;
   const usedList = (usedTechniques || []).slice(-20).map(t => `- ${t.기법명} (${t.카테고리})`).join('\n');
   const feedbackBlock = feedback ? `\n\n[사용자 수정 요청 — 이번 회차 반드시 반영]\n${feedback}\n` : '';
+  const metricsBlock = metrics ? `\n[이태리정미소 최신 실측 데이터 — 이번 보고서에 반드시 인용]\n${metrics}\n` : '';
 
   // 최근 권위 source 글 fetch — 학습 데이터 cutoff 우회
   const articles = await fetchRecentUXArticles();
@@ -1344,7 +1345,7 @@ async function generateUXInsight(usedTechniques, feedback) {
     ? `\n[최근 권위 UX source 새 글 — 가능하면 인용 또는 영감으로 활용]\n${articles.map((a, i) => `${i+1}. "${a.title}" (${a.source}, ${a.date})\n   URL: ${a.url}\n   요약: ${a.summary}`).join('\n\n')}\n`
     : '';
 
-  const prompt = `너는 이태리정미소(한국 프리미엄 식료품 D2C) CX 매니저야. UI/UX 개선 사례를 매주 월·목 2회 단톡방에 공유한다.${feedbackBlock}${articleBlock}
+  const prompt = `너는 이태리정미소(한국 프리미엄 식료품 D2C) CX 매니저야. UI/UX 개선 사례를 매주 월·목 2회 단톡방에 공유한다.${feedbackBlock}${metricsBlock}${articleBlock}
 
 이번 보고서 1편을 작성해. 송마망봇 화요일 마케팅/심리학 기법 보고와 같은 형식 — 단 카테고리는 UI/UX 인터페이스 패턴 한정 (가격심리학·앵커링 X).
 
@@ -1379,7 +1380,7 @@ ${UX_CATEGORIES.map((c, i) => `${i+1}. ${c}`).join('\n')}
 
 분량 가이드 (엄수): 전체 본문 약 1,500자(공백 포함, 구분선 제외). 단톡방용이라 짧고 정확하게. 각 섹션 압축.
 
-형식 엄수:
+형식 엄수 (5섹션):
 
 [제목] 기법명 (영어 병기)
 
@@ -1387,41 +1388,35 @@ ${UX_CATEGORIES.map((c, i) => `${i+1}. ${c}`).join('\n')}
 
 ━━━━━━━━━━━━
 
-[숨은 메커니즘] 작동 원리. 4~5줄, 약 280자.
+[숨은 메커니즘] 작동 원리·인지부하·행동경제학 등. 4~5줄, 약 280자.
 
 ━━━━━━━━━━━━
 
-[기성 검증] 회사 + 연도 + 정량 결과
-- 회사명·연도·업종 (1줄)
-- 문제·실행 (2줄)
-- 결과 (1줄, 정량)
-약 200자.
-
-━━━━━━━━━━━━
-
-[실리콘밸리 변형] 2020년 이후 D2C·SaaS
-- 회사명·실행 (1~2줄)
-- 임팩트 (1줄, 정량)
-약 200자.
-
-━━━━━━━━━━━━
-
-[두 시대 공통 / 차이] 3줄. 어떻게 진화했는지. 약 180자.
+[사례 1개 deep dive]
+회사 1개 선택 (기성 클래식 또는 최신 실리콘밸리 — 어느 한 쪽). 두 사례 X.
+- 회사명·국가·업종·연도 (1줄)
+- 문제 상황 (1~2줄)
+- 실행 (구체·UI 패턴 명시) (2~3줄)
+- 결과 (정량·출처 명시) (1~2줄)
+- 왜 작동했나 (1~2줄, 메커니즘 연결)
+약 500자.
 
 ━━━━━━━━━━━━
 
 [이태리정미소 변형 적용]
-자사몰 현재 데이터(게스트 53%·1회 97.5%·재구매 2.5%·인앱 50%·꿀동이 53%) 참조 + 실행안 2~3개 + 각 임팩트 추정. 약 400자.
+위 [최신 실측 데이터] 블록의 숫자를 1~2개 명시적으로 인용. 실행안 2~3개 + 각 임팩트 추정.
+약 500자.
 
 ━━━━━━━━━━━━
 
-[예상 누적 임팩트] 1줄. 정량.
+[예상 누적 임팩트] 1~2줄. 정량.
 
 규칙:
 - 마크다운 기호(#, *, **) 사용 금지. 일반 텍스트.
-- 숫자 출처 명시 (Baymard·NN Group·Shopify 공식 등 인용 가능)
+- 사례 1개만. 두 회사·두 시대 비교 X (메시지 분산 방지).
+- 숫자 출처 명시 (Baymard·NN Group·Shopify 공식·a16z report·논문 등)
 - 가정·한계 솔직히 명시 (예: "한국 시장 검증 안 됨")
-- 보고/체크리스트 형식 X — 패턴·메커니즘·액션·임팩트 흐름
+- 보고/체크리스트 형식 X — 패턴·메커니즘·사례·액션·임팩트 흐름
 - 총 약 1,500자 한정. 한 섹션이라도 넘으면 다른 섹션 줄여서 균형 맞춤.`;
 
   try {
@@ -1452,7 +1447,52 @@ async function uxDraftFlow() {
     if (r && r.ok && r.feedback) feedback = r.feedback;
   } catch (e) { console.error('[UX feedback] 실패:', e.message); }
 
-  const insight = await generateUXInsight(history, feedback);
+  // 자사몰 최신 실측 데이터 fetch — Claude prompt에 inject. 일반 hardcode 대체.
+  let metricsBlock = '';
+  try {
+    const yesterday = dateStr(1);
+    const [dailyOrders, segments, ltv, clarity, ga4Daily, baselineRes] = await Promise.all([
+      getCafe24DailyOrders(yesterday).catch(() => null),
+      getCafe24CustomerSegments(yesterday, 365).catch(() => null),
+      calculateLTVMetrics(yesterday).catch(() => null),
+      getClarityData(1).catch(() => null),
+      getGA4Daily(yesterday).catch(() => null),
+      getDailyBaseline(7).catch(() => ({ baseline: {}, count: 0 })),
+    ]);
+
+    const lines = [];
+    if (dailyOrders) lines.push(`어제 매출 ${formatMoney(dailyOrders.revenue)}·${dailyOrders.totalCount}건·AOV ${formatMoney(Math.round(dailyOrders.revenue/dailyOrders.totalCount))}`);
+    if (segments) {
+      const m = segments.member, g = segments.guest;
+      const totalRev = (m?.newAmt||0)+(m?.retAmt||0)+(g?.newAmt||0)+(g?.repeatAmt||0);
+      if (totalRev > 0) {
+        const pct = v => (v/totalRev*100).toFixed(0);
+        lines.push(`세그먼트 매출: 신규회원 ${pct(m.newAmt)}%·재방문 ${pct(m.retAmt)}%·게스트신규 ${pct(g.newAmt)}%·게스트반복 ${pct(g.repeatAmt)}%`);
+      }
+    }
+    if (ltv) lines.push(`회원 LTV(365d): 총 ${ltv.회원_총수_365d}명·재구매율 ${ltv.회원_재구매율}%·신규 D+30 ${ltv.신규_D30_retention}%·휴면 91-180d ${ltv.휴면_91_180d}명·VIP top10% 매출 ${ltv.상위10_매출점유}%`);
+    if (clarity) lines.push(`사이트: 인스타인앱 ${clarity.instagramPct}%·체류 ${clarity.activeTimeSec}초·스크롤 ${clarity.scrollDepth?.toFixed(0)}%`);
+    if (ga4Daily?.checkoutFunnel) {
+      const cf = ga4Daily.checkoutFunnel;
+      const drop = cf.addToCart > 0 ? ((cf.addToCart - cf.beginCheckout)/cf.addToCart*100).toFixed(0) : 0;
+      lines.push(`결제 funnel: 장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout} (이탈 ${drop}%)`);
+    }
+    if (baselineRes.count >= 3 && baselineRes.baseline?.카페24매출?.avg) {
+      lines.push(`7일 평균 매출 baseline: ${formatMoney(Math.round(baselineRes.baseline.카페24매출.avg))} (n=${baselineRes.count})`);
+    }
+    // SKU top 3
+    if (dailyOrders?.byProduct) {
+      const top = Object.values(dailyOrders.byProduct).filter(p=>p.count>0).sort((a,b)=>b.amount-a.amount).slice(0,3);
+      if (top.length) {
+        const lines2 = top.map(p => `${PRODUCT_NAME[String(p.productNo)]||'SKU'}#${p.productNo} ${formatMoney(p.amount)}·${p.count}건`).join(' · ');
+        lines.push(`상품 매출 top3: ${lines2}`);
+      }
+    }
+    metricsBlock = lines.join('\n');
+    console.log('[UX metrics inject]\n' + metricsBlock);
+  } catch (e) { console.error('[UX metrics fetch] 실패:', e.message); }
+
+  const insight = await generateUXInsight(history, feedback, metricsBlock);
   if (!insight) { console.error('UX 초안 생성 실패 — 종료'); return; }
 
   // 제목 추출 (robust — [제목] 패턴 우선, 못 찾으면 첫 줄)
