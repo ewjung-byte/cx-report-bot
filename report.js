@@ -1413,6 +1413,7 @@ ${UX_CATEGORIES.map((c, i) => `${i+1}. ${c}`).join('\n')}
 
 규칙:
 - 마크다운 기호(#, *, **) 사용 금지. 일반 텍스트.
+- 이모지 사용 X (token 경계에서 잘리면 깨진 글자 ��로 표시됨). 텍스트로만.
 - 사례 1개만. 두 회사·두 시대 비교 X (메시지 분산 방지).
 - 숫자 출처 명시 (Baymard·NN Group·Shopify 공식·a16z report·논문 등)
 - 가정·한계 솔직히 명시 (예: "한국 시장 검증 안 됨")
@@ -2003,7 +2004,13 @@ function parseSongmamansSales(songmamans) {
 
 // ── 텔레그램 발송 ──────────────────────────────────────
 function escapeHtml(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let str = String(s || '');
+  // 깨진 surrogate pair (불완전 이모지·잘린 emoji token) 제거 — Telegram에서 `��` 표시되는 원인
+  str = str.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '');
+  str = str.replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
+  // Unicode replacement character·NULL 등 invisible 문자 strip
+  str = str.replace(/[� ]/g, '');
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 const DRY_RUN = process.env.DRY_RUN === '1';
 function sendTelegram(text) {
