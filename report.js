@@ -490,6 +490,15 @@ async function getCafe24DailyOrders(startDate, endDate) {
     const channels = {};
     valid.forEach(o => { const k = LABEL[o.order_place_name] || o.order_place_name || '기타'; channels[k] = (channels[k] || 0) + 1; });
     const channelList = Object.entries(channels).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
+    // 결제수단 분포 (payment_gateway_names raw) — GA4 funnel보다 정확한 결제 흐름 진실
+    const payMethods = { 자체결제: 0, 네이버페이: 0, 카카오페이: 0, 기타간편: 0 };
+    valid.forEach(o => {
+      const gw = (o.payment_gateway_names || []).join('').toLowerCase();
+      if (gw.includes('naver')) payMethods.네이버페이++;
+      else if (gw.includes('kakao')) payMethods.카카오페이++;
+      else if (gw.includes('payco') || gw.includes('toss') || gw.includes('ssg') || gw.includes('smilepay')) payMethods.기타간편++;
+      else payMethods.자체결제++;
+    });
     return {
       totalCount: all.length,
       validCount: valid.length,
@@ -497,6 +506,7 @@ async function getCafe24DailyOrders(startDate, endDate) {
       canceledCount: all.length - valid.length,
       revenue,
       channels: channelList,
+      payMethods,
     };
   } catch(e) { console.error('Cafe24 일별주문 오류:', e.message); return null; }
 }
@@ -2081,10 +2091,23 @@ async function dailyReport() {
   if (clarity) {
     const inappPct = parseFloat(clarity.instagramPct || 0);
     healthSection = `인스타인앱 ${inappPct}%${inappPct >= 50 ? '⚠️' : ''}`;
+    // 💳 결제수단 분포 (cafe24 raw — GA4 funnel보다 정확. 실주문 기준)
+    if (dailyOrders?.payMethods) {
+      const pm = dailyOrders.payMethods;
+      const tot = pm.자체결제 + pm.네이버페이 + pm.카카오페이 + pm.기타간편;
+      if (tot > 0) {
+        const pct = v => Math.round(v / tot * 100);
+        const parts = [`자체 ${pct(pm.자체결제)}%`];
+        if (pm.네이버페이) parts.push(`네이버페이 ${pct(pm.네이버페이)}%`);
+        if (pm.카카오페이) parts.push(`카카오페이 ${pct(pm.카카오페이)}%`);
+        if (pm.기타간편) parts.push(`기타간편 ${pct(pm.기타간편)}%`);
+        healthSection += `\n💳 결제수단 (${tot}건): ${parts.join(' · ')}`;
+      }
+    }
     if (ga4Daily?.checkoutFunnel) {
       const cf = ga4Daily.checkoutFunnel;
       const dropPct = cf.addToCart > 0 ? ((cf.addToCart - cf.beginCheckout) / cf.addToCart * 100) : 0;
-      healthSection += `\nGA4 결제퍼널: 장바구니 ${cf.addToCart} → 결제진입 ${cf.beginCheckout} (이탈 ${dropPct.toFixed(0)}%, 외부결제 미포함)`;
+      healthSection += `\nGA4 퍼널(참고용): 장바구니 ${cf.addToCart} → 진입 ${cf.beginCheckout} — ⚠️측정착시(외부간편결제·인앱 begin_checkout 누락). 실결제는 위 결제수단 기준`;
     }
     // 진짜 막힘 페이지만 (friction 함수가 이미 DeadClick 기반 필터링하는 곳에서)
     if (pageStats?.friction?.length) {
