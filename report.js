@@ -2316,6 +2316,8 @@ async function dailyReport() {
     if (soon) dailyActions.push(`📅 ${soon.title} ${soon.dDay} → 발행·링크·재고 점검`);
   }
   const actionSection = dailyActions.length ? `\n\n🎯 <b>오늘 할 것</b>\n${dailyActions.join('\n')}` : '';
+  // 🤖 CX 판단 — Claude 인사이트 1개를 본문에 통합 (별도 발송하면 묻힘). 실발송엔 채워지고 DRY_RUN(로컬 키 X)만 빔.
+  const analysisSection = analysis ? `\n\n🤖 <b>CX 판단</b>\n${analysis}` : '';
 
   // 단톡방 메시지 — 송마망봇과 중복되는 섹션(매출·유입경로·VOC·재입고·광고URL)은 제거.
   // 송마망봇이 매일 통합 발송하므로 은우봇은 CX 고유 차원(사이트행동·결제흐름·상품페이지·리텐션·상품믹스·CX판단)만.
@@ -2328,7 +2330,7 @@ ${healthSection}${inappNotice}${checkoutSection}${productPageSection}
 ${retentionSection}${ltvSection}${segmentSalesSection}
 
 🛍️ <b>상품 별 매출</b>
-${productSalesOnly}${promoScheduleSection}${actionSection}`;
+${productSalesOnly}${promoScheduleSection}${actionSection}${analysisSection}`;
 
   const analysisMsg = analysis ? `🤖 <b>CX 판단</b>\n${analysis}` : null;
 
@@ -2393,7 +2395,7 @@ ${productSalesOnly}${promoScheduleSection}${actionSection}`;
 
   const groupResult = await sendTelegramGroup(msg);
   if (groupResult.ok) {
-    if (analysisMsg) await sendTelegramGroup(analysisMsg);
+    // 🤖 CX 판단은 이제 msg 본문(analysisSection)에 통합 — 별도 발송 안 함 (묻힘 방지)
     if (tasksSection || memoSection || cxManagerSection || healthSectionDM) await sendTelegram(personalMsg);
     console.log('일간 발송 완료 ✅');
   } else {
