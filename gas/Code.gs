@@ -231,6 +231,12 @@ function doPost(e) {
     if (action === 'get_eunwoo_memo') {
       return jsonOut({ ok: true, memo: readEunwooCompassMemo_() });
     }
+    if (action === 'save_levers') {
+      return jsonOut(saveLevers_(contents));
+    }
+    if (action === 'get_levers') {
+      return jsonOut(getLevers_());
+    }
     if (action === 'set_eunwoo_memo') { // 정리/수정용 (덮어쓰기)
       var cell = findEunwooMemoCell_();
       if (!cell) return jsonOut({ ok: false, error: '은우 행 못 찾음' });
@@ -936,6 +942,42 @@ function saveDailySnapshot_(contents) {
   });
   sh.appendRow(row);
   return { ok: true, date: date };
+}
+
+// 주간 레버 스냅샷 — UI/UX 개입 전후 비교용 (CX 관리자 성과 측정의 baseline)
+var LEVER_HEADERS = ['주차', '날짜', '쿠폰전환%', '골든타임_D21_35', '레시피PV', '재구매율%', '게스트%', '메모'];
+function getLeverTab_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ss.getSheetByName('주간_레버');
+  if (!sh) {
+    sh = ss.insertSheet('주간_레버');
+    sh.appendRow(LEVER_HEADERS);
+    sh.getRange(1, 1, 1, LEVER_HEADERS.length).setFontWeight('bold').setBackground('#1f2a44').setFontColor('#ffffff');
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+function saveLevers_(d) {
+  try {
+    var sh = getLeverTab_();
+    var week = String(d.주차 || '');
+    // 같은 주차 행 upsert (덮어쓰기)
+    var data = sh.getDataRange().getValues();
+    for (var i = data.length - 1; i >= 1; i--) { if (String(data[i][0]) === week) sh.deleteRow(i + 1); }
+    var today = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
+    sh.appendRow([week, today, d.쿠폰전환 || '', d.골든타임 || '', d.레시피PV || '', d.재구매율 || '', d.게스트 || '', d.메모 || '']);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+function getLevers_() {
+  try {
+    var sh = getLeverTab_();
+    if (sh.getLastRow() < 2) return { ok: true, rows: [] };
+    var data = sh.getDataRange().getValues();
+    var headers = data[0];
+    var rows = data.slice(1).map(function (r) { var o = {}; headers.forEach(function (h, i) { o[h] = r[i]; }); return o; });
+    return { ok: true, rows: rows };
+  } catch (e) { return { ok: false, error: e.message }; }
 }
 
 // COMPASS 은우 개인메모 — /메모로 추가 (전략 대시보드, 컴퓨터 꺼져도 GAS가 처리)

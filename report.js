@@ -2601,6 +2601,17 @@ async function weeklyReport() {
   const goldenZone = await getRepurchaseGoldenZone(thisEnd);
   const couponConv = await fetchCouponConversion();
 
+  // 📊 레버 baseline 저장 (UI/UX 개입 전후 비교의 기준점) — 매주 자동, 같은 주차 upsert.
+  // 이게 있으면 UI/UX 바꾼 뒤 다음주 레버와 비교해 "바꿨더니 숫자가 바뀜"이 측정됨.
+  try {
+    const avgCoupon = couponConv?.coupons?.length ? Math.round(couponConv.coupons.reduce((s, c) => s + c.rate, 0) / couponConv.coupons.length) : '';
+    const wk = repurchase?.week;
+    const guestPct = wk && wk.guestCount != null && (wk.newCount + wk.repCount + wk.guestCount) > 0
+      ? Math.round(wk.guestCount / (wk.newCount + wk.repCount + wk.guestCount) * 100) : '';
+    await postToAppsScript({ action: 'save_levers', 주차: display, 쿠폰전환: avgCoupon, 골든타임: goldenZone?.d21_35 || '', 레시피PV: pvWoW?.cur?.레시피 || '', 재구매율: repurchase?.repurchaseRate || '', 게스트: guestPct }, APPS_SCRIPT_URL).catch(() => {});
+    console.log('[레버 baseline] 저장:', display);
+  } catch (e) { console.error('[레버 저장]', e.message); }
+
   const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, clarity, ga4, reviews, repurchase });
 
   const chMap = { 'Paid Social':'유료SNS', 'Organic Social':'자연SNS', 'Direct':'직접유입', 'Organic Search':'검색', 'Paid Other':'기타광고' };
