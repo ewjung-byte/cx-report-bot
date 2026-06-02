@@ -2,6 +2,7 @@ var SHEET_ID = '1pBqKnyOQHwepzo65B_TCJ0dU-yjRL1aLs-TfEfBjXJI';
 var GROUP_CHAT_ID = '-5227165092';
 var EUNWOO_CHAT_ID = '8139301716';
 var PERSONAL_METRICS_SHEET_ID = '1nxnsbqQSxv-lRcCDsUh6r16qoyeywVRJhPScd2N21bA';
+var STRATEGY_SHEET_ID = '1EQaNYcJz1c_WmPKiDbtecCNKtJ5LX4P8zg6m1-xkTBs'; // 전략 대시보드 (COMPASS 개인메모)
 var TAGS = ['/결정', '/액션', '/아이디어', '/공유', '/광고', '/소싱', '/CS', '/운영', '/디자인'];
 
 function _botToken() {
@@ -221,6 +222,30 @@ function doPost(e) {
     if (action === 'get_daily_baseline') {
       return jsonOut(getDailyBaseline_(contents.daysBack || 7));
     }
+    if (action === 'get_daily_raw_range') {
+      return jsonOut(getDailyRawRange_(contents.startDate, contents.endDate));
+    }
+    if (action === 'dump_misu_structure') {
+      return jsonOut(dumpMisuStructure_(contents.keyword || ''));
+    }
+    if (action === 'get_eunwoo_memo') {
+      return jsonOut({ ok: true, memo: readEunwooCompassMemo_() });
+    }
+    if (action === 'set_eunwoo_memo') { // 정리/수정용 (덮어쓰기)
+      var cell = findEunwooMemoCell_();
+      if (!cell) return jsonOut({ ok: false, error: '은우 행 못 찾음' });
+      cell.setValue(String(contents.value || ''));
+      return jsonOut({ ok: true });
+    }
+    if (action === 'list_triggers') {
+      return jsonOut({ ok: true, triggers: ScriptApp.getProjectTriggers().map(function (t) {
+        return { fn: t.getHandlerFunction(), type: String(t.getEventType()) };
+      }) });
+    }
+    if (action === 'ensure_polling') {
+      setupPollingTrigger();
+      return jsonOut({ ok: true, triggers: ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); }) });
+    }
     if (action === 'cafe24_webhook' || (contents.resource && (contents.resource.order_id || contents.resource.order_no))) {
       return jsonOut(handleCafe24Webhook_(contents));
     }
@@ -268,6 +293,11 @@ function handleTelegramUpdate(update) {
   var msgTime = new Date(msg.date * 1000);
   var today = Utilities.formatDate(msgTime, 'Asia/Seoul', 'yyyy-MM-dd');
   var timeStr = Utilities.formatDate(msgTime, 'Asia/Seoul', 'HH:mm');
+  // 단톡방 사람별 통합 조회 — /은우 /미주 /경태 (단축, 각 섹션 3건)
+  // 미주 봇 명령어와 충돌 X (이름은 미주 봇 trigger 아님). 시트 read only.
+  if (text === '/은우') { handleMisuPerson(chatId, '은우', 3); return; }
+  if (text === '/미주') { handleMisuPerson(chatId, '미주', 3); return; }
+  if (text === '/경태') { handleMisuPerson(chatId, '경태', 3); return; }
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var addMatch = text.match(/^\/추가\s+([\s\S]+)/);
   if (addMatch) { addReminderSheet(ss, addMatch[1].trim(), sender, today); return; }
@@ -292,8 +322,14 @@ function handleEunwooDM(msg) {
   if ((m = text.match(/^\/작업중단\s+([A-Z0-9-]+)/))) { updateWorkStatus(m[1].trim(), 'STOP', chatId); return; }
   if ((m = text.match(/^\/작업보류\s+([A-Z0-9-]+)/))) { updateWorkStatus(m[1].trim(), 'HOLD', chatId); return; }
   if (text === '/작업목록') { listActiveWorks(chatId); return; }
-  if ((m = text.match(/^\/메모\s+([\s\S]+)/))) { addMemo(m[1].trim(), chatId, date); return; }
-  if (text === '/메모목록') { listMemos(chatId); return; }
+  if ((m = text.match(/^\/메모\s+([\s\S]+)/))) {
+    var memoText = m[1].trim();
+    var res = appendEunwooCompassMemo_(memoText);
+    if (res.ok) sendTGMessage(chatId, '✅ 개인메모 저장 (전략 대시보드 COMPASS)\n• ' + memoText);
+    else sendTGMessage(chatId, '⚠️ 메모 저장 실패: ' + res.error);
+    return;
+  }
+  if (text === '/메모목록') { sendTGMessage(chatId, '📝 <b>개인메모</b> (COMPASS)\n' + readEunwooCompassMemo_()); return; }
   if (text === '/UX 발송' || text === '/UX발송') { handleUXSend(chatId); return; }
   if (text === '/UX 보류' || text === '/UX보류') { handleUXSkip(chatId, date); return; }
   if ((m = text.match(/^\/UX\s*수정\s+([\s\S]+)/))) { handleUXRevise(m[1].trim(), chatId); return; }
@@ -302,10 +338,320 @@ function handleEunwooDM(msg) {
     catch (e) { sendTGMessage(chatId, '⚠️ 셋업 실패: ' + e.message); }
     return;
   }
-  if (text === '/도움' || text === '/help') {
-    sendTGMessage(chatId, '<b>은우봇 명령어</b>\n/작업 [내용] — 새 작업 등록\n/작업목록 — 진행 중 작업 보기\n/메모 [내용] — 메모 추가 (매일 아침 DM에 표시)\n/메모목록 — 메모 전체 보기\n/UX 발송 — 대기 중 UX 초안을 단톡방에 보냄\n/UX 보류 — 이번 회차 UX 초안 스킵\n/UX 수정 [요청] — UX 초안 다시 생성\n버튼으로 완료/중단/보류 처리');
+  // 미주 송마망 시트 read-only query — /조회 prefix (미주 버팀이 봇 /액션 충돌 회피)
+  // 시트 write X — 미주 자동화 무영향
+  if ((m = text.match(/^\/조회\s+액션(?:\s+(\S+))?$/))) { handleMisuActions(chatId, m[1] || '은우'); return; }
+  if (text === '/조회 결정' || text === '/조회결정') { handleMisuDecisions(chatId); return; }
+  if (text === '/조회 공유' || text === '/조회공유') { handleMisuLinks(chatId); return; }
+  if (text === '/조회 리마인드' || text === '/조회리마인드') { handleMisuReminders(chatId); return; }
+  if (text === '/조회 멘션' || text === '/조회멘션') { handleMisuMentions(chatId); return; }
+  if (text === '/내것' || text === '/조회 내것' || text === '/조회내것') { handleMisuMine(chatId); return; }
+  if (text === '/은우') { handleMisuPerson(chatId, '은우', 5); return; }
+  if (text === '/미주') { handleMisuPerson(chatId, '미주', 5); return; }
+  if (text === '/경태') { handleMisuPerson(chatId, '경태', 5); return; }
+  if ((m = text.match(/^\/완료\s+(.+)$/))) {
+    var nums = (m[1].match(/\d+/g) || []);  // 숫자만 추출 — "1번 2번"·"1,2"·"1 2" 다 OK
+    handleMisuComplete(chatId, nums);
     return;
   }
+  if (text === '/도움' || text === '/help') {
+    sendTGMessage(chatId, '<b>은우봇 명령어</b>\n<b>· 개인</b>\n/작업 [내용] — 새 작업 등록\n/작업목록 — 진행 중 작업 보기\n/메모 [내용] — 메모 추가\n/메모목록 — 메모 보기\n\n<b>· UX 사례 (월·목)</b>\n/UX 발송 · /UX 보류 · /UX 수정 [요청]\n\n<b>· 미주 송마망 시트 조회 (read-only)</b>\n/내것 (또는 /조회 내것) — 은우 언급 통합 (액션·결정·공유·리마인드·멘션)\n/조회 액션 [담당자=은우] — 미완료 액션\n/완료 [번호] — 직전 /조회 액션의 N번 시트에 완료 마킹 (예: /완료 1 3)\n/조회 결정 — 최근 결정사항\n/조회 공유 — 최근 공유링크\n/조회 리마인드 — 오늘 도래\n/조회 멘션 — 단톡방에서 은우 멘션');
+    return;
+  }
+}
+
+// ===== 미주 송마망 시트 read-only query 핸들러 =====
+// 시트 write 0. 미주 자동화 시스템 무영향. read only.
+function fetchSongmamansSheet_(tabName) {
+  try {
+    var ss = SpreadsheetApp.openById(SHEET_ID);
+    var sh = ss.getSheetByName(tabName);
+    if (!sh || sh.getLastRow() < 2) return { headers: [], rows: [] };
+    var data = sh.getDataRange().getValues();
+    return { headers: data[0].map(String), rows: data.slice(1) };
+  } catch (e) { return { headers: [], rows: [], err: e.message }; }
+}
+function colIdx_(headers, keyword) {
+  for (var i = 0; i < headers.length; i++) {
+    if (String(headers[i]).indexOf(keyword) >= 0) return i;
+  }
+  return -1;
+}
+// 정확 매칭(우선순위) 또는 키워드 fallback list — 시트 실제 헤더 검증 후 fix (2026-06-01)
+function colIdxFirst_(headers, keywords) {
+  for (var k = 0; k < keywords.length; k++) {
+    for (var i = 0; i < headers.length; i++) {
+      if (String(headers[i]).trim() === keywords[k]) return i;
+    }
+  }
+  // exact 매치 X면 부분일치 fallback (첫 키워드만)
+  return colIdx_(headers, keywords[0]);
+}
+function trunc_(v, n) { var s = String(v == null ? '' : v); return s.length > n ? s.slice(0, n) + '…' : s; }
+function ymd_(v) { var s = String(v == null ? '' : v); return s.slice(0, 10); }
+// 0520(수) 한국식 포맷 — 영어 "Wed May 20" 대신
+function fmtDate_(v) {
+  if (v == null || v === '') return '';
+  var d;
+  if (v instanceof Date) d = v;
+  else if (/^\d{4}-\d{2}-\d{2}/.test(String(v))) d = new Date(String(v));
+  else return String(v).slice(0, 10);
+  if (isNaN(d.getTime())) return String(v).slice(0, 10);
+  var mm = ('0' + (d.getMonth() + 1)).slice(-2);
+  var dd = ('0' + d.getDate()).slice(-2);
+  var wd = ['일', '월', '화', '수', '목', '금', '토'][d.getDay()];
+  return mm + dd + '(' + wd + ')';
+}
+
+function handleMisuActions(chatId, owner) {
+  var d = fetchSongmamansSheet_('✅ 액션');
+  if (d.err) { sendTGMessage(chatId, '⚠️ 시트 read 실패: ' + d.err); return; }
+  if (!d.rows.length) { sendTGMessage(chatId, '액션 시트 비어있음'); return; }
+  var iOwner = colIdx_(d.headers, '담당');
+  var iContent = colIdx_(d.headers, '내용');
+  var iDate = colIdx_(d.headers, '등록');
+  var iDue = colIdx_(d.headers, '마감');
+  var iStatus = colIdx_(d.headers, '상태');
+  var iDone = colIdx_(d.headers, '완료');
+  // row 인덱스도 같이 (캐시용 — /완료 마킹 시 정확한 시트 행)
+  var indexed = d.rows.map(function (r, i) { return { r: r, sheetRow: i + 2 }; });
+  var filtered = indexed.filter(function (x) {
+    var r = x.r;
+    var matchOwner = !owner || String(r[iOwner] || '').indexOf(owner) >= 0;
+    var statusDone = iStatus >= 0 && /완료|done|✅|✓/i.test(String(r[iStatus] || ''));
+    var doneFlag = iDone >= 0 && /^(Y|TRUE|✓|완료)$/i.test(String(r[iDone] || '').trim());
+    return matchOwner && !statusDone && !doneFlag;
+  }).slice(-15).reverse();
+  if (!filtered.length) { sendTGMessage(chatId, '📋 ' + owner + ' 미완료 액션 없음'); return; }
+  // 캐시 — chatId별 30분 유효. /완료 N 마킹 시 사용
+  try {
+    CacheService.getScriptCache().put('actions_' + chatId, JSON.stringify(filtered.map(function (x) { return x.sheetRow; })), 1800);
+  } catch (e) {}
+  var lines = filtered.map(function (x, i) {
+    var r = x.r;
+    var dt = iDate >= 0 ? fmtDate_(r[iDate]) : '';
+    var due = iDue >= 0 ? fmtDate_(r[iDue]) : '';
+    var c = trunc_(r[iContent], 110);
+    return (i + 1) + '. [' + dt + (due ? '→' + due : '') + '] ' + c;
+  });
+  sendTGMessage(chatId, '📋 <b>' + owner + ' 미완료 액션 ' + filtered.length + '건</b>\n\n' + lines.join('\n') + '\n\n<i>완료 처리: /완료 [번호] (예: /완료 1 3)</i>');
+}
+
+// /완료 N1 N2 ... — 직전 /조회 액션 결과의 N번째 행을 시트에 완료 마킹
+function handleMisuComplete(chatId, nums) {
+  var cached = null;
+  try { var v = CacheService.getScriptCache().get('actions_' + chatId); cached = v ? JSON.parse(v) : null; } catch (e) {}
+  if (!cached || !cached.length) { sendTGMessage(chatId, '⚠️ /조회 액션 먼저 (캐시 만료·없음, 30분 유효)'); return; }
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sh = ss.getSheetByName('✅ 액션');
+  if (!sh) { sendTGMessage(chatId, '⚠️ 액션 시트 없음'); return; }
+  var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+  // 상태/완료 컬럼 찾기 (부분일치)
+  var iStatus = -1;
+  for (var i = 0; i < headers.length; i++) {
+    if (/상태|완료|status|done|진행/i.test(headers[i])) { iStatus = i; break; }
+  }
+  if (iStatus < 0) {
+    sendTGMessage(chatId, '⚠️ 액션 탭에 "상태"/"완료" 컬럼 못 찾음.\n현재 헤더: ' + headers.join(' | ') + '\n사용자가 어느 컬럼인지 알려주면 박을게요.');
+    return;
+  }
+  var marked = [], skipped = [];
+  nums.forEach(function (n) {
+    var idx = parseInt(n, 10) - 1;
+    if (idx < 0 || idx >= cached.length || isNaN(idx)) { skipped.push(n); return; }
+    var rowNum = cached[idx];
+    try {
+      sh.getRange(rowNum, iStatus + 1).setValue('완료');
+      marked.push(n);
+    } catch (e) { skipped.push(n + '(' + e.message + ')'); }
+  });
+  var msg = '';
+  if (marked.length) msg += '✅ 완료 마킹: ' + marked.join(', ') + ' (' + headers[iStatus] + ' 컬럼)';
+  if (skipped.length) msg += (msg ? '\n' : '') + '⚠️ 스킵: ' + skipped.join(', ');
+  if (!msg) msg = '⚠️ 마킹된 항목 없음';
+  sendTGMessage(chatId, msg);
+}
+function handleMisuDecisions(chatId) {
+  var d = fetchSongmamansSheet_('💡 의견_결정');
+  if (d.err) { sendTGMessage(chatId, '⚠️ 시트 read 실패: ' + d.err); return; }
+  if (!d.rows.length) { sendTGMessage(chatId, '결정 시트 비어있음'); return; }
+  var iDate = colIdx_(d.headers, '날짜') >= 0 ? colIdx_(d.headers, '날짜') : colIdx_(d.headers, '등록');
+  var iTopic = colIdx_(d.headers, '주제');
+  var iDecision = colIdx_(d.headers, '결정');
+  var iContent = colIdx_(d.headers, '내용');
+  var recent = d.rows.slice(-10).reverse();
+  var lines = recent.map(function (r, i) {
+    var dt = iDate >= 0 ? fmtDate_(r[iDate]) : '';
+    var t = iTopic >= 0 ? trunc_(r[iTopic], 40) : '';
+    var dec = iDecision >= 0 ? trunc_(r[iDecision], 100) : (iContent >= 0 ? trunc_(r[iContent], 100) : '');
+    return (i + 1) + '. [' + dt + '] ' + (t ? t + ' — ' : '') + dec;
+  });
+  sendTGMessage(chatId, '💡 <b>최근 결정 ' + recent.length + '건</b>\n\n' + lines.join('\n'));
+}
+function handleMisuLinks(chatId) {
+  var d = fetchSongmamansSheet_('🔗 공유_링크');
+  if (d.err) { sendTGMessage(chatId, '⚠️ 시트 read 실패: ' + d.err); return; }
+  if (!d.rows.length) { sendTGMessage(chatId, '공유링크 시트 비어있음'); return; }
+  // 실제 헤더: 등록일·카테고리·내용·URL·키워드·등록자
+  var iDate = colIdxFirst_(d.headers, ['등록일', '날짜']);
+  var iSender = colIdxFirst_(d.headers, ['등록자', '담당자', '발신자']);
+  var iContent = colIdxFirst_(d.headers, ['내용', '링크']);
+  var recent = d.rows.slice(-10).reverse();
+  var lines = recent.map(function (r, i) {
+    var dt = iDate >= 0 ? fmtDate_(r[iDate]) : '';
+    var s = iSender >= 0 ? trunc_(r[iSender], 8) : '';
+    var c = iContent >= 0 ? trunc_(r[iContent], 130) : '';
+    return (i + 1) + '. [' + dt + '] ' + (s ? s + ' ' : '') + c;
+  });
+  sendTGMessage(chatId, '🔗 <b>최근 공유 ' + recent.length + '건</b>\n\n' + lines.join('\n'));
+}
+function handleMisuReminders(chatId) {
+  var d = fetchSongmamansSheet_('🔔 리마인드_큐');
+  if (d.err) { sendTGMessage(chatId, '⚠️ 시트 read 실패: ' + d.err); return; }
+  if (!d.rows.length) { sendTGMessage(chatId, '리마인드 시트 비어있음'); return; }
+  // 실제 헤더: ID·트리거 종류·항목 참조 ID·알림 일시·푸시 상태·메모
+  var iDate = colIdxFirst_(d.headers, ['알림 일시', '날짜', '도래']);
+  var iContent = colIdxFirst_(d.headers, ['메모', '내용']);
+  var iStatus = colIdxFirst_(d.headers, ['푸시 상태', '상태']);
+  var today = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
+  var dueToday = d.rows.filter(function (r) {
+    var dt = iDate >= 0 ? ymd_(r[iDate]) : '';  // 비교용 — 표시는 fmtDate_ 별도
+    var done = iStatus >= 0 && /완료|done|✅|✓|pushed|sent/i.test(String(r[iStatus] || ''));
+    return !done && dt && dt <= today;
+  }).slice(0, 10);
+  if (!dueToday.length) { sendTGMessage(chatId, '🔔 오늘 도래 리마인드 없음'); return; }
+  var lines = dueToday.map(function (r, i) {
+    var dt = iDate >= 0 ? fmtDate_(r[iDate]) : '';
+    var c = iContent >= 0 ? trunc_(r[iContent], 130) : '';
+    return (i + 1) + '. [' + dt + '] ' + c;
+  });
+  sendTGMessage(chatId, '🔔 <b>오늘 도래 리마인드 ' + dueToday.length + '건</b>\n\n' + lines.join('\n'));
+}
+function handleMisuMentions(chatId) {
+  var d = fetchSongmamansSheet_('📥 RAW');
+  if (d.err) { sendTGMessage(chatId, '⚠️ 시트 read 실패: ' + d.err); return; }
+  if (!d.rows.length) { sendTGMessage(chatId, 'RAW 시트 비어있음'); return; }
+  // 실제 헤더: 시각·발신자·본문·태그·메시지ID
+  var iDate = 0, iTime = -1;  // 시각=0번 (날짜+시간 합쳐짐)
+  var iSender = colIdxFirst_(d.headers, ['발신자', '발신']);
+  if (iSender < 0) iSender = 1;
+  var iText = colIdxFirst_(d.headers, ['본문', '내용', '메시지']);
+  if (iText < 0) iText = 2;
+  var mentions = d.rows.filter(function (r) {
+    var s = String(r[iSender] || '');
+    var t = String(r[iText] || '');
+    return s.indexOf('은우') < 0 && /은우/.test(t);
+  }).slice(-10).reverse();
+  if (!mentions.length) { sendTGMessage(chatId, '💬 단톡방 은우 멘션 최근 없음'); return; }
+  var lines = mentions.map(function (r, i) {
+    // 시각 컬럼은 "2026-06-01 14:33" 형태 — fmtDate_가 날짜 부분만, 시간은 별도 추출
+    var raw = String(r[iDate] || '');
+    var dt = fmtDate_(r[iDate]);
+    var tm = (raw.match(/\d{2}:\d{2}/) || [''])[0];
+    var s = trunc_(r[iSender], 6);
+    var t = trunc_(r[iText], 120);
+    return (i + 1) + '. [' + dt + (tm ? ' ' + tm : '') + '] ' + s + ': ' + t;
+  });
+  sendTGMessage(chatId, '💬 <b>단톡방 은우 멘션 ' + mentions.length + '건</b>\n\n' + lines.join('\n'));
+}
+
+// ===== 사람별 통합 — /내것 (은우) · /경태 · /미주 · /은우 =====
+// 액션·결정·공유·리마인드·멘션 5탭에서 해당 사람 언급된 항목 한 번에
+function handleMisuMine(chatId) { handleMisuPerson(chatId, '은우', 5); }
+function handleMisuPerson(chatId, name, limit) {
+  limit = limit || 5;
+  var sections = [];
+
+  // 1. 액션 (담당자=은우, 미완료)
+  var a = fetchSongmamansSheet_('✅ 액션');
+  if (a.rows.length) {
+    var iO = colIdx_(a.headers, '담당'), iC = colIdx_(a.headers, '내용');
+    var iD = colIdx_(a.headers, '등록'), iDue = colIdx_(a.headers, '마감');
+    var iS = colIdx_(a.headers, '상태'), iDn = colIdx_(a.headers, '완료');
+    var rows = a.rows.filter(function (r) {
+      var match = iO < 0 || String(r[iO] || '').indexOf(name) >= 0;
+      var done = iS >= 0 && /완료|done|✅|✓/i.test(String(r[iS] || ''));
+      var done2 = iDn >= 0 && /^(Y|TRUE|✓|완료)$/i.test(String(r[iDn] || '').trim());
+      return match && !done && !done2;
+    }).slice(-limit).reverse();
+    if (rows.length) sections.push('📋 <b>액션 ' + rows.length + '건</b>\n' + rows.map(function (r, i) {
+      var dt = iD >= 0 ? fmtDate_(r[iD]) : '';
+      var due = iDue >= 0 ? fmtDate_(r[iDue]) : '';
+      return (i + 1) + '. [' + dt + (due ? '→' + due : '') + '] ' + trunc_(r[iC], 90);
+    }).join('\n'));
+  }
+
+  // 2. 결정 — 팀 전체 결정 (은우도 알아야 함, 필터 X). 최근 5개
+  var dc = fetchSongmamansSheet_('💡 의견_결정');
+  if (dc.rows.length) {
+    var iD2 = colIdx_(dc.headers, '날짜') >= 0 ? colIdx_(dc.headers, '날짜') : colIdx_(dc.headers, '등록');
+    var iT = colIdx_(dc.headers, '주제'), iDec = colIdx_(dc.headers, '결정'), iC2 = colIdx_(dc.headers, '내용');
+    var rows2 = dc.rows.slice(-limit).reverse();
+    if (rows2.length) sections.push('💡 <b>최근 결정 ' + rows2.length + '건</b>\n' + rows2.map(function (r, i) {
+      var dt = iD2 >= 0 ? fmtDate_(r[iD2]) : '';
+      var t = iT >= 0 ? trunc_(r[iT], 30) : '';
+      var d2 = iDec >= 0 ? trunc_(r[iDec], 80) : (iC2 >= 0 ? trunc_(r[iC2], 80) : '');
+      var hit = String((iT >= 0 ? r[iT] : '') + (iDec >= 0 ? r[iDec] : '') + (iC2 >= 0 ? r[iC2] : '')).indexOf(name) >= 0 ? '⭐ ' : '';
+      return (i + 1) + '. ' + hit + '[' + dt + '] ' + (t ? t + ' — ' : '') + d2;
+    }).join('\n'));
+  }
+
+  // 3. 공유 — 팀 전체 공유 (필터 X). 최근 5개
+  var sh = fetchSongmamansSheet_('🔗 공유_링크');
+  if (sh.rows.length) {
+    // 실제 헤더: 등록일·카테고리·내용·URL·키워드·등록자
+    var iD3 = colIdxFirst_(sh.headers, ['등록일', '날짜']);
+    var iSe = colIdxFirst_(sh.headers, ['등록자', '담당자', '발신자']);
+    var iC3 = colIdxFirst_(sh.headers, ['내용', '링크']);
+    var rows3 = sh.rows.slice(-limit).reverse();
+    if (rows3.length) sections.push('🔗 <b>최근 공유 ' + rows3.length + '건</b>\n' + rows3.map(function (r, i) {
+      var dt = iD3 >= 0 ? fmtDate_(r[iD3]) : '';
+      var hit = String((iSe >= 0 ? r[iSe] : '') + (iC3 >= 0 ? r[iC3] : '')).indexOf(name) >= 0 ? '⭐ ' : '';
+      return (i + 1) + '. ' + hit + '[' + dt + '] ' + trunc_(r[iC3], 110);
+    }).join('\n'));
+  }
+
+  // 4. 리마인드 — 오늘 도래 전체 (필터 X)
+  var rm = fetchSongmamansSheet_('🔔 리마인드_큐');
+  if (rm.rows.length) {
+    // 실제 헤더: ID·트리거 종류·항목 참조 ID·알림 일시·푸시 상태·메모
+    var iD4 = colIdxFirst_(rm.headers, ['알림 일시', '날짜', '도래']);
+    var iC4 = colIdxFirst_(rm.headers, ['메모', '내용']);
+    var iS4 = colIdxFirst_(rm.headers, ['푸시 상태', '상태']);
+    var today = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
+    var rows4 = rm.rows.filter(function (r) {
+      var dt = iD4 >= 0 ? ymd_(r[iD4]) : '';
+      var done = iS4 >= 0 && /완료|done|✅|✓|pushed|sent/i.test(String(r[iS4] || ''));
+      return !done && dt && dt <= today;
+    }).slice(0, limit + 3);
+    if (rows4.length) sections.push('🔔 <b>오늘 도래 리마인드 ' + rows4.length + '건</b>\n' + rows4.map(function (r, i) {
+      var dt = iD4 >= 0 ? fmtDate_(r[iD4]) : '';
+      var hit = iC4 >= 0 && String(r[iC4] || '').indexOf(name) >= 0 ? '⭐ ' : '';
+      return (i + 1) + '. ' + hit + '[' + dt + '] ' + trunc_(r[iC4], 110);
+    }).join('\n'));
+  }
+
+  // 5. 단톡방 멘션 (RAW에서 다른 사람이 name 언급) — 실제 헤더: 시각·발신자·본문·태그·메시지ID
+  var raw = fetchSongmamansSheet_('📥 RAW');
+  if (raw.rows.length) {
+    var iSe2 = colIdxFirst_(raw.headers, ['발신자', '발신']);
+    if (iSe2 < 0) iSe2 = 1;
+    var iTx = colIdxFirst_(raw.headers, ['본문', '내용', '메시지']);
+    if (iTx < 0) iTx = 2;
+    var rows5 = raw.rows.filter(function (r) {
+      var s = String(r[iSe2] || ''); var t = String(r[iTx] || '');
+      return s.indexOf(name) < 0 && t.indexOf(name) >= 0;
+    }).slice(-limit).reverse();
+    if (rows5.length) sections.push('💬 <b>단톡 ' + name + ' 멘션 ' + rows5.length + '건</b>\n' + rows5.map(function (r, i) {
+      var raw0 = String(r[0] || '');
+      var dt = fmtDate_(r[0]);
+      var tm = (raw0.match(/\d{2}:\d{2}/) || [''])[0];
+      return (i + 1) + '. [' + dt + (tm ? ' ' + tm : '') + '] ' + trunc_(r[iSe2], 6) + ': ' + trunc_(r[iTx], 100);
+    }).join('\n'));
+  }
+
+  if (!sections.length) { sendTGMessage(chatId, '👤 ' + name + ' 관련 항목 없음'); return; }
+  sendTGMessage(chatId, '👤 <b>' + name + ' 통합</b>\n\n' + sections.join('\n\n'));
 }
 
 // ===== UX 명령어 핸들러 =====
@@ -590,6 +936,82 @@ function saveDailySnapshot_(contents) {
   });
   sh.appendRow(row);
   return { ok: true, date: date };
+}
+
+// COMPASS 은우 개인메모 — /메모로 추가 (전략 대시보드, 컴퓨터 꺼져도 GAS가 처리)
+// ⚠️ 은우 행(A열='은우')의 C열(개인메모)만 append. 미주·경태 행·다른 영역 절대 안 건드림.
+function findEunwooMemoCell_() {
+  var sh = SpreadsheetApp.openById(STRATEGY_SHEET_ID).getSheetByName('🧭 COMPASS');
+  if (!sh) return null;
+  var aCol = sh.getRange('A49:A60').getValues();
+  for (var i = 0; i < aCol.length; i++) {
+    if (String(aCol[i][0]).trim() === '은우') return sh.getRange(49 + i, 3); // C열 = 개인메모
+  }
+  return null;
+}
+function appendEunwooCompassMemo_(text) {
+  try {
+    var cell = findEunwooMemoCell_();
+    if (!cell) return { ok: false, error: '은우 행 못 찾음 (COMPASS A49:A60)' };
+    var cur = String(cell.getValue() || '');
+    var d = Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd');
+    var line = '• ' + d + ' ' + text;
+    cell.setValue(cur ? cur + '\n' + line : line);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+function readEunwooCompassMemo_() {
+  try {
+    var cell = findEunwooMemoCell_();
+    if (!cell) return '(은우 행 못 찾음)';
+    return String(cell.getValue() || '(비어있음)');
+  } catch (e) { return '(읽기 오류: ' + e.message + ')'; }
+}
+
+// 미주 송마망 시트 전체 구조 dump + 키워드 매칭 (2026-06-01 — 솔라피/알림톡 데이터 위치 탐색용)
+function dumpMisuStructure_(keyword) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sheets = ss.getSheets();
+  var tabs = [];
+  var hits = [];
+  sheets.forEach(function (sh) {
+    var name = sh.getName();
+    var lastRow = sh.getLastRow();
+    var lastCol = sh.getLastColumn();
+    var headers = (lastRow >= 1 && lastCol >= 1) ? sh.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+    tabs.push({ name: name, rows: lastRow, headers: headers });
+    // 키워드가 있으면 해당 탭 전체에서 매칭 행 찾기 (최근 200행만)
+    if (keyword && lastRow >= 2) {
+      var startRow = Math.max(2, lastRow - 200);
+      var data = sh.getRange(startRow, 1, lastRow - startRow + 1, lastCol).getValues();
+      data.forEach(function (row, i) {
+        var joined = row.join(' | ');
+        if (joined.indexOf(keyword) >= 0) {
+          hits.push({ tab: name, row: startRow + i, text: joined.slice(0, 400) });
+        }
+      });
+    }
+  });
+  return { ok: true, tabs: tabs, hits: hits.slice(0, 40) };
+}
+
+// 기간 raw funnel — 도입 전후 비교용 (2026-06-01 추가)
+function getDailyRawRange_(startDate, endDate) {
+  var sh = getDailySnapshotTab_();
+  if (sh.getLastRow() < 2) return { ok: true, rows: [] };
+  var data = sh.getDataRange().getValues();
+  var headers = data[0];
+  var rows = data.slice(1)
+    .filter(function (r) {
+      var d = String(r[0]).slice(0, 10);
+      return d >= startDate && d <= endDate;
+    })
+    .map(function (r) {
+      var o = {};
+      headers.forEach(function (h, i) { o[h] = r[i]; });
+      return o;
+    });
+  return { ok: true, headers: headers, rows: rows };
 }
 
 function getDailyBaseline_(daysBack) {

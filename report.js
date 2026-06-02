@@ -24,6 +24,15 @@ async function getMemos() {
   } catch(e) { console.error('[메모 조회 오류]', e.message); return []; }
 }
 
+// COMPASS 은우 개인메모 — /메모로 추가한 줄("• ")만 데일리에 자동 표시 (잊지 않게)
+async function getCompassMemos() {
+  try {
+    const res = await postToAppsScript({ action: 'get_eunwoo_memo' }, APPS_SCRIPT_URL);
+    const memo = res.memo || '';
+    return memo.split('\n').filter(l => l.trim().startsWith('•')).map(l => l.replace(/^•\s*/, '').trim()).filter(Boolean);
+  } catch(e) { console.error('[COMPASS 메모 조회 오류]', e.message); return []; }
+}
+
 // ── 리마인드 (GAS Sheets 기반) ────────────────────────
 async function getRemindersFromSheet() {
   try {
@@ -593,8 +602,13 @@ async function fetchCafe24OrdersRange(startDate, endDate) {
     let offset = 0;
     while (true) {
       const url = `${CAFE24_BASE}orders?start_date=${cs}&end_date=${ce}&limit=100&offset=${offset}`;
-      const data = await fetchJson(url, { 'Authorization': `Bearer ${CAFE24_ACCESS_TOKEN}`, 'X-Cafe24-Api-Version': CAFE24_API_VERSION });
-      if (!data.orders || data.orders.length === 0) break;
+      let data = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        data = await fetchJson(url, { 'Authorization': `Bearer ${CAFE24_ACCESS_TOKEN}`, 'X-Cafe24-Api-Version': CAFE24_API_VERSION });
+        if (data && Array.isArray(data.orders)) break;   // 정상 응답(빈 배열 포함) — 재시도 불필요
+        await new Promise(r => setTimeout(r, 600));        // rate limit/일시 오류 → 대기 후 재시도 (부분 데이터 방지)
+      }
+      if (!data || !Array.isArray(data.orders) || data.orders.length === 0) break;
       all.push(...data.orders);
       if (data.orders.length < 100) break;
       offset += 100;
@@ -1218,6 +1232,11 @@ async function calculateLTVMetrics(asOfDate) {
   const orders = await fetchCafe24OrdersRange(start, end);
   if (!orders.length) return null;
 
+  // fetch 건강성용 — 실제 들어온 주문일의 최신/최古 (페이지네이션·토큰 누락 감지)
+  const allOrderDates = orders.map(o => String(o.order_date || '').slice(0, 10)).filter(d => d).sort();
+  const newestOrderDate = allOrderDates[allOrderDates.length - 1] || '';
+  const oldestOrderDate = allOrderDates[0] || '';
+
   const byMember = {};
   for (const o of orders) {
     const mid = (o.member_id || '').trim();
@@ -1273,6 +1292,8 @@ async function calculateLTVMetrics(asOfDate) {
     신규_D30_retention: d30Cohort.length > 0 ? Number((d30Retained / d30Cohort.length * 100).toFixed(2)) : 0,
     신규_D30_cohort_size: d30Cohort.length,
     실제_lookback_일수: firstSpanDays,
+    최신_주문일: newestOrderDate,
+    최古_주문일: oldestOrderDate,
   };
 }
 
@@ -1553,6 +1574,7 @@ const PROMO_SCHEDULE = [
   { title: '꿀동이 공구 (바질 #87)',      productNo: '87', start: '2026-05-25', end: '2026-05-31' },
   { title: '찬밥 공구 (바질 #51)',         productNo: '51', start: '2026-06-04', end: '2026-06-10' },
   { title: '유나레시피 공구 (엘가팬 #60)', productNo: '60', start: '2026-06-11', end: '2026-06-14' },
+  { title: '유나레시피 공구 (클래식 바질 #88)', productNo: '88', start: '2026-07-08', end: '2026-07-11' },
 ];
 
 // 활성·예정 공구 목록 (오늘 기준 진행 중 또는 30일 이내 시작 예정)
@@ -1913,7 +1935,8 @@ function buildPaymentAction({ dailyOrders, ga4Daily, adAudit, segments }) {
 // 목적: 데이터 소스가 조용히 실패(null·0)하거나 숫자가 안 맞을 때 사람이 아니라 봇이 먼저 잡는다.
 function buildDataHealthWarnings(d) {
   const w = [];
-  const { dailyOrders, cafe24, segments, ga4Daily, clarity, analysis, cxManagerAnalysis, restock, voc, adAudit, ltv, songmamansSales, meta, promos } = d;
+  const { dailyOrders, cafe24, segments, ga4Daily, clarity, analysis, cxManagerAnalysis, restock, voc, adAudit, ltv, songmamansSales, meta, promos, reportDate } = d;
+  const asOf = reportDate || dateStr(1);
 
   // ① 송마망봇 ↔ 은우봇 매출 교차 (메시지 잡혔을 때만)
   if (songmamansSales && dailyOrders && dailyOrders.revenue > 0) {
@@ -1937,15 +1960,23 @@ function buildDataHealthWarnings(d) {
       if (diffPct > 5) w.push(`세그먼트 합계 ${formatMoney(segSum)} ≠ 전체 ${formatMoney(dailyOrders.revenue)} (${diffPct.toFixed(1)}%)`);
     }
   }
-  // ④ Funnel 단조성 (역전만 alert, drop은 정상)
+  // ④ Funnel 단조성 — 진짜 이상만 alert.
+  //    begin_checkout > 구매 역전(결제완료>결제진입)은 측정구조상 정상: 외부결제(네이버·카카오)는
+  //    begin_checkout 미발사(과소)인데 purchase는 GA4 MP push로 외부결제까지 보강(정확)됨 [[ga4-mp]].
+  //    의미있는 이상은 "구매 > 장바구니"(상류보다 하류가 큼) 뿐.
   if (ga4Daily?.checkoutFunnel) {
     const f = ga4Daily.checkoutFunnel;
     if (f.beginCheckout > f.addToCart) w.push(`funnel 역전: 결제진입(${f.beginCheckout}) > 장바구니(${f.addToCart})`);
-    if (f.purchase && f.purchase > f.beginCheckout) w.push(`funnel 역전: 결제완료(${f.purchase}) > 결제진입(${f.beginCheckout})`);
+    if (f.purchase && f.addToCart && f.purchase > f.addToCart) w.push(`funnel 역전: 결제완료(${f.purchase}) > 장바구니(${f.addToCart})`);
   }
-  // ⑤ LTV stale 감지
-  if (ltv && ltv.회원_총수_365d > 100 && ltv.실제_lookback_일수 < 270) {
-    w.push(`LTV lookback stale — 365d 요청·실제 ${ltv.실제_lookback_일수}일만 fetch (토큰·페이지네이션 의심)`);
+  // ⑤ LTV fetch 건강성 — 운영 시작(자사몰 2025-12 오픈)이라 lookback span 짧은 건 정상(오탐 제거).
+  //    진짜 이상은 "최근 주문이 안 들어옴" = 토큰/페이지네이션으로 최신 데이터 누락.
+  if (ltv && ltv.회원_총수_365d > 100 && ltv.최신_주문일) {
+    const newestMs = new Date(ltv.최신_주문일 + 'T00:00:00Z').getTime();
+    const cutoffMs = new Date(asOf + 'T00:00:00Z').getTime() - 2 * 86400000; // 기준일-2일 이내 주문 있어야 정상
+    if (newestMs < cutoffMs) {
+      w.push(`LTV fetch 누락 의심 — 최근 주문일 ${ltv.최신_주문일}, 기준일 ${asOf}보다 오래됨 (토큰·페이지네이션)`);
+    }
   }
   // ⑥ 토큰 만료 감지 — 발송 중단 신호
   if (!dailyOrders || dailyOrders.totalCount === 0) {
@@ -2270,6 +2301,22 @@ async function dailyReport() {
     }
   }
 
+  // 🎯 오늘 할 것 — 레버 데이터에서 규칙으로 액션 도출 (측정값 직결, Claude 판단의 안전판).
+  // 데이터→행동 루프: 각 줄이 "지표 → 바꿀 행동". 행동하면 그 지표가 다음날 바뀌어야 함.
+  const dailyActions = [];
+  if (segments && segments.guest && segments.totalOrders) {
+    const gShare = (segments.guest.newCount + segments.guest.repeatCount) / Math.max(segments.totalOrders, 1);
+    if (gShare >= 0.35) dailyActions.push(`👤 게스트 ${Math.round(gShare * 100)}% → 결제완료에 회원전환 쿠폰+친추 후크 (재구매 추적 가능하게)`);
+  }
+  if (ltvForReport && ltvForReport.휴면_91_180d >= 400) {
+    dailyActions.push(`🔁 휴면 ${ltvForReport.휴면_91_180d}명 → 소비주기(20일) 기반 레시피 리마인드 (할인 X·레시피 O)`);
+  }
+  if (promos && promos.length) {
+    const soon = promos.find(p => /D-[0-3]\b/.test(p.dDay || ''));
+    if (soon) dailyActions.push(`📅 ${soon.title} ${soon.dDay} → 발행·링크·재고 점검`);
+  }
+  const actionSection = dailyActions.length ? `\n\n🎯 <b>오늘 할 것</b>\n${dailyActions.join('\n')}` : '';
+
   // 단톡방 메시지 — 송마망봇과 중복되는 섹션(매출·유입경로·VOC·재입고·광고URL)은 제거.
   // 송마망봇이 매일 통합 발송하므로 은우봇은 CX 고유 차원(사이트행동·결제흐름·상품페이지·리텐션·상품믹스·CX판단)만.
   const msg = `🔎 <b>CX 일간</b> · ${display}
@@ -2281,7 +2328,7 @@ ${healthSection}${inappNotice}${checkoutSection}${productPageSection}
 ${retentionSection}${ltvSection}${segmentSalesSection}
 
 🛍️ <b>상품 별 매출</b>
-${productSalesOnly}${promoScheduleSection}`;
+${productSalesOnly}${promoScheduleSection}${actionSection}`;
 
   const analysisMsg = analysis ? `🤖 <b>CX 판단</b>\n${analysis}` : null;
 
@@ -2310,17 +2357,11 @@ ${productSalesOnly}${promoScheduleSection}`;
     }
   }
 
-  const memos = await getMemos();
+  // 개인메모 = COMPASS 전략대시보드에서 /메모로 추가한 것 (잊지 않게 매일 자동 표시)
+  const compassMemos = await getCompassMemos();
   let memoSection = '';
-  if (memos.length > 0) {
-    const urgentItems = memos.filter(t => t.urgent && !t.done);
-    const normalItems = memos.filter(t => !t.urgent && !t.done);
-    const doneItems   = memos.filter(t => t.done);
-    let lines = '';
-    if (urgentItems.length) lines += urgentItems.map(t => `🚨 ${t.text}`).join('\n') + '\n';
-    if (normalItems.length) lines += normalItems.map(t => `• ${t.text}`).join('\n') + '\n';
-    if (doneItems.length)   lines += doneItems.map(t => `• <s>${t.text}</s>`).join('\n');
-    memoSection = `\n📝 <b>은우 메모</b>\n${lines.trim()}`;
+  if (compassMemos.length > 0) {
+    memoSection = `\n📝 <b>개인메모</b> (COMPASS · /메모)\n${compassMemos.map(m => `• ${m}`).join('\n')}`;
   }
 
   // 역할 고정(2026-05-20): 회의록/일일대화/리마인드는 미주 통합 영역. 은우봇은 CX 행동·이상신호 + 개인 할일/메모만 발송.
@@ -2342,7 +2383,7 @@ ${productSalesOnly}${promoScheduleSection}`;
   const songmamansSales = parseSongmamansSales(songmamans);
   const warnings = buildDataHealthWarnings({
     dailyOrders, cafe24, segments, ga4Daily, clarity, analysis, cxManagerAnalysis, restock, voc, adAudit,
-    ltv: ltvForReport, songmamansSales, meta: metaToday, promos,
+    ltv: ltvForReport, songmamansSales, meta: metaToday, promos, reportDate: today,
   });
   if (warnings.length) console.error('⚠️ 데이터 점검 경고:\n- ' + warnings.join('\n- '));
   const healthSectionDM = warnings.length ? `\n\n🔧 <b>데이터 점검</b>\n${warnings.map(x => `⚠️ ${x}`).join('\n')}` : '';
@@ -2454,13 +2495,95 @@ async function backfillWeeklySnapshots(numWeeks = 8) {
   }
 }
 
+// ── 쿠폰 전환율 (등급쿠폰 사용률 — 미주 발송, 전환 측정은 은우 고유) ──
+// 등급쿠폰은 매월 재발급(recurring)이라 당월분은 사용시간 부족 → 직전 캘린더월 발급분으로 측정.
+async function fetchCouponConversion() {
+  try {
+    const headers = { 'Authorization': `Bearer ${CAFE24_ACCESS_TOKEN}`, 'X-Cafe24-Api-Version': CAFE24_API_VERSION };
+    const cpData = await fetchJson(`${CAFE24_BASE}coupons?limit=100`, headers);
+    // 재구매 유도용 등급쿠폰만 (웰컴=신규용이라 제외, issues 5000+로 무겁기도)
+    const coupons = (cpData.coupons || []).filter(c => /VIP|패밀리|Ambassador/i.test(c.coupon_name || ''));
+    // 직전월 YYYY-MM (로컬 기준 — toISOString은 UTC라 월초가 전달로 밀려서 쓰면 안 됨)
+    const dm = new Date(); dm.setDate(1); dm.setMonth(dm.getMonth() - 1);
+    const lastMonth = dm.getFullYear() + '-' + String(dm.getMonth() + 1).padStart(2, '0');
+    const out = [];
+    for (const c of coupons) {
+      let off = 0, all = [];
+      while (true) {
+        const d = await fetchJson(`${CAFE24_BASE}coupons/${c.coupon_no}/issues?limit=100&offset=${off}`, headers);
+        if (!d.issues || !d.issues.length) break;
+        all.push(...d.issues);
+        if (d.issues.length < 100) break;
+        off += 100; if (off > 3000) break;
+      }
+      const lm = all.filter(i => String(i.issued_date || '').slice(0, 7) === lastMonth);
+      if (!lm.length) continue;
+      const used = lm.filter(i => i.used_coupon === 'T');
+      const orderIds = used.filter(i => i.related_order_id).map(i => i.related_order_id);
+      out.push({ name: (c.coupon_name || '').replace(/\[|\]/g, '').slice(0, 14), issued: lm.length, used: used.length, rate: lm.length ? used.length / lm.length * 100 : 0, orders: orderIds.length });
+    }
+    return { month: lastMonth, coupons: out };
+  } catch (e) { console.error('[쿠폰 전환]', e.message); return null; }
+}
+
+// ── 재구매 골든타임 세그먼트 (마지막 구매 경과일 버킷) ──
+// 재구매 중앙값 ~20일 → D+21~35 = 막 떠나기 시작한 "깨울 타겟"
+async function getRepurchaseGoldenZone(asOfDate) {
+  try {
+    const end = asOfDate || dateStr(1);
+    const start = new Date(new Date(end + 'T00:00:00Z').getTime() - 365 * 86400000).toISOString().slice(0, 10);
+    const orders = await fetchCafe24OrdersRange(start, end);
+    if (!orders.length) return null;
+    const lastByMember = {};
+    orders.forEach(o => {
+      const m = (o.member_id || '').trim();
+      if (!m) return;
+      const d = String(o.order_date || '').slice(0, 10);
+      if (!lastByMember[m] || d > lastByMember[m]) lastByMember[m] = d;
+    });
+    const today = new Date(end + 'T00:00:00Z');
+    const seg = { d0_20: 0, d21_35: 0, d36_60: 0, d61_90: 0, d91: 0 };
+    Object.values(lastByMember).forEach(last => {
+      const days = Math.round((today - new Date(last + 'T00:00:00Z')) / 86400000);
+      if (days <= 20) seg.d0_20++; else if (days <= 35) seg.d21_35++;
+      else if (days <= 60) seg.d36_60++; else if (days <= 90) seg.d61_90++; else seg.d91++;
+    });
+    return { ...seg, total: Object.keys(lastByMember).length };
+  } catch (e) { console.error('[재구매 골든존]', e.message); return null; }
+}
+
+// ── 헤더 메뉴 페이지뷰 전주 대비 (레시피=재구매 동선 선행지표) ──
+async function getPageViewWoW() {
+  try {
+    const token = await getGA4Token();
+    if (!token) return null;
+    const tw = { startDate: dateStr(7), endDate: dateStr(1) };
+    const lw = { startDate: dateStr(14), endDate: dateStr(8) };
+    const q = (dr) => ga4Fetch(token, { dateRanges: [dr], metrics: [{ name: 'screenPageViews' }], dimensions: [{ name: 'pagePathPlusQueryString' }], limit: 400 });
+    const [t, l] = await Promise.all([q(tw), q(lw)]);
+    const bucket = (rows) => {
+      const b = { 레시피: 0, 상품상세: 0, 장바구니: 0, 메인: 0, 마이페이지: 0 };
+      (rows || []).forEach(rr => {
+        const p = rr.dimensionValues[0].value, pv = parseInt(rr.metricValues[0].value) || 0;
+        if (/recipe|레시피/i.test(p)) b.레시피 += pv;
+        else if (/product\/detail/.test(p)) b.상품상세 += pv;
+        else if (/basket|cart/.test(p)) b.장바구니 += pv;
+        else if (p === '/' || /\/index/.test(p)) b.메인 += pv;
+        else if (/myshop|mypage/.test(p)) b.마이페이지 += pv;
+      });
+      return b;
+    };
+    return { cur: bucket(t.rows), prev: bucket(l.rows) };
+  } catch (e) { console.error('[페이지뷰 WoW]', e.message); return null; }
+}
+
 // ── 주간 리포트 (월요일) ────────────────────────────────
 async function weeklyReport() {
   const thisStart = dateStr(7), thisEnd = dateStr(1);
   const display = `${formatDate(thisStart)} ~ ${formatDate(thisEnd)}`;
   console.log(`[주간] ${display}`);
 
-  const [metaThis, metaLast, cafe24This, cafe24Last, clarity, ga4, reviews, repurchase] = await Promise.all([
+  const [metaThis, metaLast, cafe24This, cafe24Last, clarity, ga4, reviews, repurchase, pvWoW] = await Promise.all([
     getMetaStats(thisStart, thisEnd),
     getMetaStats(dateStr(14), dateStr(8)),
     getCafe24Sales(thisStart, thisEnd),
@@ -2469,7 +2592,12 @@ async function weeklyReport() {
     getGA4Weekly(),
     getCafe24Reviews(thisStart, thisEnd),
     getRepurchaseStats(90, thisStart, thisEnd),
+    getPageViewWoW(),
   ]);
+  // cafe24 무거운 호출(365일 orders·쿠폰 issues)은 순차 실행 —
+  // Promise.all 동시 실행 시 cafe24 rate limit으로 최신 chunk가 누락돼 골든존이 부분 데이터(휴면만)로 나옴.
+  const goldenZone = await getRepurchaseGoldenZone(thisEnd);
+  const couponConv = await fetchCouponConversion();
 
   const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, clarity, ga4, reviews, repurchase });
 
@@ -2509,15 +2637,47 @@ async function weeklyReport() {
     leakageLine = `${formatMoney(lostRevenue)}/주 잠재손실 추정 (에러 ${errorSessions.toFixed(0)}세션 × CVR ${(siteCVR*100).toFixed(1)}% × AOV ${formatMoney(aov)})`;
   }
 
+  // 💳 쿠폰 전환 (등급쿠폰 사용률 — 직전월 발급분)
+  let couponLine = '데이터 없음';
+  if (couponConv && couponConv.coupons && couponConv.coupons.length) {
+    const body = couponConv.coupons.map(c => `${c.name}: ${c.used}/${c.issued} 사용 (${c.rate.toFixed(0)}%)${c.orders ? ` · 주문 ${c.orders}건` : ''}`).join('\n');
+    couponLine = `(${couponConv.month} 발급분)\n${body}`;
+  } else if (couponConv) couponLine = '직전월 등급쿠폰 발급분 없음';
+
+  // 🔁 재구매 골든타임 (마지막구매 경과일)
+  let goldenLine = '데이터 없음';
+  if (goldenZone) {
+    goldenLine = `D+0~20 ${goldenZone.d0_20}명 · <b>D+21~35 ${goldenZone.d21_35}명</b> ⭐ · D+36~60 ${goldenZone.d36_60}명 · 휴면(D91+) ${goldenZone.d91}명
+→ 이번주 깨울 타겟(소비주기 막 지남): <b>${goldenZone.d21_35}명</b>`;
+  }
+
+  // 📄 헤더 페이지뷰 전주 대비 (레시피=재구매 동선 선행지표)
+  let pvLine = '데이터 없음';
+  if (pvWoW) {
+    const c = pvWoW.cur, p = pvWoW.prev;
+    pvLine = `레시피 ${c.레시피}${diff(c.레시피, p.레시피)} · 상품상세 ${c.상품상세}${diff(c.상품상세, p.상품상세)} · 장바구니 ${c.장바구니}${diff(c.장바구니, p.장바구니)} · 메인 ${c.메인}${diff(c.메인, p.메인)}`;
+  }
+
+  // 🎯 이번주 할 것 — 레버 종합 (데이터→행동, 측정값 직결). 각 줄 = "지표 → 바꿀 행동".
+  const weeklyActions = [];
+  if (couponConv && couponConv.coupons && couponConv.coupons.length) {
+    const avgRate = couponConv.coupons.reduce((s, c) => s + c.rate, 0) / couponConv.coupons.length;
+    if (avgRate < 5) weeklyActions.push(`💳 등급쿠폰 사용 ${avgRate.toFixed(0)}% → 발송 타이밍 D+21(소비주기)로 + 멤버십 혜택 노출`);
+  }
+  if (goldenZone && goldenZone.d21_35 > 0) {
+    weeklyActions.push(`🔁 골든타임 ${goldenZone.d21_35}명 → 이번주 레시피 리마인드 (휴면 직전 깨우기)`);
+  }
+  if (pvWoW) {
+    const rc = pvWoW.cur.레시피, rp = pvWoW.prev.레시피;
+    if (rp && rc < rp) weeklyActions.push(`📖 레시피 PV ↓${Math.round((1 - rc / rp) * 100)}% → 상세→레시피 동선 강화 (재구매 입구)`);
+    else if (rc > rp) weeklyActions.push(`📖 레시피 PV ↑ 효과 나는 중 → 상세페이지 레시피 링크 더 노출`);
+  }
+  const weeklyActionSection = weeklyActions.length ? `🎯 <b>이번주 할 것</b>\n${weeklyActions.join('\n')}\n\n` : '';
+
   const weeklyMsg = `📈 <b>이태리정미소 지난주 CX 리포트</b>
 📅 ${display}
 ━━━━━━━━━━━━━━━━━
-💰 <b>메타 광고</b>
-광고비: ${formatMoney(metaThis.spend)}${diff(metaThis.spend, metaLast.spend)}
-ROAS: ${metaThis.roas}%${diff(parseFloat(metaThis.roas), parseFloat(metaLast.roas))} | 구매: ${metaThis.purchases}건
-도달: ${metaThis.reach.toLocaleString()} | 빈도: ${metaThis.frequency.toFixed(1)}회 | CPM: ${formatMoney(metaThis.cpm)}
-
-🏪 <b>자사몰 매출 (카페24)</b>
+${weeklyActionSection}🏪 <b>자사몰 매출 (카페24)</b>
 ${formatMoney(cafe24This.sales)}${diff(cafe24This.sales, cafe24Last.sales)} (${cafe24This.count}건)
 
 🔁 <b>재구매·리텐션</b> (회원, 최근 90일)
@@ -2525,6 +2685,15 @@ ${repurchase
   ? `재구매율 ${repurchase.repurchaseRate.toFixed(1)}% (재구매 회원 ${repurchase.repeatMembers}/${repurchase.distinctMembers}명)${repurchase.avgDaysToRepeat != null ? ` · 평균 ${repurchase.avgDaysToRepeat}일 만에 재구매` : ''}
 이번주 신규 ${formatMoney(repurchase.week.newAmt)}(${repurchase.week.newCount}건) vs 재구매 ${formatMoney(repurchase.week.repAmt)}(${repurchase.week.repCount}건) · 재구매 매출비중 ${repurchase.week.repShare.toFixed(0)}%${repurchase.week.guestCount ? `\n비회원 ${formatMoney(repurchase.week.guestAmt)}(${repurchase.week.guestCount}건, 식별불가)` : ''}`
   : '데이터 없음'}
+
+💳 <b>쿠폰 전환</b> (등급쿠폰 · 미주 발송→은우 전환측정)
+${couponLine}
+
+🔁 <b>재구매 골든타임</b>
+${goldenLine}
+
+📄 <b>헤더 페이지뷰</b> (전주 대비)
+${pvLine}
 
 📊 <b>GA4 채널</b>
 ${chLines}
@@ -2641,4 +2810,10 @@ module.exports = {
   weekRange,
   dateStr,
   formatDate,
+  ga4Fetch,
+  getGA4Token,
+  fetchCouponConversion,
+  getRepurchaseGoldenZone,
+  getPageViewWoW,
+  getCompassMemos,
 };
