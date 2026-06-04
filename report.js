@@ -2579,6 +2579,30 @@ async function getPageViewWoW() {
   } catch (e) { console.error('[페이지뷰 WoW]', e.message); return null; }
 }
 
+// ── UTM 채널 효과 (우리가 정한 campaign별 클릭→주문→매출) ──
+// 카카오 친구톡·구글 검색광고·엽서 QR. UTM 적용 후 데이터 들어오기 시작.
+async function getUtmChannelEffect() {
+  try {
+    const token = await getGA4Token();
+    if (!token) return null;
+    const tw = { startDate: dateStr(7), endDate: dateStr(1) };
+    const ours = ['welcome', 'restock', 'grade-coupon', 'pc-v1', 'pesto_search'];
+    const res = await ga4Fetch(token, {
+      dateRanges: [tw],
+      metrics: [{ name: 'sessions' }, { name: 'ecommercePurchases' }, { name: 'totalRevenue' }],
+      dimensions: [{ name: 'sessionCampaignName' }],
+      dimensionFilter: { filter: { fieldName: 'sessionCampaignName', inListFilter: { values: ours } } },
+      limit: 20, orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
+    });
+    return (res.rows || []).map(rr => ({
+      campaign: rr.dimensionValues[0].value,
+      sessions: parseInt(rr.metricValues[0].value) || 0,
+      purchases: parseInt(rr.metricValues[1].value) || 0,
+      revenue: Math.round(Number(rr.metricValues[2].value)) || 0,
+    }));
+  } catch (e) { console.error('[UTM 채널 효과]', e.message); return null; }
+}
+
 // ── 주간 리포트 (월요일) ────────────────────────────────
 async function weeklyReport() {
   const thisStart = dateStr(7), thisEnd = dateStr(1);
@@ -2600,6 +2624,7 @@ async function weeklyReport() {
   // Promise.all 동시 실행 시 cafe24 rate limit으로 최신 chunk가 누락돼 골든존이 부분 데이터(휴면만)로 나옴.
   const goldenZone = await getRepurchaseGoldenZone(thisEnd);
   const couponConv = await fetchCouponConversion();
+  const utmEffect = await getUtmChannelEffect();
 
   // 📊 레버 baseline 저장 (UI/UX 개입 전후 비교의 기준점) — 매주 자동, 같은 주차 upsert.
   // 이게 있으면 UI/UX 바꾼 뒤 다음주 레버와 비교해 "바꿨더니 숫자가 바뀜"이 측정됨.
@@ -2671,6 +2696,13 @@ async function weeklyReport() {
     pvLine = `레시피 ${c.레시피}${diff(c.레시피, p.레시피)} · 상품상세 ${c.상품상세}${diff(c.상품상세, p.상품상세)} · 장바구니 ${c.장바구니}${diff(c.장바구니, p.장바구니)} · 메인 ${c.메인}${diff(c.메인, p.메인)}`;
   }
 
+  // 📡 UTM 채널 효과 (카카오·구글·엽서 → 매출). 적용 전엔 데이터 없음
+  const UTM_LABEL = { welcome: '친구톡 웰컴', restock: '친구톡 재입고', 'grade-coupon': '친구톡 등급쿠폰', 'pc-v1': '엽서 QR', pesto_search: '구글 검색광고' };
+  let utmLine = '아직 데이터 없음 — 미주 UTM 적용 후 측정 시작 (카카오 친구톡·엽서 QR)';
+  if (utmEffect && utmEffect.length) {
+    utmLine = utmEffect.map(u => `${UTM_LABEL[u.campaign] || u.campaign}: ${u.sessions}클릭 → ${u.purchases}주문 → ${formatMoney(u.revenue)}`).join('\n');
+  }
+
   // 🎯 이번주 할 것 — 레버 종합 (데이터→행동, 측정값 직결). 각 줄 = "지표 → 바꿀 행동".
   const weeklyActions = [];
   if (couponConv && couponConv.coupons && couponConv.coupons.length) {
@@ -2707,6 +2739,9 @@ ${goldenLine}
 
 📄 <b>헤더 페이지뷰</b> (전주 대비)
 ${pvLine}
+
+📡 <b>UTM 채널 효과</b> (발송→클릭→매출)
+${utmLine}
 
 📊 <b>GA4 채널</b>
 ${chLines}
@@ -2829,4 +2864,5 @@ module.exports = {
   getRepurchaseGoldenZone,
   getPageViewWoW,
   getCompassMemos,
+  getUtmChannelEffect,
 };
