@@ -58,6 +58,8 @@ function buildUXCasesHtml_() {
     return { date: String(r[0]), dow: String(r[1]), title: String(r[2]), cat: String(r[3]), body: String(r[4]), status: String(r[5]) };
   });
   var json = JSON.stringify(cases).replace(/</g, '\\u003c'); // </script>·< 깨짐 방지
+  var todos = getUXTodos_();
+  var tjson = JSON.stringify(todos).replace(/</g, '\\u003c');
 
   var css =
     ':root{--cream:#f8f7f5;--gold:#D9BC82;--navy:#0d1f3c;--warm:#f0ede8;--st-pass:#9e9e9e;--border:rgba(0,0,0,.08);--shadow:0 2px 8px rgba(0,0,0,.06)}' +
@@ -82,7 +84,20 @@ function buildUXCasesHtml_() {
     '.modal-inner{background:var(--cream);max-width:760px;width:100%;border-radius:18px;padding:36px;position:relative;box-shadow:0 20px 60px rgba(0,0,0,.3)}.modal-close{position:absolute;top:18px;right:22px;font-size:28px;color:#666;cursor:pointer;background:none;border:none;line-height:1}.modal-close:hover{color:#c0392b}' +
     '.m-head{border-bottom:2px solid var(--gold);padding-bottom:18px;margin-bottom:20px}.m-head h2{font-size:26px;font-weight:700;color:var(--navy);margin-bottom:10px}.m-meta{display:flex;gap:8px;flex-wrap:wrap}.m-meta span{font-size:11px;background:#fff;padding:4px 10px;border-radius:12px;color:#555;border:1px solid var(--border)}' +
     '.m-body{font-size:14px;color:#333;line-height:1.8;white-space:pre-wrap}.m-qa{display:flex;gap:8px;margin-top:24px}.m-qa .qa-btn{padding:10px 16px;font-size:13px}' +
-    '.empty{text-align:center;padding:80px 20px;color:#999}' +
+    '.empty{text-align:center;padding:80px 20px;color:#999;line-height:1.7}' +
+    '.tabnav{background:#fff;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;box-shadow:0 1px 4px rgba(0,0,0,.04)}.tabnav-inner{max-width:1200px;margin:0 auto;display:flex;gap:4px;padding:0 5vw}' +
+    '.tab{padding:14px 20px;background:none;border:none;font-size:14px;font-weight:600;color:#666;cursor:pointer;white-space:nowrap;border-bottom:3px solid transparent;font-family:inherit}.tab:hover{color:var(--navy);background:var(--warm)}.tab.active{color:var(--navy);border-bottom-color:var(--gold)}' +
+    '.tab .cnt{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;background:var(--gold);color:#fff;font-size:10px;font-weight:700}' +
+    '.pane{display:none}.pane.active{display:block}' +
+    '.qa-btn.todo-add{color:#1565c0}.qa-btn.todo-in{color:#27ae60;border-color:#cdebd6}' +
+    '.todos{display:grid;grid-template-columns:1fr;gap:14px;max-width:900px}' +
+    '.todo{background:#fff;border-radius:12px;padding:20px;border:1px solid var(--border);box-shadow:var(--shadow);position:relative}.todo.done{opacity:.62}' +
+    '.todo .t-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center}.todo .t-meta span{font-size:10px;background:var(--warm);padding:3px 8px;border-radius:10px;color:#444;font-weight:500}' +
+    '.todo .t-name{font-size:17px;font-weight:700;color:var(--navy);margin-bottom:10px}' +
+    '.todo .t-action{font-size:14px;color:#333;line-height:1.65;padding:12px 14px;background:linear-gradient(135deg,#fff7e0,#fff2cc);border-radius:8px;border-left:3px solid var(--gold);white-space:pre-wrap}' +
+    '.todo .t-bar{display:flex;gap:6px;align-items:center;margin-top:14px;flex-wrap:wrap}.tg-btn{padding:7px 14px;border:1.5px solid var(--border);border-radius:8px;background:#fff;font-size:12px;font-weight:700;cursor:pointer;color:#666;font-family:inherit}.tg-btn:disabled{opacity:.5}' +
+    '.tg-btn.active[data-s="할일"]{background:#888;color:#fff;border-color:#888}.tg-btn.active[data-s="진행중"]{background:var(--gold);color:#fff;border-color:var(--gold)}.tg-btn.active[data-s="완료"]{background:#27ae60;color:#fff;border-color:#27ae60}' +
+    '.tg-rm{margin-left:auto;color:#bbb;background:none;border:none;font-size:12px;cursor:pointer;font-family:inherit}.tg-rm:hover{color:#c0392b}' +
     '@media(max-width:640px){header{padding:20px 16px}.title h1{font-size:20px}.stat{gap:14px}.stat-item .v{font-size:16px}.wrap{padding:16px 14px 60px}.cards{grid-template-columns:1fr}.modal-inner{padding:24px 20px}.m-head h2{font-size:21px}}';
 
   var html =
@@ -93,13 +108,20 @@ function buildUXCasesHtml_() {
     '<div class="stat"><div class="stat-item"><div class="v" id="s-total">0</div><div class="l">CASES</div></div>' +
     '<div class="stat-item"><div class="v" id="s-adopt">0</div><div class="l">채택</div></div>' +
     '<div class="stat-item"><div class="v" id="s-pass">0</div><div class="l">패스</div></div></div></div></header>' +
-    '<div class="wrap"><div class="filters">' +
+    '<nav class="tabnav"><div class="tabnav-inner">' +
+    '<button class="tab active" data-tab="cases">📚 케이스북</button>' +
+    '<button class="tab" data-tab="todos">📋 내 할일 <span class="cnt" id="todo-cnt">0</span></button>' +
+    '</div></nav>' +
+    '<div class="wrap">' +
+    '<div class="pane active" id="pane-cases"><div class="filters">' +
     '<div class="filter-row"><span class="label">상태</span><div id="f-status"></div>' +
     '<span style="flex:1"></span><input id="search" placeholder="검색…"></div>' +
     '<div class="filter-row"><span class="label">카테고리</span><div id="f-cat"></div></div></div>' +
     '<div class="cards" id="cards"></div></div>' +
+    '<div class="pane" id="pane-todos"><div class="todos" id="todos"></div></div>' +
+    '</div>' +
     '<div class="modal" id="modal"><div class="modal-inner"><button class="modal-close" id="mclose">&times;</button><div id="mwrap"></div></div></div>' +
-    '<script>var CASES=' + json + ';</script>' +
+    '<script>var CASES=' + json + ';var TODOS=' + tjson + ';</script>' +
     '<script>' + UX_CASES_CLIENT_JS_ + '</script></body></html>';
   return html;
 }
@@ -110,6 +132,8 @@ var UX_CASES_CLIENT_JS_ = [
   'function adopted(s){return s==="채택"||s==="케이스북";}function passed(s){return s==="패스";}',
   'function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}',
   'function d10(s){return String(s).slice(0,10);}',
+  'function inTodo(d){for(var i=0;i<TODOS.length;i++)if(TODOS[i].date===d)return true;return false;}',
+  'function todoBtn(d){return inTodo(d)?"<button class=\\"qa-btn todo-in\\" data-todo=\\"open\\">📋 할일에 있음</button>":"<button class=\\"qa-btn todo-add\\" data-todo=\\"add\\">📋 내 할일로</button>";}',
   // 카테고리별 stripe 색 (문자열 해시 → 고정 팔레트)
   'var PAL=["#5e35b1","#283593","#2e7d32","#e65100","#1565c0","#ad1457","#00838f","#6d4c41"];',
   'function catColor(c){if(!c)return "#b0b0b0";var h=0;for(var i=0;i<c.length;i++)h=(h*31+c.charCodeAt(i))>>>0;return PAL[h%PAL.length];}',
@@ -142,7 +166,7 @@ var UX_CASES_CLIENT_JS_ = [
   '   var meta="<span>"+esc(d10(c.date))+(c.dow?" "+esc(c.dow):"")+"</span>"+(c.cat?"<span>"+esc(c.cat)+"</span>":"")+badge;',
   '   var qa;',
   '   if(ps)qa="<button class=\\"qa-btn restore\\" data-act=\\"sent\\">↩ 되돌리기</button>";',
-  '   else if(ad)qa="<button class=\\"qa-btn on\\" data-act=\\"sent\\">✓ 채택됨</button><button class=\\"qa-btn\\" data-act=\\"패스\\">패스</button>";',
+  '   else if(ad)qa="<button class=\\"qa-btn on\\" data-act=\\"sent\\">✓ 채택됨</button><button class=\\"qa-btn\\" data-act=\\"패스\\">패스</button>"+todoBtn(c.date);',
   '   else qa="<button class=\\"qa-btn adopt\\" data-act=\\"채택\\">⭐ 채택</button><button class=\\"qa-btn\\" data-act=\\"패스\\">패스</button>";',
   '   return "<div class=\\"card"+(ps?" passed":"")+"\\" data-date=\\""+esc(c.date)+"\\">"+',
   '     "<div class=\\"stripe\\" style=\\"background:"+catColor(c.cat)+"\\"></div>"+',
@@ -154,7 +178,7 @@ var UX_CASES_CLIENT_JS_ = [
   'function findCase(d){for(var i=0;i<CASES.length;i++)if(CASES[i].date===d)return CASES[i];return null;}',
   'function openModal(d){var c=findCase(d);if(!c)return;var ad=adopted(c.status),ps=passed(c.status);',
   ' var qa=ps?"<button class=\\"qa-btn restore\\" data-act=\\"sent\\">↩ 되돌리기</button>":',
-  '  (ad?"<button class=\\"qa-btn on\\" data-act=\\"sent\\">✓ 채택됨 (해제)</button><button class=\\"qa-btn\\" data-act=\\"패스\\">패스</button>":',
+  '  (ad?"<button class=\\"qa-btn on\\" data-act=\\"sent\\">✓ 채택됨 (해제)</button><button class=\\"qa-btn\\" data-act=\\"패스\\">패스</button>"+todoBtn(c.date):',
   '   "<button class=\\"qa-btn adopt\\" data-act=\\"채택\\">⭐ 채택</button><button class=\\"qa-btn\\" data-act=\\"패스\\">패스</button>");',
   ' document.getElementById("mwrap").innerHTML="<div class=\\"m-head\\"><h2>"+esc(c.title)+"</h2><div class=\\"m-meta\\"><span>"+esc(d10(c.date))+(c.dow?" "+esc(c.dow):"")+"</span>"+(c.cat?"<span>"+esc(c.cat)+"</span>":"")+"</div></div>"+',
   '  "<div class=\\"m-body\\">"+esc(c.body)+"</div><div class=\\"m-qa qa\\" data-date=\\""+esc(c.date)+"\\">"+qa+"</div>";',
@@ -164,10 +188,38 @@ var UX_CASES_CLIENT_JS_ = [
   'function setStatus(date,status,btn){var grp=btn.parentNode;var bs=grp.querySelectorAll("button");for(var i=0;i<bs.length;i++)bs[i].disabled=true;btn.textContent="처리중…";',
   ' google.script.run.withSuccessHandler(function(res){if(res&&res.ok){var c=findCase(date);if(c)c.status=status;closeModal();render();}else{alert("실패: "+((res&&res.error)||"알수없음"));render();}})',
   ' .withFailureHandler(function(e){alert("오류: "+((e&&e.message)||e));for(var i=0;i<bs.length;i++)bs[i].disabled=false;}).setUXCaseStatus(date,status);}',
-  // 이벤트 위임
+  // 내 할일 탭 렌더
+  'function renderTodos(){var box=document.getElementById("todos");document.getElementById("todo-cnt").textContent=TODOS.length;',
+  ' if(!TODOS.length){box.innerHTML="<div class=\\"empty\\">아직 할일이 없어요.<br>케이스북에서 ⭐채택한 사례를 \\u0027📋 내 할일로\\u0027 보내면 여기 쌓여요.</div>";return;}',
+  ' var ord={"할일":0,"진행중":1,"완료":2};',
+  ' var list=TODOS.slice().sort(function(a,b){var d=(ord[a.status]||0)-(ord[b.status]||0);if(d)return d;return String(b.date).localeCompare(String(a.date));});',
+  ' box.innerHTML=list.map(function(t){',
+  '   var meta="<span>"+esc(d10(t.date))+"</span>"+(t.cat?"<span>"+esc(t.cat)+"</span>":"");',
+  '   var sb=["할일","진행중","완료"].map(function(s){return "<button class=\\"tg-btn"+(t.status===s?" active":"")+"\\" data-todo=\\""+s+"\\" data-s=\\""+s+"\\">"+s+"</button>";}).join("");',
+  '   return "<div class=\\"todo"+(t.status==="완료"?" done":"")+"\\"><div class=\\"t-meta\\">"+meta+"</div><div class=\\"t-name\\">"+esc(t.title)+"</div>"+',
+  '     "<div class=\\"t-action\\">"+esc(t.action||"(액션 추출 안 됨 — 시트 UX_할일에서 편집)")+"</div>"+',
+  '     "<div class=\\"t-bar\\" data-date=\\""+esc(t.date)+"\\">"+sb+"<button class=\\"tg-rm\\" data-todo=\\"remove\\">빼기</button></div></div>";',
+  ' }).join("");}',
+  // 할일 콜백 (add/remove/상태)
+  'function refreshTodos(d,action,res){',
+  ' if(action==="add"){if(res&&res.todo&&!inTodo(d))TODOS.push(res.todo);}',
+  ' else if(action==="remove"){TODOS=TODOS.filter(function(t){return t.date!==d;});}',
+  ' else{for(var i=0;i<TODOS.length;i++)if(TODOS[i].date===d)TODOS[i].status=action;}',
+  ' render();renderTodos();}',
+  'function todoAction(d,action,btn){if(action==="open"){activate("todos");return;}',
+  ' var bar=btn.parentNode;var bs=bar.querySelectorAll("button");for(var i=0;i<bs.length;i++)bs[i].disabled=true;',
+  ' var rn=google.script.run.withSuccessHandler(function(res){if(res&&res.ok){refreshTodos(d,action,res);}else{alert("실패: "+((res&&res.error)||"알수없음"));for(var i=0;i<bs.length;i++)bs[i].disabled=false;}})',
+  '  .withFailureHandler(function(e){alert("오류: "+((e&&e.message)||e));for(var i=0;i<bs.length;i++)bs[i].disabled=false;});',
+  ' if(action==="add")rn.addUXTodo(d);else if(action==="remove")rn.removeUXTodo(d);else rn.setUXTodoStatus(d,action);}',
+  // 탭 전환
+  'function activate(name){var tabs=document.querySelectorAll(".tab");for(var i=0;i<tabs.length;i++)tabs[i].classList.toggle("active",tabs[i].getAttribute("data-tab")===name);',
+  ' document.getElementById("pane-cases").classList.toggle("active",name==="cases");document.getElementById("pane-todos").classList.toggle("active",name==="todos");}',
+  'document.querySelector(".tabnav").addEventListener("click",function(e){var b=e.target.closest(".tab");if(b)activate(b.getAttribute("data-tab"));});',
+  // 이벤트 위임 (data-todo 우선, 없으면 data-act)
   'document.addEventListener("click",function(ev){var t=ev.target;',
-  ' var btn=t.closest?t.closest(".qa-btn"):null;',
-  ' if(btn){ev.stopPropagation();var grp=btn.parentNode;setStatus(grp.getAttribute("data-date"),btn.getAttribute("data-act"),btn);return;}',
+  ' var b=t.closest?t.closest("[data-todo],[data-act]"):null;',
+  ' if(b){ev.stopPropagation();var grp=b.closest("[data-date]");var d=grp?grp.getAttribute("data-date"):null;',
+  '   var td=b.getAttribute("data-todo");if(td){todoAction(d,td,b);}else{setStatus(d,b.getAttribute("data-act"),b);}return;}',
   ' if(t.closest&&t.closest(".modal-close")){closeModal();return;}',
   ' if(t.id==="modal"){closeModal();return;}',
   ' var card=t.closest?t.closest(".card"):null;if(card){openModal(card.getAttribute("data-date"));}});',
@@ -175,7 +227,7 @@ var UX_CASES_CLIENT_JS_ = [
   'document.getElementById("f-cat").addEventListener("click",function(e){var b=e.target.closest(".chip");if(b){state.cat=b.getAttribute("data-fc");render();}});',
   'document.getElementById("search").addEventListener("input",function(e){state.q=e.target.value;render();});',
   'document.addEventListener("keydown",function(e){if(e.key==="Escape")closeModal();});',
-  'render();'
+  'render();renderTodos();'
 ].join('\n');
 
 // ===== Telegram Polling (1분 트리거로 호출) =====
@@ -570,7 +622,7 @@ function handleEunwooDM(msg) {
   if (text === '/UX 보류' || text === '/UX보류') { handleUXSkip(chatId, date); return; }
   if ((m = text.match(/^\/UX\s*수정\s+([\s\S]+)/))) { handleUXRevise(m[1].trim(), chatId); return; }
   if (text === '/UX 셋업' || text === '/UX셋업') {
-    try { setupCXTriggers(); sendTGMessage(chatId, '✅ 트리거 등록 완료 — 월·목 8:00 KST 자동 발화. 첫 발송 5/28 (목).'); }
+    try { setupCXTriggers(); sendTGMessage(chatId, '✅ 트리거 등록 완료 — 일간 9시·UX 월목 9시 (±15분) KST.'); }
     catch (e) { sendTGMessage(chatId, '⚠️ 셋업 실패: ' + e.message); }
     return;
   }
@@ -1779,6 +1831,66 @@ function setUXCaseStatus(date, status) {
   return { ok: false, error: 'no case for date' };
 }
 
+// ===== UX 할일 (채택 사례 → 내 UI/UX 액션) =====
+var UX_TODO_HEADERS = ['원본일자', '기법명', '카테고리', '액션', '상태', '메모', '생성일시'];
+function getUXTodoTab_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ss.getSheetByName('UX_할일');
+  if (!sh) {
+    sh = ss.insertSheet('UX_할일');
+    sh.appendRow(UX_TODO_HEADERS);
+    sh.getRange('A:A').setNumberFormat('@');
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, 1, UX_TODO_HEADERS.length).setFontWeight('bold').setBackground('#1f2a44').setFontColor('#ffffff');
+  }
+  return sh;
+}
+// 사례 본문에서 "[이태리정미소 ... 적용]" 섹션(실행안)을 한 덩어리로 추출 → 액션
+function extractUXAction_(body) {
+  var s = String(body);
+  var m = s.match(/\[이태리정미소[^\]]*\]\s*([\s\S]*?)(?:\n\s*━|\[예상|$)/);
+  var t = (m ? m[1] : s).replace(/\s+/g, ' ').trim();
+  return t.length > 600 ? t.slice(0, 600) + '…' : t;
+}
+function getUXTodos_() {
+  var td = getUXTodoTab_();
+  if (td.getLastRow() < 2) return [];
+  return td.getDataRange().getValues().slice(1).map(function (r) {
+    return { date: String(r[0]), title: String(r[1]), cat: String(r[2]), action: String(r[3]), status: String(r[4]), memo: String(r[5]) };
+  });
+}
+// 채택 사례 → 할일로 옮김 (중복이면 그대로). google.script.run 호출 — 언더바 X.
+function addUXTodo(date) {
+  var ux = getUXTab_();
+  var data = ux.getDataRange().getValues();
+  var c = null;
+  for (var i = 1; i < data.length; i++) { if (String(data[i][0]) === String(date)) { c = data[i]; break; } }
+  if (!c) return { ok: false, error: 'no case' };
+  var td = getUXTodoTab_();
+  var rows = td.getDataRange().getValues();
+  for (var j = 1; j < rows.length; j++) { if (String(rows[j][0]) === String(date)) return { ok: true, exists: true }; }
+  var action = extractUXAction_(c[4]);
+  td.appendRow([String(date), String(c[2]), String(c[3]), action, '할일', '', new Date()]);
+  return { ok: true, todo: { date: String(date), title: String(c[2]), cat: String(c[3]), action: action, status: '할일', memo: '' } };
+}
+function setUXTodoStatus(date, status) {
+  if (['할일', '진행중', '완료'].indexOf(status) < 0) return { ok: false, error: 'bad status' };
+  var td = getUXTodoTab_();
+  var data = td.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(date)) { td.getRange(i + 1, 5).setValue(status); return { ok: true }; }
+  }
+  return { ok: false, error: 'no todo' };
+}
+function removeUXTodo(date) {
+  var td = getUXTodoTab_();
+  var data = td.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(date)) { td.deleteRow(i + 1); return { ok: true }; }
+  }
+  return { ok: false, error: 'no todo' };
+}
+
 // ===== 외부 cron 핑거: GAS 시간 트리거 -> GitHub Actions 강제 실행 =====
 function triggerCXWorkflow_(workflowFile, mode) {
   var token = PropertiesService.getScriptProperties().getProperty('GH_TOKEN');
@@ -1806,10 +1918,11 @@ function setupCXTriggers() {
     var f = t.getHandlerFunction();
     if (f === 'triggerDailyReport' || f === 'triggerCollector' || f === 'triggerUXDraftMon' || f === 'triggerUXDraftThu') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('triggerDailyReport').timeBased().atHour(9).everyDays(1).create();
+  // nearMinute(0): atHour만 쓰면 9~10시 1시간 윈도우라 늦게 옴 → 9시 ±15분으로 좁힘
+  ScriptApp.newTrigger('triggerDailyReport').timeBased().atHour(9).nearMinute(0).everyDays(1).create();
   ScriptApp.newTrigger('triggerCollector').timeBased().everyHours(2).create();
-  ScriptApp.newTrigger('triggerUXDraftMon').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(8).create();
-  ScriptApp.newTrigger('triggerUXDraftThu').timeBased().onWeekDay(ScriptApp.WeekDay.THURSDAY).atHour(8).create();
+  ScriptApp.newTrigger('triggerUXDraftMon').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(9).nearMinute(0).create();
+  ScriptApp.newTrigger('triggerUXDraftThu').timeBased().onWeekDay(ScriptApp.WeekDay.THURSDAY).atHour(9).nearMinute(0).create();
   console.log('트리거 등록 완료');
 }
 function triggerUXDraftMon() { return triggerCXWorkflow_('daily-report.yml', 'ux_draft'); }
