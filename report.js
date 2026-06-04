@@ -1534,23 +1534,18 @@ async function uxDraftFlow() {
     : (insight.split('\n').find(l => l.trim()) || '제목 추출 실패')
   ).trim().slice(0, 120);
 
-  // 시트 저장 (상태: draft)
+  // 시트 저장 (상태: sent — 컨펌 단계 없는 자동 발송. 케이스북에 바로 등재)
   await postToAppsScript({
     action: 'save_ux_draft',
     date, dow: dowKR, technique,
     body: insight,
-    status: 'draft',
+    status: 'sent',
   }, APPS_SCRIPT_URL);
 
-  // 개인 DM 발송 (긴 본문 chunk) + 인라인 버튼 [📚 케이스북 추가][✕ 패스]
-  const header = `📚 <b>UX 사례 초안 (${date} ${dowKR})</b>\n\n`;
-  const footer = `\n\n━━━━━━━━━━\n아래 버튼으로 정하기 ▾  (또는 /UX 수정 [요청] → 다시 생성)`;
-  const uxKeyboard = { inline_keyboard: [[
-    { text: '📚 케이스북 추가', callback_data: 'ux:send' },
-    { text: '✕ 패스', callback_data: 'ux:skip' },
-  ]] };
-  await sendTelegramChunked(header + escapeHtml(insight) + footer, false, uxKeyboard);
-  console.log(`[UX draft] ${date} ${dowKR} ${technique} → 개인 DM + 시트 저장`);
+  // 단톡방 자동 발송 (월·목, 컨펌 없이 바로). 사용자가 /UX 발송 안 눌러도 됨.
+  const groupMsg = `📚 <b>UX 사례 — ${escapeHtml(technique)}</b>\n\n${escapeHtml(insight)}`;
+  await sendTelegramChunked(groupMsg, true);
+  console.log(`[UX auto-send] ${date} ${dowKR} ${technique} → 단톡방 직접 발송 + 시트 sent`);
 }
 
 async function uxSendFlow() {
