@@ -35,8 +35,148 @@ function normTime(v) {
 }
 
 function doGet(e) {
+  var page = (e && e.parameter && e.parameter.page) || '';
+  if (page === 'uxcases') {
+    return HtmlService.createHtmlOutput(buildUXCasesHtml_())
+      .setTitle('이태리정미소 UI/UX 케이스북')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  }
   return ContentService.createTextOutput('CX Bot OK');
 }
+
+// 📚 UX 케이스북 페이지 — UX_사례 시트 사례를 HTML로 (시트=SSOT, 추가 즉시 반영)
+// D2C 케이스북(ij-d2c-cases.pages.dev) 디자인 참고: 로그인 게이트·다크헤더+통계·카드그리드·모달·필터.
+// 카드 ⭐채택/패스/되돌리기 → google.script.run setUXCaseStatus 콜백으로 시트 상태칸 기록.
+function buildUXCasesHtml_() {
+  var sh = getUXTab_();
+  var rows = sh.getLastRow() >= 2 ? sh.getDataRange().getValues().slice(1) : [];
+  // 본문 있고 노출 상태(draft/skipped 제외)인 것만 → JSON으로 클라이언트에 주입, 렌더는 JS가
+  var cases = rows.filter(function (r) {
+    var st = String(r[5]);
+    return (st === 'sent' || st === '케이스북' || st === '채택' || st === '패스') && String(r[4]).trim();
+  }).map(function (r) {
+    return { date: String(r[0]), dow: String(r[1]), title: String(r[2]), cat: String(r[3]), body: String(r[4]), status: String(r[5]) };
+  });
+  var json = JSON.stringify(cases).replace(/</g, '\\u003c'); // </script>·< 깨짐 방지
+
+  var css =
+    ':root{--cream:#f8f7f5;--gold:#D9BC82;--navy:#0d1f3c;--warm:#f0ede8;--st-pass:#9e9e9e;--border:rgba(0,0,0,.08);--shadow:0 2px 8px rgba(0,0,0,.06)}' +
+    '*{box-sizing:border-box;margin:0;padding:0}html,body{font-family:-apple-system,BlinkMacSystemFont,Pretendard,"Noto Sans KR",sans-serif;background:var(--cream);color:var(--navy);line-height:1.6;-webkit-font-smoothing:antialiased}' +
+    'header{background:linear-gradient(160deg,#0a0e1a,#1a2540);color:#fff;padding:32px 5vw 28px}.head-row{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;flex-wrap:wrap;max-width:1200px;margin:0 auto}' +
+    '.title h1{font-size:28px;font-weight:300;letter-spacing:2px}.title .acc{color:var(--gold);font-weight:600}.title .sub{color:rgba(255,255,255,.6);font-size:13px;margin-top:4px}' +
+    '.stat{display:flex;gap:24px}.stat-item{text-align:right}.stat-item .v{color:var(--gold);font-size:20px;font-weight:600}.stat-item .l{color:rgba(255,255,255,.5);font-size:11px;letter-spacing:.5px;margin-top:2px}' +
+    '.wrap{max-width:1200px;margin:0 auto;padding:24px 5vw 80px}' +
+    '.filters{background:#fff;border:1px solid var(--border);border-left:3px solid var(--gold);border-radius:14px;padding:18px 22px;margin-bottom:22px;box-shadow:0 2px 12px rgba(13,31,60,.04)}' +
+    '.filter-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}.filter-row:last-child{margin-bottom:0}.filter-row .label{font-size:11px;color:var(--navy);font-weight:700;min-width:54px;letter-spacing:.8px}' +
+    '.chip{padding:6px 14px;border-radius:20px;border:1px solid var(--border);background:#fff;font-size:12px;cursor:pointer;transition:.15s;color:#333;font-weight:500}.chip:hover{background:var(--warm);border-color:var(--gold)}.chip.active{background:var(--navy);color:#fff;border-color:var(--navy);font-weight:600}' +
+    '#search{padding:8px 14px;border-radius:20px;border:1px solid var(--border);font-size:13px;width:200px;outline:none;font-family:inherit}#search:focus{border-color:var(--gold)}' +
+    '.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:18px}' +
+    '.card{background:#fff;border-radius:14px;padding:20px;cursor:pointer;border:1px solid var(--border);box-shadow:var(--shadow);transition:.2s;position:relative;overflow:hidden;display:flex;flex-direction:column}' +
+    '.card:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.08);border-color:var(--gold)}.card.passed{opacity:.6}.card .stripe{position:absolute;top:0;left:0;right:0;height:4px}' +
+    '.card .c-meta{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 10px;align-items:center}.card .c-meta span{font-size:10px;background:var(--warm);padding:3px 8px;border-radius:10px;color:#444;font-weight:500}' +
+    '.card .name{font-size:18px;font-weight:700;color:var(--navy);line-height:1.35;margin-bottom:8px}.card .summary{font-size:13px;color:#555;line-height:1.55;flex:1;overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}' +
+    '.badge{padding:3px 9px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:.3px}.badge.adopt{background:#fff4d6;color:#9a7400}.badge.pass{background:#eee;color:#777}' +
+    '.qa{display:flex;gap:6px;margin-top:14px;padding-top:12px;border-top:1px dashed var(--border)}.qa-btn{flex:1;padding:8px 4px;font-size:12px;font-weight:700;border:1px solid var(--border);border-radius:8px;background:#fff;color:#777;cursor:pointer;transition:.12s;font-family:inherit}' +
+    '.qa-btn:hover{border-color:var(--gold);color:var(--navy);background:var(--cream)}.qa-btn.adopt{color:var(--navy)}.qa-btn.on{background:var(--gold);color:#fff;border-color:var(--gold)}.qa-btn.restore{background:var(--navy);color:#fff;border-color:var(--navy)}.qa-btn:disabled{opacity:.5;cursor:default}' +
+    '.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;display:none;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto}.modal.open{display:flex}' +
+    '.modal-inner{background:var(--cream);max-width:760px;width:100%;border-radius:18px;padding:36px;position:relative;box-shadow:0 20px 60px rgba(0,0,0,.3)}.modal-close{position:absolute;top:18px;right:22px;font-size:28px;color:#666;cursor:pointer;background:none;border:none;line-height:1}.modal-close:hover{color:#c0392b}' +
+    '.m-head{border-bottom:2px solid var(--gold);padding-bottom:18px;margin-bottom:20px}.m-head h2{font-size:26px;font-weight:700;color:var(--navy);margin-bottom:10px}.m-meta{display:flex;gap:8px;flex-wrap:wrap}.m-meta span{font-size:11px;background:#fff;padding:4px 10px;border-radius:12px;color:#555;border:1px solid var(--border)}' +
+    '.m-body{font-size:14px;color:#333;line-height:1.8;white-space:pre-wrap}.m-qa{display:flex;gap:8px;margin-top:24px}.m-qa .qa-btn{padding:10px 16px;font-size:13px}' +
+    '.empty{text-align:center;padding:80px 20px;color:#999}' +
+    '@media(max-width:640px){header{padding:20px 16px}.title h1{font-size:20px}.stat{gap:14px}.stat-item .v{font-size:16px}.wrap{padding:16px 14px 60px}.cards{grid-template-columns:1fr}.modal-inner{padding:24px 20px}.m-head h2{font-size:21px}}';
+
+  var html =
+    '<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<meta name="robots" content="noindex,nofollow"><title>UI/UX 케이스북 · 이태리정미소</title><style>' + css + '</style></head><body>' +
+    '<header><div class="head-row"><div class="title"><h1>UX <span class="acc">CASEBOOK</span></h1>' +
+    '<div class="sub">은우봇 월·목 UI/UX 사례 · 채택/패스 큐레이션</div></div>' +
+    '<div class="stat"><div class="stat-item"><div class="v" id="s-total">0</div><div class="l">CASES</div></div>' +
+    '<div class="stat-item"><div class="v" id="s-adopt">0</div><div class="l">채택</div></div>' +
+    '<div class="stat-item"><div class="v" id="s-pass">0</div><div class="l">패스</div></div></div></div></header>' +
+    '<div class="wrap"><div class="filters">' +
+    '<div class="filter-row"><span class="label">상태</span><div id="f-status"></div>' +
+    '<span style="flex:1"></span><input id="search" placeholder="검색…"></div>' +
+    '<div class="filter-row"><span class="label">카테고리</span><div id="f-cat"></div></div></div>' +
+    '<div class="cards" id="cards"></div></div>' +
+    '<div class="modal" id="modal"><div class="modal-inner"><button class="modal-close" id="mclose">&times;</button><div id="mwrap"></div></div></div>' +
+    '<script>var CASES=' + json + ';</script>' +
+    '<script>' + UX_CASES_CLIENT_JS_ + '</script></body></html>';
+  return html;
+}
+
+// 케이스북 클라이언트 렌더 스크립트 (별도 상수로 분리 — 가독성)
+var UX_CASES_CLIENT_JS_ = [
+  'var state={status:"live",cat:"all",q:""};',
+  'function adopted(s){return s==="채택"||s==="케이스북";}function passed(s){return s==="패스";}',
+  'function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}',
+  'function d10(s){return String(s).slice(0,10);}',
+  // 카테고리별 stripe 색 (문자열 해시 → 고정 팔레트)
+  'var PAL=["#5e35b1","#283593","#2e7d32","#e65100","#1565c0","#ad1457","#00838f","#6d4c41"];',
+  'function catColor(c){if(!c)return "#b0b0b0";var h=0;for(var i=0;i<c.length;i++)h=(h*31+c.charCodeAt(i))>>>0;return PAL[h%PAL.length];}',
+  'function summarize(b){var t=String(b).replace(/\\n+/g," ").replace(/\\s+/g," ").trim();return t.length>140?t.slice(0,140)+"…":t;}',
+  // 필터칩 렌더
+  'function chips(){',
+  ' var st=[["live","전체"],["채택","⭐채택"],["패스","패스"]];',
+  ' document.getElementById("f-status").innerHTML=st.map(function(o){return "<button class=\\"chip"+(state.status===o[0]?" active":"")+"\\" data-fs=\\""+o[0]+"\\">"+o[1]+"</button>";}).join("");',
+  ' var cats={};CASES.forEach(function(c){if(c.cat)cats[c.cat]=1;});var cl=["all"].concat(Object.keys(cats).sort());',
+  ' document.getElementById("f-cat").innerHTML=cl.map(function(c){return "<button class=\\"chip"+(state.cat===c?" active":"")+"\\" data-fc=\\""+c+"\\">"+(c==="all"?"전체":esc(c))+"</button>";}).join("");',
+  '}',
+  // 통계
+  'function stats(){var a=0,p=0,t=0;CASES.forEach(function(c){if(passed(c.status))p++;else{t++;if(adopted(c.status))a++;}});',
+  ' document.getElementById("s-total").textContent=t;document.getElementById("s-adopt").textContent=a;document.getElementById("s-pass").textContent=p;}',
+  // 카드 그리드
+  'function render(){chips();stats();',
+  ' var q=state.q.toLowerCase();',
+  ' var list=CASES.filter(function(c){',
+  '   if(state.status==="live"&&passed(c.status))return false;',
+  '   if(state.status==="채택"&&!adopted(c.status))return false;',
+  '   if(state.status==="패스"&&!passed(c.status))return false;',
+  '   if(state.cat!=="all"&&c.cat!==state.cat)return false;',
+  '   if(q&&(c.title+" "+c.body).toLowerCase().indexOf(q)<0)return false;return true;});',
+  ' list.sort(function(a,b){var ra=adopted(a.status)?0:1,rb=adopted(b.status)?0:1;if(ra!==rb)return ra-rb;return String(b.date).localeCompare(String(a.date));});',
+  ' var box=document.getElementById("cards");',
+  ' if(!list.length){box.innerHTML="<div class=\\"empty\\">조건에 맞는 사례가 없어요.</div>";return;}',
+  ' box.innerHTML=list.map(function(c){',
+  '   var ad=adopted(c.status),ps=passed(c.status);',
+  '   var badge=ad?"<span class=\\"badge adopt\\">⭐채택</span>":(ps?"<span class=\\"badge pass\\">패스</span>":"");',
+  '   var meta="<span>"+esc(d10(c.date))+(c.dow?" "+esc(c.dow):"")+"</span>"+(c.cat?"<span>"+esc(c.cat)+"</span>":"")+badge;',
+  '   var qa;',
+  '   if(ps)qa="<button class=\\"qa-btn restore\\" data-act=\\"sent\\">↩ 되돌리기</button>";',
+  '   else if(ad)qa="<button class=\\"qa-btn on\\" data-act=\\"sent\\">✓ 채택됨</button><button class=\\"qa-btn\\" data-act=\\"패스\\">패스</button>";',
+  '   else qa="<button class=\\"qa-btn adopt\\" data-act=\\"채택\\">⭐ 채택</button><button class=\\"qa-btn\\" data-act=\\"패스\\">패스</button>";',
+  '   return "<div class=\\"card"+(ps?" passed":"")+"\\" data-date=\\""+esc(c.date)+"\\">"+',
+  '     "<div class=\\"stripe\\" style=\\"background:"+catColor(c.cat)+"\\"></div>"+',
+  '     "<div class=\\"c-meta\\">"+meta+"</div><div class=\\"name\\">"+esc(c.title)+"</div>"+',
+  '     "<div class=\\"summary\\">"+esc(summarize(c.body))+"</div>"+',
+  '     "<div class=\\"qa\\" data-date=\\""+esc(c.date)+"\\">"+qa+"</div></div>";',
+  ' }).join("");}',
+  // 모달
+  'function findCase(d){for(var i=0;i<CASES.length;i++)if(CASES[i].date===d)return CASES[i];return null;}',
+  'function openModal(d){var c=findCase(d);if(!c)return;var ad=adopted(c.status),ps=passed(c.status);',
+  ' var qa=ps?"<button class=\\"qa-btn restore\\" data-act=\\"sent\\">↩ 되돌리기</button>":',
+  '  (ad?"<button class=\\"qa-btn on\\" data-act=\\"sent\\">✓ 채택됨 (해제)</button><button class=\\"qa-btn\\" data-act=\\"패스\\">패스</button>":',
+  '   "<button class=\\"qa-btn adopt\\" data-act=\\"채택\\">⭐ 채택</button><button class=\\"qa-btn\\" data-act=\\"패스\\">패스</button>");',
+  ' document.getElementById("mwrap").innerHTML="<div class=\\"m-head\\"><h2>"+esc(c.title)+"</h2><div class=\\"m-meta\\"><span>"+esc(d10(c.date))+(c.dow?" "+esc(c.dow):"")+"</span>"+(c.cat?"<span>"+esc(c.cat)+"</span>":"")+"</div></div>"+',
+  '  "<div class=\\"m-body\\">"+esc(c.body)+"</div><div class=\\"m-qa qa\\" data-date=\\""+esc(c.date)+"\\">"+qa+"</div>";',
+  ' document.getElementById("modal").classList.add("open");}',
+  'function closeModal(){document.getElementById("modal").classList.remove("open");}',
+  // 상태 변경 콜백
+  'function setStatus(date,status,btn){var grp=btn.parentNode;var bs=grp.querySelectorAll("button");for(var i=0;i<bs.length;i++)bs[i].disabled=true;btn.textContent="처리중…";',
+  ' google.script.run.withSuccessHandler(function(res){if(res&&res.ok){var c=findCase(date);if(c)c.status=status;closeModal();render();}else{alert("실패: "+((res&&res.error)||"알수없음"));render();}})',
+  ' .withFailureHandler(function(e){alert("오류: "+((e&&e.message)||e));for(var i=0;i<bs.length;i++)bs[i].disabled=false;}).setUXCaseStatus(date,status);}',
+  // 이벤트 위임
+  'document.addEventListener("click",function(ev){var t=ev.target;',
+  ' var btn=t.closest?t.closest(".qa-btn"):null;',
+  ' if(btn){ev.stopPropagation();var grp=btn.parentNode;setStatus(grp.getAttribute("data-date"),btn.getAttribute("data-act"),btn);return;}',
+  ' if(t.closest&&t.closest(".modal-close")){closeModal();return;}',
+  ' if(t.id==="modal"){closeModal();return;}',
+  ' var card=t.closest?t.closest(".card"):null;if(card){openModal(card.getAttribute("data-date"));}});',
+  'document.getElementById("f-status").addEventListener("click",function(e){var b=e.target.closest(".chip");if(b){state.status=b.getAttribute("data-fs");render();}});',
+  'document.getElementById("f-cat").addEventListener("click",function(e){var b=e.target.closest(".chip");if(b){state.cat=b.getAttribute("data-fc");render();}});',
+  'document.getElementById("search").addEventListener("input",function(e){state.q=e.target.value;render();});',
+  'document.addEventListener("keydown",function(e){if(e.key==="Escape")closeModal();});',
+  'render();'
+].join('\n');
 
 // ===== Telegram Polling (1분 트리거로 호출) =====
 function pollTelegramUpdates() {
@@ -237,6 +377,25 @@ function doPost(e) {
     if (action === 'get_levers') {
       return jsonOut(getLevers_());
     }
+    if (action === 'setup_utm_design') {
+      return jsonOut(setupUtmDesign_());
+    }
+    if (action === 'cleanup_utm') {
+      return jsonOut(cleanupUtm_());
+    }
+    if (action === 'fix_postcard_utm') {
+      var ush = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID).getSheetByName('🔗 UTM 링크');
+      var ua = ush.getRange('A1:A20').getValues();
+      var urow = -1;
+      for (var ui = 1; ui < ua.length; ui++) { if (/엽서/.test(String(ua[ui][0]))) { urow = ui + 1; break; } }
+      if (urow < 0) return jsonOut({ ok: false, error: '엽서행 없음' });
+      var orig = String(ush.getRange(urow, 6).getValue());
+      var sep = orig.indexOf('?') >= 0 ? '&' : '?';
+      ush.getRange(urow, 5).setValue('pc-v1'); // campaign
+      ush.getRange(urow, 7).setValue(orig + sep + 'utm_source=qr&utm_medium=print&utm_campaign=pc-v1'); // 최종 UTM
+      ush.getRange(urow, 8).setValue('https://ijr.pages.dev/1'); // 단축
+      return jsonOut({ ok: true, row: urow });
+    }
     if (action === 'set_eunwoo_memo') { // 정리/수정용 (덮어쓰기)
       var cell = findEunwooMemoCell_();
       if (!cell) return jsonOut({ ok: false, error: '은우 행 못 찾음' });
@@ -280,10 +439,81 @@ function doPost(e) {
       if (fb) p.deleteProperty('UX_REVISE_FEEDBACK');
       return jsonOut({ ok: true, feedback: fb });
     }
+    if (action === 'create_utm_sheet') {
+      return jsonOut(createUtmSheet_());
+    }
     return jsonOut({ok: false, error: 'unknown action'});
   } catch(err) {
     return jsonOut({ok: false, error: err.message});
   }
+}
+
+function createUtmSheet_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  // 이미 있으면 삭제 후 재생성
+  var existing = ss.getSheetByName('🔗 UTM 링크');
+  if (existing) ss.deleteSheet(existing);
+  var sheet = ss.insertSheet('🔗 UTM 링크');
+
+  // 목표 정의 행
+  sheet.getRange('A1').setValue('📌 이 시트의 목표');
+  sheet.getRange('B1').setValue('GA4에서 채널별 트래픽 기여를 정확히 측정한다. 모든 외부 링크에 UTM 파라미터를 표준 규칙으로 달아 source / medium / campaign을 통일 — 그래야 "광고가 얼마나 팔았는지" "엽서 QR이 실제로 유입됐는지" "친구톡이 재구매로 이어졌는지" GA4에서 채널별로 정확히 분리해서 볼 수 있다.');
+  sheet.getRange('A1:B1').setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#D9BC82');
+  sheet.getRange('B1').setWrap(true);
+
+  // 명명 규칙
+  sheet.getRange('A3').setValue('📐 명명 규칙');
+  sheet.getRange('B3').setValue('utm_source: ig(인스타) / fb(페북) / kakao(카카오채널) / qr(QR코드) / naver(네이버) / email');
+  sheet.getRange('A4').setValue('');
+  sheet.getRange('B4').setValue('utm_medium: paid_social(유료SNS) / cta(알림톡버튼) / print(인쇄물) / organic / email');
+  sheet.getRange('A5').setValue('');
+  sheet.getRange('B5').setValue('utm_campaign: 소문자+하이픈. 예: recipe-card-vol01 / welcome / restock / grade-coupon / 0312-pesto   ⚠️ 공백X 한글X 대문자X');
+  sheet.getRange('A3:B5').setBackground('#f8f7f5').setFontColor('#333');
+  sheet.getRange('A3').setFontWeight('bold');
+
+  // 헤더
+  var headers = ['채널명','용도','utm_source','utm_medium','utm_campaign','원본 URL','최종 UTM URL','단축 URL','담당자','생성일','상태','GA4 확인','비고'];
+  sheet.getRange('A7:M7').setValues([headers])
+    .setFontWeight('bold').setBackground('#2C3E2D').setFontColor('#ffffff');
+
+  // 데이터
+  var rows = [
+    ['엽서 QR (Vol.01)','바질페스토 동봉 엽서 — 이달의 레시피','qr','print','recipe-card-vol01',
+     'https://italy-jungmiso.com/article/%EB%A0%88%EC%8B%9C%ED%94%BC/8/793/',
+     'https://italy-jungmiso.com/article/%EB%A0%88%EC%8B%9C%ED%94%BC/8/793/?utm_source=qr&utm_medium=print&utm_campaign=recipe-card-vol01',
+     '','은우','2026-06-02','🟢 활성','미확인','엽서 A면 QR 코드용'],
+    ['메타 광고 (표준)','인스타그램/페이스북 광고 — 바질페스토','ig','paid_social','pesto-main',
+     'https://italy-jungmiso.com/surl/p/83',
+     'https://italy-jungmiso.com/surl/p/83?utm_source=ig&utm_medium=paid_social&utm_campaign=pesto-main',
+     '','미주','2026-06-02','🟡 미적용','미확인','광고 15개 UTM 없이 운영 중 — 미주 적용 필요'],
+    ['친구톡 웰컴쿠폰','신규 가입자 첫 구매 유도 버튼','kakao','cta','welcome',
+     'https://italy-jungmiso.com/',
+     'https://italy-jungmiso.com/?utm_source=kakao&utm_medium=cta&utm_campaign=welcome',
+     '','미주','2026-06-02','🔴 미적용','미확인','GA4서 (direct)로 묻히는 중'],
+    ['친구톡 재입고알림','재입고 알림 → 상품 페이지','kakao','cta','restock',
+     'https://italy-jungmiso.com/product/detail.html?product_no=17',
+     'https://italy-jungmiso.com/product/detail.html?product_no=17?utm_source=kakao&utm_medium=cta&utm_campaign=restock',
+     '','미주','2026-06-02','🔴 미적용','미확인','바질페스토 재입고 알림용'],
+    ['친구톡 등급쿠폰','등급 쿠폰 발송 후 자사몰 유입','kakao','cta','grade-coupon',
+     'https://italy-jungmiso.com/',
+     'https://italy-jungmiso.com/?utm_source=kakao&utm_medium=cta&utm_campaign=grade-coupon',
+     '','미주','2026-06-02','🔴 미적용','미확인','5월 등급쿠폰 사용률 0% — UTM 없어서 추적 불가'],
+    ['네이버 쇼핑 (자연)','네이버 쇼핑 자연 유입 — UTM 불필요','naver','organic','',
+     'https://italy-jungmiso.com/','','','은우','2026-06-02','✅ 자동추적','✓','GA4가 utm_source=naver 자동 인식']
+  ];
+  sheet.getRange(8, 1, rows.length, 13).setValues(rows);
+
+  // 열 너비
+  sheet.setColumnWidth(1, 160); sheet.setColumnWidth(2, 200);
+  sheet.setColumnWidth(3, 90);  sheet.setColumnWidth(4, 100);
+  sheet.setColumnWidth(5, 150); sheet.setColumnWidth(6, 260);
+  sheet.setColumnWidth(7, 320); sheet.setColumnWidth(8, 120);
+  sheet.setColumnWidth(9, 70);  sheet.setColumnWidth(10, 90);
+  sheet.setColumnWidth(11, 90); sheet.setColumnWidth(12, 80);
+  sheet.setColumnWidth(13, 200);
+  sheet.setRowHeight(1, 80); sheet.setRowHeight(7, 30);
+
+  return { ok: true, url: ss.getUrl(), id: ss.getId(), sheetName: '🔗 UTM 링크' };
 }
 
 function handleTelegramUpdate(update) {
@@ -701,6 +931,11 @@ function handleCallbackQuery(query) {
     var act = parts[1]; // DONE|URGENT
     updateMemoStatus(parts[2], act, chatId, query);
     label = act === 'DONE' ? '완료 ✅' : '긴급 🚨';
+  } else if (parts[0] === 'ux') {
+    // 초안 DM 인라인 버튼: ux:send(단톡방+케이스북) / ux:skip(패스)
+    if (parts[1] === 'send') { handleUXSend(chatId); label = '단톡방+케이스북 📚'; }
+    else if (parts[1] === 'skip') { handleUXSkip(chatId, null); label = '패스 ✕'; }
+    else return;
   } else {
     return;
   }
@@ -942,6 +1177,58 @@ function saveDailySnapshot_(contents) {
   });
   sh.appendRow(row);
   return { ok: true, date: date };
+}
+
+// UTM 시트 정리 — 측정 안 되는 채널(메타·네이버) 행 삭제 + 엽서 placeholder 정리
+function cleanupUtm_() {
+  try {
+    var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+    var sh = ss.getSheetByName('🔗 UTM 링크');
+    if (!sh) return { ok: false, error: 'UTM 링크 탭 없음' };
+    // 메타 광고·네이버 쇼핑 행 삭제 (아래부터 — 행 밀림 방지)
+    var data = sh.getDataRange().getValues();
+    var removed = [];
+    for (var i = data.length - 1; i >= 1; i--) {
+      var name = String(data[i][0] || '');
+      if (/메타 광고|네이버 쇼핑/.test(name)) { sh.deleteRow(i + 1); removed.push(name); }
+    }
+    // 엽서 재고 placeholder 행(#NAME? 수식) 삭제 — 헤더만 남기고 사용자가 실제 입력
+    var pc = ss.getSheetByName('📮 엽서 재고');
+    if (pc && pc.getLastRow() >= 2) pc.deleteRow(2);
+    return { ok: true, removed: removed };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+// UTM 측정 설계 시트 반영 (2026-06-02) — 측정시점·지표·성과·★얻는것 + 엽서 재고탭 + 재입고 URL 버그수정
+function setupUtmDesign_() {
+  try {
+    var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+    var sh = ss.getSheetByName('🔗 UTM 링크');
+    if (!sh) return { ok: false, error: 'UTM 링크 탭 없음' };
+    // 측정 설계 헤더 (I7:L7) — 기존 H열까지 뒤에 추가
+    sh.getRange('I7:L7').setValues([['측정 시점', '측정 지표', '성과 정의', '★ 실행 후 얻는 것 (의사결정)']]);
+    // 채널별 (행 8=엽서QR, 9=메타, 10=웰컴, 11=재입고, 12=등급쿠폰, 13=네이버)
+    sh.getRange('I8:L13').setValues([
+      ['상시(지연·소비자 간직 후 스캔)', 'GA4 utm=qr 유입 + 엽서재고탭', '스캔율·주문·ROI', '엽서를 간직→스캔하나(스캔율). 인쇄비 값하나(ROI) → 엽서 계속/디자인개선/중단'],
+      ['—', '메타 픽셀이 이미 측정(송마망봇 ROAS)', 'UTM 불필요(중복)', '메타 자체 어트리뷰션이 더 정확 → UTM 안 붙임'],
+      ['발송+7일(즉시 반응)', 'GA4 utm=kakao 유입→cafe24 주문', '신규의 첫 구매 전환', '웰컴 친구톡이 신규 첫구매를 만드나 → 웰컴쿠폰 효율'],
+      ['발송+7일', 'GA4 utm=kakao→cafe24 주문', '재입고 알림→실제 구매', '재입고 알림이 구매로 이어지나 → 알림 발송 가치'],
+      ['발송+30일(쿠폰 사용기간)', 'GA4 utm=kakao + cafe24 쿠폰 사용', '등급쿠폰→재구매', '쿠폰이 재구매 만드나(현재 사용 0%) → 쿠폰 유지/타이밍변경/중단 결정'],
+      ['—', '네이버가 검색링크 통제', 'UTM 불가', '네이버 자연유입은 링크 못 박음 → 측정 대상 아님']
+    ]);
+    // 재입고 URL 버그 수정 (G11): ?product_no=17? → &
+    sh.getRange('G11').setValue('https://italy-jungmiso.com/product/detail.html?product_no=17&utm_source=kakao&utm_medium=cta&utm_campaign=restock');
+    // 📮 엽서 재고 탭 생성
+    var pc = ss.getSheetByName('📮 엽서 재고');
+    if (!pc) {
+      pc = ss.insertSheet('📮 엽서 재고');
+      pc.appendRow(['발행일', '발행수', '누적 배포(택배당 1)', '잔여', '스캔수(GA4 qr)', '스캔율%', '스캔→주문', '주문매출', '장당 인쇄비', 'ROI', '비고']);
+      pc.getRange(1, 1, 1, 11).setFontWeight('bold').setBackground('#1f2a44').setFontColor('#ffffff');
+      pc.setFrozenRows(1);
+      pc.appendRow(['(인쇄일 입력)', '(예: 1000)', '=출고택배수(누적)', '=발행수-누적배포', '(GA4 utm=qr)', '=스캔/배포', '(GA4 qr→주문)', '', '(인쇄비/발행수)', '=주문매출/(장당비용*배포)', 'Vol.01 그라냐노 레시피']);
+    }
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message, stack: String(e.stack || '').slice(0, 300) }; }
 }
 
 // 주간 레버 스냅샷 — UI/UX 개입 전후 비교용 (CX 관리자 성과 측정의 baseline)
@@ -1473,6 +1760,23 @@ function markUXSkip_(date) {
     }
   }
   return { ok: false, error: 'no draft for date' };
+}
+
+// 케이스북 페이지 ⭐채택/패스/되돌리기 버튼 콜백 (google.script.run 호출 — 언더바 X 필수)
+// 일자(A열)로 노출 사례 1건 찾아 상태칸(F)만 갱신. draft/skipped는 안 건드림.
+function setUXCaseStatus(date, status) {
+  if (['채택', '패스', 'sent'].indexOf(status) < 0) return { ok: false, error: 'bad status' };
+  var sh = getUXTab_();
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    var st = String(data[i][5]);
+    var shown = (st === 'sent' || st === '케이스북' || st === '채택' || st === '패스');
+    if (String(data[i][0]) === String(date) && shown) {
+      sh.getRange(i + 1, 6).setValue(status);
+      return { ok: true, date: String(date), status: status };
+    }
+  }
+  return { ok: false, error: 'no case for date' };
 }
 
 // ===== 외부 cron 핑거: GAS 시간 트리거 -> GitHub Actions 강제 실행 =====

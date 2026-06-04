@@ -1542,10 +1542,14 @@ async function uxDraftFlow() {
     status: 'draft',
   }, APPS_SCRIPT_URL);
 
-  // 개인 DM 발송 (긴 본문 chunk)
+  // 개인 DM 발송 (긴 본문 chunk) + 인라인 버튼 [📚 케이스북 추가][✕ 패스]
   const header = `📚 <b>UX 사례 초안 (${date} ${dowKR})</b>\n\n`;
-  const footer = `\n\n━━━━━━━━━━\n검토 후 명령어로 응답:\n/UX 발송 → 단톡방에 보냄\n/UX 보류 → 이번 회차 스킵\n/UX 수정 [요청] → 다시 생성`;
-  await sendTelegramChunked(header + escapeHtml(insight) + footer, false);
+  const footer = `\n\n━━━━━━━━━━\n아래 버튼으로 정하기 ▾  (또는 /UX 수정 [요청] → 다시 생성)`;
+  const uxKeyboard = { inline_keyboard: [[
+    { text: '📚 케이스북 추가', callback_data: 'ux:send' },
+    { text: '✕ 패스', callback_data: 'ux:skip' },
+  ]] };
+  await sendTelegramChunked(header + escapeHtml(insight) + footer, false, uxKeyboard);
   console.log(`[UX draft] ${date} ${dowKR} ${technique} → 개인 DM + 시트 저장`);
 }
 
@@ -2054,30 +2058,36 @@ function escapeHtml(s) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 const DRY_RUN = process.env.DRY_RUN === '1';
-function sendTelegram(text) {
+function sendTelegram(text, replyMarkup) {
   if (DRY_RUN) { console.log('\n[DRY_RUN][개인 DM]\n' + text.replace(/<[^>]+>/g, '') + '\n'); return Promise.resolve({ ok: true, dry: true }); }
-  return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, { chat_id: TG_CHAT_ID, text, parse_mode: 'HTML' });
+  const payload = { chat_id: TG_CHAT_ID, text, parse_mode: 'HTML' };
+  if (replyMarkup) payload.reply_markup = replyMarkup;
+  return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, payload);
 }
-function sendTelegramGroup(text) {
+function sendTelegramGroup(text, replyMarkup) {
   if (DRY_RUN) { console.log('\n[DRY_RUN][단톡방]\n' + text.replace(/<[^>]+>/g, '') + '\n'); return Promise.resolve({ ok: true, dry: true }); }
-  return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, { chat_id: GROUP_CHAT_ID, text, parse_mode: 'HTML' });
+  const payload = { chat_id: GROUP_CHAT_ID, text, parse_mode: 'HTML' };
+  if (replyMarkup) payload.reply_markup = replyMarkup;
+  return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, payload);
 }
 // 4096자 제한 — 줄 단위로 chunk 발송. 메시지 순서 보장 위해 await 직렬.
-async function sendTelegramChunked(text, group) {
+// replyMarkup(인라인 버튼)은 마지막 chunk에만 붙임.
+async function sendTelegramChunked(text, group, replyMarkup) {
   const send = group ? sendTelegramGroup : sendTelegram;
   const MAX = 3800; // 안전 마진
-  if (text.length <= MAX) return await send(text);
+  if (text.length <= MAX) return await send(text, replyMarkup);
   const lines = text.split('\n');
-  let buf = '', last = null;
+  const chunks = [];
+  let buf = '';
   for (const line of lines) {
-    if ((buf + '\n' + line).length > MAX && buf) {
-      last = await send(buf);
-      buf = line;
-    } else {
-      buf = buf ? buf + '\n' + line : line;
-    }
+    if ((buf + '\n' + line).length > MAX && buf) { chunks.push(buf); buf = line; }
+    else { buf = buf ? buf + '\n' + line : line; }
   }
-  if (buf) last = await send(buf);
+  if (buf) chunks.push(buf);
+  let last = null;
+  for (let i = 0; i < chunks.length; i++) {
+    last = await send(chunks[i], i === chunks.length - 1 ? replyMarkup : undefined);
+  }
   return last;
 }
 
