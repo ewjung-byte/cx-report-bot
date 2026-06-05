@@ -2460,6 +2460,9 @@ async function buildWeeklySnapshot(weekStart, weekEnd, label) {
   // 메타주장비중 = 메타픽셀매출 ÷ 카페24 실매출 (높을수록 메타가 전체매출을 과하게 자기공으로 주장 = 과대측정)
   const metaShare = hasCafe24 && cafe24.sales > 0 ? Math.round((meta.revenue / cafe24.sales) * 100) : '';
 
+  // 전환율 = cafe24 주문 ÷ GA4 세션(전채널 합). 결제슉/결제퍼널 효과 추적 핵심 지표 (양끝 정확).
+  const totalSessions = (ga4.channels || []).reduce((s, c) => s + (c.sessions || 0), 0);
+  const convRate = hasCafe24 && totalSessions > 0 ? +((cafe24.count / totalSessions) * 100).toFixed(2) : '';
   const summary = [{
     주차: label,
     광고비: Math.round(meta.spend),
@@ -2470,6 +2473,8 @@ async function buildWeeklySnapshot(weekStart, weekEnd, label) {
     카페24매출: hasCafe24 ? cafe24.sales : '',
     카페24주문: hasCafe24 ? cafe24.count : '',
     AOV: hasCafe24 && cafe24.count > 0 ? Math.round(cafe24.sales / cafe24.count) : '',
+    세션: totalSessions || '',
+    전환율: convRate,
   }];
   const channel = ga4.channels.map(c => ({
     주차: label, 채널: snapCh(c.channel), 세션: c.sessions, 전환: c.conv,
