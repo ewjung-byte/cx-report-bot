@@ -1613,11 +1613,11 @@ function setEunwooCompassRemarks_(text) {
         var cell = sh.getRange(49 + i, 5); // E열=비고
         // 가독성: 섹션 헤더(📍🎯📌🥇) 줄 굵게 RichText + 줄바꿈 + 상단정렬
         var b = SpreadsheetApp.newRichTextValue().setText(text);
-        var bold = SpreadsheetApp.newTextStyle().setBold(true).build();
+        var headStyle = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(11).build(); // 헤더 굵게 + 1pt 크게(본문 10pt)
         var lines = text.split('\n'), pos = 0;
         for (var L = 0; L < lines.length; L++) {
           var ln = lines[L];
-          if (ln.length > 0 && /^(📍|🎯|📌|🥇)/.test(ln)) b.setTextStyle(pos, pos + ln.length, bold);
+          if (ln.length > 0 && /^(📍|🎯|📌|🥇)/.test(ln)) b.setTextStyle(pos, pos + ln.length, headStyle);
           pos += ln.length + 1;
         }
         cell.setRichTextValue(b.build());
