@@ -1699,7 +1699,7 @@ function refreshCockpit_() {
   var oneThing = PropertiesService.getScriptProperties().getProperty('EUNWOO_ONE_THING') || '';
   var inbox = '· CX후보 ' + cand.length + ' · UX채택 ' + uxN + ' · D2C는 케이스북→/적용';
   var txt = '📍 이번주 콕핏 (' + Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd') + ')\n\n'
-    + '🥇 ONE THING\n' + (oneThing ? '· ' + oneThing : '· (미설정 — /원씽 [내용])') + '\n\n'
+    + '🥇 CX 관리자 ONE THING\n' + (oneThing ? '· ' + oneThing : '· (미설정 — /원씽 [내용])') + '\n\n'
     + '📌 진행중 (' + wip.length + ')\n' + (wip.length ? wip.slice(0, 5).join('\n') : '· 없음') + '\n\n'
     + '📥 들어온 것 (확인→/적용·/개입)\n' + inbox + (cand.length ? '\n' + cand.slice(0, 2).join('\n') : '') + '\n\n'
     + '📋 나중에 (' + backlog.length + ')\n' + (backlog.length ? backlog.slice(0, 4).join('\n') : '· 없음') + '\n\n'
