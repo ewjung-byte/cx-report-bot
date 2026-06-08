@@ -499,14 +499,18 @@ async function getCafe24DailyOrders(startDate, endDate) {
     const channels = {};
     valid.forEach(o => { const k = LABEL[o.order_place_name] || o.order_place_name || '기타'; channels[k] = (channels[k] || 0) + 1; });
     const channelList = Object.entries(channels).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
-    // 결제수단 분포 (payment_gateway_names raw) — GA4 funnel보다 정확한 결제 흐름 진실
+    // 결제수단 분포 — ★order_place 우선(네이버페이 주문형은 payment_gateway가 빈값이라 gateway만 보면 자체결제로 오분류됨).
+    // 네이버페이/카카오 총합 = 외부(주문형·톡체크아웃) + 결제창 내 버튼(gateway). 2026-06-08 fix.
     const payMethods = { 자체결제: 0, 네이버페이: 0, 카카오페이: 0, 기타간편: 0 };
     valid.forEach(o => {
+      const place = String(o.order_place_name || '');
       const gw = (o.payment_gateway_names || []).join('').toLowerCase();
-      if (gw.includes('naver')) payMethods.네이버페이++;
-      else if (gw.includes('kakao')) payMethods.카카오페이++;
+      if (place.indexOf('네이버') >= 0) payMethods.네이버페이++;        // 네이버페이 주문형(외부)
+      else if (place.indexOf('톡') >= 0) payMethods.카카오페이++;       // 톡체크아웃(외부 카카오)
+      else if (gw.includes('naver')) payMethods.네이버페이++;           // 결제창 내 네이버페이 버튼
+      else if (gw.includes('kakao')) payMethods.카카오페이++;           // 결제창 내 카카오페이 버튼
       else if (gw.includes('payco') || gw.includes('toss') || gw.includes('ssg') || gw.includes('smilepay')) payMethods.기타간편++;
-      else payMethods.자체결제++;
+      else payMethods.자체결제++;                                       // 결제창 카드·계좌 등
     });
     return {
       totalCount: all.length,
@@ -2620,7 +2624,7 @@ async function weeklyReport() {
   const display = `${formatDate(thisStart)} ~ ${formatDate(thisEnd)}`;
   console.log(`[주간] ${display}`);
 
-  const [metaThis, metaLast, cafe24This, cafe24Last, clarity, ga4, reviews, repurchase, pvWoW] = await Promise.all([
+  const [metaThis, metaLast, cafe24This, cafe24Last, clarity, ga4, reviews, repurchase, pvWoW, cafe24Products] = await Promise.all([
     getMetaStats(thisStart, thisEnd),
     getMetaStats(dateStr(14), dateStr(8)),
     getCafe24Sales(thisStart, thisEnd),
@@ -2630,6 +2634,7 @@ async function weeklyReport() {
     getCafe24Reviews(thisStart, thisEnd),
     getRepurchaseStats(90, thisStart, thisEnd),
     getPageViewWoW(),
+    getCafe24SalesByProduct(thisStart, thisEnd),
   ]);
   // cafe24 무거운 호출(365일 orders·쿠폰 issues)은 순차 실행 —
   // Promise.all 동시 실행 시 cafe24 rate limit으로 최신 chunk가 누락돼 골든존이 부분 데이터(휴면만)로 나옴.
@@ -2655,8 +2660,12 @@ async function weeklyReport() {
     `${chMap[ch]||ch}: ${v.cur.sessions}명${diff(v.cur.sessions, v.prev.sessions)}`
   ).join('\n');
 
+  // 사이트 전환율 = cafe24 주문 ÷ GA4 총세션 (양끝 정확). Clarity funnel은 페이지 방문 수(순차 아님)라 비율 오해 → 카운트만 + 진짜 전환율 별도.
+  const ga4TotalSess = Object.values(ga4?.channels || {}).reduce((a, v) => a + (v.cur?.sessions || 0), 0);
+  const siteCvr = ga4TotalSess > 0 ? (cafe24This.count / ga4TotalSess * 100).toFixed(1) + '%' : '-';
   const f = clarity?.funnel;
-  const funnelLine = f ? `랜딩 ${f.landing.toLocaleString()} → 상품 ${f.product}(${pct(f.product,f.landing)}) → 장바구니 ${f.cart}(${pct(f.cart,f.landing)}) → 구매 ${f.checkout}(${pct(f.checkout,f.landing)})` : '-';
+  const funnelLine = `<b>전환율 ${siteCvr}</b> (cafe24 주문 ${cafe24This.count} ÷ GA4 세션 ${ga4TotalSess.toLocaleString()})`
+    + (f ? `\n방문 흐름(순차 아님): 랜딩 ${f.landing} · 상품상세 ${f.product} · 장바구니 ${f.cart} · 구매버튼 ${f.checkout}` : '');
 
   const ut = ga4?.userType?.cur;
   const utPrev = ga4?.userType?.prev;
@@ -2670,10 +2679,13 @@ async function weeklyReport() {
     return `${name}: ${l.sessions}명 CVR ${l.cvr}`;
   }).join('\n');
 
-  // 상품별 페이지 성과 (top 5)
+  // 상품별 페이지 성과 (top 5) — ★구매수는 GA4 대신 cafe24 실판매(GA4는 외부결제 미귀속으로 0 나옴). CVR=실판매÷GA4세션.
+  const cpById = (cafe24Products && cafe24Products.byProduct) || {};
   const productLines = (ga4?.topProducts||[]).map(p => {
     const nm = PRODUCT_NAME[p.id] || `상품 #${p.id}`;
-    return `${nm}: ${p.sessions}세션·구매 ${p.purchases} (CVR ${pct(p.purchases, p.sessions)})`;
+    const sold = cpById[String(p.id)]?.count || 0;
+    const cvr = p.sessions > 0 ? (sold / p.sessions * 100).toFixed(1) + '%' : '-';
+    return `${nm}: ${p.sessions}세션 · 실판매 ${sold}건 (CVR ${cvr})`;
   }).join('\n');
 
   // 결제 누수 추정액 (Clarity 스크립트에러 × 세션 × 자사몰 CVR × AOV)
