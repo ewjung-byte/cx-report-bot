@@ -1714,7 +1714,7 @@ function refreshCockpit_() {
   var txt = '📍 이번주 콕핏 (' + Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd') + ')\n\n'
     + '🥇 CX 관리자 ONE THING\n' + (oneThing ? '· ' + oneThing : '· (미설정 — /원씽 [내용])') + '\n\n'
     + '📌 진행중 (' + wip.length + ')\n' + fmt(wip, 10) + '\n\n'
-    + '📥 들어온 것 (확인→/적용·/개입)\n' + inbox + (cand.length ? '\n' + cand.slice(0, 2).join('\n') : '') + '\n\n'
+    + '📥 들어온 것 (확인→/할거·/적용)\n' + inbox + (cand.length ? '\n' + cand.slice(0, 2).join('\n') : '') + '\n\n'
     + '📋 나중에 (' + backlog.length + ')\n' + fmt(backlog, 10) + '\n\n'
     + '✅ 이번달 완료 ' + doneN + '건';
   return setEunwooCompassRemarks_(txt);
