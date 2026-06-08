@@ -435,6 +435,39 @@ function doPost(e) {
     if (action === 'cleanup_utm') {
       return jsonOut(cleanupUtm_());
     }
+    if (action === 'init_eunwoo_tracking') {
+      return jsonOut(initEunwooTracking_(contents));
+    }
+    if (action === 'append_paymethod_monthly') {
+      return jsonOut(appendPayMethodMonthly_(contents));
+    }
+    if (action === 'append_paymember_monthly') {
+      return jsonOut(appendPayMemberMonthly_(contents));
+    }
+    if (action === 'record_pay_breakdown') {
+      return jsonOut(recordPayBreakdown_(contents));
+    }
+    if (action === 'record_pay_method_detail') {
+      return jsonOut(recordPayMethodDetail_(contents));
+    }
+    if (action === 'record_traffic_monthly') {
+      return jsonOut(recordTrafficMonthly_(contents));
+    }
+    if (action === 'append_cx_candidates') {
+      return jsonOut(appendCxCandidates_(contents));
+    }
+    if (action === 'set_compass_remarks') {
+      return jsonOut(setEunwooCompassRemarks_(contents.text || ''));
+    }
+    if (action === 'build_monthly_summary') {
+      return jsonOut(buildEunwooMonthlySummary_(contents.month || ''));
+    }
+    if (action === 'archive_cx') {
+      return jsonOut(archiveCx_());
+    }
+    if (action === 'prune_cx') {
+      return jsonOut(pruneCx_(contents.weekLabel || ''));
+    }
     if (action === 'fix_postcard_utm') {
       var ush = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID).getSheetByName('🔗 UTM 링크');
       var ua = ush.getRange('A1:A20').getValues();
@@ -493,6 +526,16 @@ function doPost(e) {
     }
     if (action === 'create_utm_sheet') {
       return jsonOut(createUtmSheet_());
+    }
+    if (action === 'create_eunwoo_revenue_sheet') {
+      return jsonOut(createEunwooRevenueSheet_());
+    }
+    if (action === 'create_brandconnect_sheet') {
+      return jsonOut(createBrandConnectSheet_());
+    }
+    if (action === 'list_sheets') {
+      var lss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+      return jsonOut({ ok: true, sheets: lss.getSheets().map(function(s){ return { name: s.getName(), gid: s.getSheetId() }; }) });
     }
     return jsonOut({ok: false, error: 'unknown action'});
   } catch(err) {
@@ -568,6 +611,189 @@ function createUtmSheet_() {
   return { ok: true, url: ss.getUrl(), id: ss.getId(), sheetName: '🔗 UTM 링크' };
 }
 
+function createEunwooRevenueSheet_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var existing = ss.getSheetByName('💰 은우 귀속 매출');
+  if (existing) ss.deleteSheet(existing);
+  var sheet = ss.insertSheet('💰 은우 귀속 매출');
+
+  // 목표 정의
+  sheet.getRange('A1').setValue('📌 이 시트의 목표');
+  sheet.getRange('B1').setValue('은우가 직접 창출한 매출을 채널별로 "은우 귀속 매출"로 기록한다. 단순 회사 매출이 아니라, 카마솥 협상 카드 + 몸값 증명용. 추적 안 되면 회사 매출로 흡수돼 협상 카드 0 → 첫 컨택부터 귀속 추적 내장. 성공 기준 = 월 은우 귀속 매출 + 그 구매자 90일 재구매율.');
+  sheet.getRange('A1:B1').setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#D9BC82');
+  sheet.getRange('B1').setWrap(true);
+
+  // 채널 전략 메모
+  sheet.getRange('A3').setValue('📐 채널 전략');
+  sheet.getRange('B3').setValue('자동 트랙(백그라운드): 카페24 제휴마케팅 = 무조건 먼저 깔아둠. 수동 트랙(1인 과부하라 1개만 집중): 네이버 브랜드커넥트 우선 / 인스타·유튜브 대기.');
+  sheet.getRange('A4').setValue('');
+  sheet.getRange('B4').setValue('귀속 방식: 브랜드커넥트=플랫폼 리포트(공구별 자동분리) / 카페24제휴=제휴링크 자동추적 / 인스타·유튜브=전용 쿠폰코드 or UTM. ⚠️ 수동 채널 동시 착수 금지.');
+  sheet.getRange('A3:B4').setBackground('#f8f7f5').setFontColor('#333');
+  sheet.getRange('A3').setFontWeight('bold');
+
+  // 요약 영역
+  sheet.getRange('A6').setValue('📊 월 요약');
+  sheet.getRange('A6').setFontWeight('bold').setFontColor('#2C3E2D');
+  sheet.getRange('A7').setValue('이번 달 귀속 매출 합계');
+  sheet.getRange('B7').setFormula('=SUM(G11:G)');
+  sheet.getRange('C7').setValue('평균 90일 재구매율');
+  sheet.getRange('D7').setFormula('=IFERROR(AVERAGE(K11:K),"")');
+  sheet.getRange('A7:D7').setBackground('#fafff8').setFontWeight('bold');
+  sheet.getRange('B7').setNumberFormat('#,##0"원"');
+  sheet.getRange('D7').setNumberFormat('0.0%');
+
+  // 헤더
+  var headers = ['시작일','채널','트랙','캠페인(공구·시딩명)','크리에이터/파트너','귀속 방식','매출(원)','구매자수','객단가','90일 재구매자','90일 재구매율','상태','메모'];
+  sheet.getRange('A10:M10').setValues([headers])
+    .setFontWeight('bold').setBackground('#2C3E2D').setFontColor('#ffffff');
+
+  // 첫 데이터 행 (브랜드커넥트 바질 공구)
+  var rows = [
+    ['2026-06-05','네이버 브랜드커넥트','수동','클래식 바질페스토 공동구매 1차','(크리에이터 선정 중)','브랜드커넥트 플랫폼 리포트','','','','','','🟢 오픈','첫 공구 — 수확당일제조/바질25%/3무 소구. 매출·구매자수는 공구 종료 후 입력'],
+    ['','카페24 제휴마케팅','자동','자동 시딩(상시)','파트너 모집','제휴링크 자동추적','','','','','','⏳ 셋업 예정','백그라운드 자동 트랙. 기능 활성화+파트너 모집 링크 필요'],
+    ['','네이버 브랜드커넥트 외','수동','(대기)','—','—','','','','','','⚪ 대기','인스타·유튜브 = 브랜드커넥트 첫 성과 나온 뒤 재평가(1인 과부하 방지)']
+  ];
+  sheet.getRange(11, 1, rows.length, 13).setValues(rows);
+
+  // 자동계산 수식 (객단가 I = 매출/구매자, 재구매율 K = 재구매자/구매자)
+  for (var r = 11; r <= 40; r++) {
+    sheet.getRange(r, 9).setFormula('=IF(N(H' + r + ')>0,G' + r + '/H' + r + ',"")');   // 객단가
+    sheet.getRange(r, 11).setFormula('=IF(N(H' + r + ')>0,J' + r + '/H' + r + ',"")');  // 재구매율
+  }
+  sheet.getRange('G11:G40').setNumberFormat('#,##0');
+  sheet.getRange('I11:I40').setNumberFormat('#,##0"원"');
+  sheet.getRange('K11:K40').setNumberFormat('0.0%');
+
+  // 열 너비
+  sheet.setColumnWidth(1, 80);  sheet.setColumnWidth(2, 150); sheet.setColumnWidth(3, 60);
+  sheet.setColumnWidth(4, 200); sheet.setColumnWidth(5, 150); sheet.setColumnWidth(6, 160);
+  sheet.setColumnWidth(7, 100); sheet.setColumnWidth(8, 80);  sheet.setColumnWidth(9, 90);
+  sheet.setColumnWidth(10, 100);sheet.setColumnWidth(11, 100);sheet.setColumnWidth(12, 90);
+  sheet.setColumnWidth(13, 280);
+  sheet.setRowHeight(1, 90); sheet.setRowHeight(10, 30);
+
+  return { ok: true, url: ss.getUrl(), id: ss.getId(), sheetName: '💰 은우 귀속 매출' };
+}
+
+function createBrandConnectSheet_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var existing = ss.getSheetByName('🛒 브랜드커넥트 수수료');
+  if (existing) ss.deleteSheet(existing);
+  var sheet = ss.insertSheet('🛒 브랜드커넥트 수수료');
+
+  // 목표
+  sheet.getRange('A1').setValue('📌 이 표의 목표');
+  sheet.getRange('B1').setValue('브랜드커넥트에 상품 걸 때, 모든 수수료(크리에이터+네이버연동+결제) 다 떼고 진짜 남는 실마진을 본다. 노란셀(E:크리에이터·G:연동·H:결제) 조정 → 실수령·실마진·실마진율 자동 계산. 실마진율 마이너스면 절대 걸면 안 됨.');
+  sheet.getRange('A1:B1').setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#D9BC82');
+  sheet.getRange('B1').setWrap(true);
+
+  // 수수료 기준 메모
+  sheet.getRange('A3').setValue('📐 수수료 기준');
+  sheet.getRange('B3').setValue('크리에이터: ③공동구매=25%(꿀동이 실제값) / ②쇼핑커넥트=10~15%. 네이버연동=2%·결제=3.4%(노란셀 조정). 배송비=판매자 실부담: 주방기기 무료배송→4,000 전액부담 / 식품 소비자3,500부담→순부담1,400(40,000원↑ 묶음은 4,900). 쿠팡도 동일. ⚠️쿠팡 수수료는 카테고리별(식품·주방 ~11%)·정산서 확인.');
+  sheet.getRange('A3:B3').setBackground('#f8f7f5').setFontColor('#333');
+  sheet.getRange('A3').setFontWeight('bold').setWrap(false);
+  sheet.getRange('B3').setWrap(true);
+  sheet.setRowHeight(3, 50);
+
+  // 섹션 헤더 (4행)
+  sheet.getRange('D4').setValue('◀ 네이버 (브랜드커넥트 계산기준) ▶');
+  sheet.getRange('D4:L4').merge().setHorizontalAlignment('center')
+    .setBackground('#03c75a').setFontColor('#fff').setFontWeight('bold');
+  sheet.getRange('M4').setValue('◀ 쿠팡 (참고 손익) ▶');
+  sheet.getRange('M4:Q4').merge().setHorizontalAlignment('center')
+    .setBackground('#e84118').setFontColor('#fff').setFontWeight('bold');
+
+  // 헤더 (5행)
+  var headers = ['상품','카테고리','원가',
+    '네이버가','네이버 배송비','크리에이터 수수료율','크리에이터액','연동(2%)','결제(3.4%)','수수료+배송 합','네이버 실마진','네이버 실마진율',
+    '쿠팡가','쿠팡 배송비','쿠팡 수수료율','쿠팡 실마진','쿠팡 실마진율',
+    '우선순위','비고'];
+  sheet.getRange('A5:S5').setValues([headers])
+    .setFontWeight('bold').setBackground('#2C3E2D').setFontColor('#ffffff');
+  sheet.getRange('A5:S5').setWrap(true);
+
+  // 데이터 [상품,카테고리,원가,네이버배송비,쿠팡배송비,크리에이터율,쿠팡수수료율,네이버가(아는것만),우선순위,비고]
+  // 배송비=판매자 실부담. 주방=무료배송이라 4,000 전액부담 / 식품=소비자 3,500부담→순부담 1,400(40,000+ 묶음은 4,900)
+  var SHIP_KITCHEN = 4000, SHIP_FOOD = 1400;
+  var data = [
+    ['엘가 IH 미니양면팬 21cm','주방',9500,SHIP_KITCHEN,SHIP_KITCHEN,0.15,0.11,'','🥇','무료배송=판매자 배송 4,000 전액부담'],
+    ['클래식 바질페스토 150g','식품',8648,SHIP_FOOD,SHIP_FOOD,0.15,0.11,24900,'🥇','네이버24,900. 단품 배송순부담1,400(40,000+묶음은4,900)'],
+    ['퀸센스 깊은그리들팬 36cm','주방',21700,SHIP_KITCHEN,SHIP_KITCHEN,0.12,0.11,'','🥇','객단가 최고(4.78만)·무료배송'],
+    ['퀸센스 안심멀티구이팬 41cm','주방',14600,SHIP_KITCHEN,SHIP_KITCHEN,0.12,0.11,'','🥈','무료배송'],
+    ['퀸센스 사각그리들','주방',18300,SHIP_KITCHEN,SHIP_KITCHEN,0.08,0.11,'','🥈','무료배송'],
+    ['다니엘로 파스타 500g','식품',5300,SHIP_FOOD,SHIP_FOOD,0.08,0.11,'','🥉','마진·객단가 낮음. 단품 배송순부담1,400'],
+    ['오뜨 찜냄비 16cm','주방','',SHIP_KITCHEN,SHIP_KITCHEN,0.12,0.11,'','❓','원가 미입력→채우면 계산·무료배송'],
+    ['오뜨 찜냄비 20cm','주방','',SHIP_KITCHEN,SHIP_KITCHEN,0.12,0.11,'','❓','원가 미입력·무료배송'],
+    ['오뜨 찜냄비 24cm','주방','',SHIP_KITCHEN,SHIP_KITCHEN,0.12,0.11,'','❓','원가 미입력·객단가 최고·무료배송'],
+    ['올리브오일 프루타토 750ml','식품',37800,SHIP_FOOD,SHIP_FOOD,0.10,0.11,'','❓','단품 배송순부담1,400'],
+    ['올리브오일 코라티나 750ml','식품',32000,SHIP_FOOD,SHIP_FOOD,0.10,0.11,'','❓','단품 배송순부담1,400'],
+    ['톤도 (냉동) 400g','식품',5100,SHIP_FOOD,SHIP_FOOD,0.10,0.11,'','❓','냉동 배송비 별도 확인 권장']
+  ];
+  var startRow = 6;
+  for (var i = 0; i < data.length; i++) {
+    var r = startRow + i;
+    var d = data[i];
+    sheet.getRange(r, 1).setValue(d[0]);  // A 상품
+    sheet.getRange(r, 2).setValue(d[1]);  // B 카테고리
+    sheet.getRange(r, 3).setValue(d[2]);  // C 원가
+    // 네이버 섹션
+    sheet.getRange(r, 4).setValue(d[7]);  // D 네이버가 (노란)
+    sheet.getRange(r, 5).setValue(d[3]);  // E 네이버 배송비 (노란)
+    sheet.getRange(r, 6).setValue(d[5]);  // F 크리에이터 수수료율 (노란)
+    sheet.getRange(r, 7).setFormula('=IF(N(D'+r+')>0,D'+r+'*F'+r+',"")');                       // G 크리에이터액
+    sheet.getRange(r, 8).setValue(0.02);  // H 연동 (노란)
+    sheet.getRange(r, 9).setValue(0.034); // I 결제 (노란)
+    sheet.getRange(r,10).setFormula('=IF(N(D'+r+')>0,G'+r+'+D'+r+'*H'+r+'+D'+r+'*I'+r+'+E'+r+',"")'); // J 수수료+배송 합
+    sheet.getRange(r,11).setFormula('=IF(AND(N(D'+r+')>0,N(C'+r+')>0),D'+r+'-J'+r+'-C'+r+',"")');     // K 네이버 실마진
+    sheet.getRange(r,12).setFormula('=IF(AND(N(D'+r+')>0,N(C'+r+')>0),K'+r+'/D'+r+',"")');            // L 네이버 실마진율
+    // 쿠팡 섹션
+    sheet.getRange(r,13).setValue('');    // M 쿠팡가 (노란, 사용자 입력)
+    sheet.getRange(r,14).setValue(d[4]);  // N 쿠팡 배송비 (노란)
+    sheet.getRange(r,15).setValue(d[6]);  // O 쿠팡 수수료율 (노란)
+    sheet.getRange(r,16).setFormula('=IF(AND(N(M'+r+')>0,N(C'+r+')>0),M'+r+'-M'+r+'*O'+r+'-N'+r+'-C'+r+',"")'); // P 쿠팡 실마진
+    sheet.getRange(r,17).setFormula('=IF(AND(N(M'+r+')>0,N(C'+r+')>0),P'+r+'/M'+r+',"")');            // Q 쿠팡 실마진율
+    sheet.getRange(r,18).setValue(d[8]);  // R 우선순위
+    sheet.getRange(r,19).setValue(d[9]);  // S 비고
+  }
+
+  // 노란셀(입력): D네이버가 E배송 F크리율 H연동 I결제 / M쿠팡가 N배송 O수수료
+  sheet.getRange(startRow, 4, data.length, 3).setBackground('#fff2cc'); // D,E,F
+  sheet.getRange(startRow, 8, data.length, 2).setBackground('#fff2cc'); // H,I
+  sheet.getRange(startRow,13, data.length, 3).setBackground('#fff2cc'); // M,N,O
+
+  // 포맷
+  sheet.getRange(startRow,3,data.length,1).setNumberFormat('#,##0');    // 원가
+  sheet.getRange(startRow,4,data.length,2).setNumberFormat('#,##0');    // 네이버가·배송
+  sheet.getRange(startRow,6,data.length,1).setNumberFormat('0%');       // 크리에이터율
+  sheet.getRange(startRow,7,data.length,1).setNumberFormat('#,##0');    // 크리에이터액
+  sheet.getRange(startRow,8,data.length,2).setNumberFormat('0.0%');     // 연동·결제
+  sheet.getRange(startRow,10,data.length,2).setNumberFormat('#,##0');   // 합·실마진
+  sheet.getRange(startRow,12,data.length,1).setNumberFormat('0.0%');    // 네이버 실마진율
+  sheet.getRange(startRow,13,data.length,2).setNumberFormat('#,##0');   // 쿠팡가·배송
+  sheet.getRange(startRow,15,data.length,1).setNumberFormat('0%');      // 쿠팡 수수료율
+  sheet.getRange(startRow,16,data.length,1).setNumberFormat('#,##0');   // 쿠팡 실마진
+  sheet.getRange(startRow,17,data.length,1).setNumberFormat('0.0%');    // 쿠팡 실마진율
+
+  // 실마진율 음수 빨강 (네이버 L · 쿠팡 Q)
+  var rule = SpreadsheetApp.newConditionalFormatRule()
+    .whenNumberLessThan(0).setBackground('#f4cccc').setFontColor('#cc0000')
+    .setRanges([sheet.getRange(startRow,11,data.length,2), sheet.getRange(startRow,16,data.length,2)])
+    .build();
+  sheet.setConditionalFormatRules([rule]);
+
+  // 열 너비
+  sheet.setColumnWidth(1, 180); sheet.setColumnWidth(2, 50);  sheet.setColumnWidth(3, 70);
+  sheet.setColumnWidth(4, 80);  sheet.setColumnWidth(5, 75);  sheet.setColumnWidth(6, 80);
+  sheet.setColumnWidth(7, 80);  sheet.setColumnWidth(8, 65);  sheet.setColumnWidth(9, 70);
+  sheet.setColumnWidth(10, 90); sheet.setColumnWidth(11, 85); sheet.setColumnWidth(12, 80);
+  sheet.setColumnWidth(13, 80); sheet.setColumnWidth(14, 70); sheet.setColumnWidth(15, 75);
+  sheet.setColumnWidth(16, 80); sheet.setColumnWidth(17, 75); sheet.setColumnWidth(18, 55);
+  sheet.setColumnWidth(19, 180);
+  sheet.setRowHeight(1, 80); sheet.setRowHeight(5, 45);
+
+  return { ok: true, url: ss.getUrl(), id: ss.getId(), sheetName: '🛒 브랜드커넥트 수수료' };
+}
+
 function handleTelegramUpdate(update) {
   var msg = update.message || update.edited_message;
   if (!msg || !msg.text) return;
@@ -618,6 +844,16 @@ function handleEunwooDM(msg) {
     return;
   }
   if (text === '/메모목록') { sendTGMessage(chatId, '📝 <b>개인메모</b> (COMPASS)\n' + readEunwooCompassMemo_()); return; }
+  if (text === '/성과' || text === '/성과요약') {
+    var sm = buildEunwooMonthlySummary_();
+    sendTGMessage(chatId, sm.ok ? sm.text : '⚠️ 성과요약 실패: ' + sm.error);
+    return;
+  }
+  if (text === '/정리' || text === '/완료정리') {
+    var pc = pruneCx_('');
+    sendTGMessage(chatId, pc.ok ? '🧹 정리 완료 — 완료항목 ' + pc.pruned + '건 삭제(✅완료_아카이브에 백업됨). 새 주차로 채우세요.' : '⚠️ 정리 실패: ' + pc.error);
+    return;
+  }
   if (text === '/UX 발송' || text === '/UX발송') { handleUXSend(chatId); return; }
   if (text === '/UX 보류' || text === '/UX보류') { handleUXSkip(chatId, date); return; }
   if ((m = text.match(/^\/UX\s*수정\s+([\s\S]+)/))) { handleUXRevise(m[1].trim(), chatId); return; }
@@ -1079,7 +1315,7 @@ function getActivitiesData(hours) {
 
 // ===== 주간 스냅샷 (Looker Studio 다차원 보고서) =====
 var WEEKLY_TABS = {
-  summary:  { name: '주간_요약',   headers: ['주차','광고비','메타픽셀매출','메타ROAS','실제ROAS','메타주장비중','카페24매출','카페24주문','AOV'] },
+  summary:  { name: '주간_요약',   headers: ['주차','광고비','메타픽셀매출','메타ROAS','실제ROAS','메타주장비중','카페24매출','카페24주문','AOV','세션','전환율'] },
   channel:  { name: '주간_채널',   headers: ['주차','채널','세션','전환','전환율'] },
   customer: { name: '주간_고객',   headers: ['주차','구분','세션','전환','전환율'] },
   campaign: { name: '주간_캠페인', headers: ['주차','캠페인','광고비','매출','ROAS','CTR','구매'] }
@@ -1347,6 +1583,105 @@ function readEunwooCompassMemo_() {
     if (!cell) return '(은우 행 못 찾음)';
     return String(cell.getValue() || '(비어있음)');
   } catch (e) { return '(읽기 오류: ' + e.message + ')'; }
+}
+// 은우 COMPASS 비고(E열)에 봇 측정 할일 갱신(replace). 매주 데이터→액션을 "월요일 첫 화면"에 일원화.
+function setEunwooCompassRemarks_(text) {
+  try {
+    var sh = SpreadsheetApp.openById(STRATEGY_SHEET_ID).getSheetByName('🧭 COMPASS');
+    if (!sh) return { ok: false, error: 'COMPASS 없음' };
+    var aCol = sh.getRange('A49:A60').getValues();
+    for (var i = 0; i < aCol.length; i++) {
+      if (String(aCol[i][0]).trim() === '은우') { sh.getRange(49 + i, 5).setValue(text); return { ok: true, row: 49 + i }; } // E열=비고
+    }
+    return { ok: false, error: '은우 행 못 찾음 (COMPASS A49:A60)' };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+// 🥇 은우 월간 성과 요약 자동초안 (연봉협상 카드). 개입기록(완료 Before/After)+주간_요약(전환율·매출 변화)+귀속매출 → 📊 월간_성과요약 탭 upsert.
+function buildEunwooMonthlySummary_(month) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  if (!month) month = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM');
+  var mKey = month.replace(/[-.]/g, '');
+  var inMonth = function (s) {
+    if (Object.prototype.toString.call(s) === '[object Date]') s = Utilities.formatDate(s, 'Asia/Seoul', 'yyyy-MM-dd');
+    return String(s).replace(/[-.]/g, '').indexOf(mKey) >= 0;
+  };
+  var done = [], wip = [], seenDone = {};
+  var iv = ss.getSheetByName('🛠 개입기록');
+  // 진행/착수 = 개입기록(working)에서
+  if (iv && iv.getLastRow() > 1) {
+    iv.getDataRange().getValues().slice(1).forEach(function (r) {
+      if (!inMonth(r[0])) return;
+      var v = String(r[7]);
+      if (v === '착수' || v === '진행중') wip.push('- ' + String(r[2]));
+    });
+  }
+  // 완료 = 개입기록 + ✅완료_아카이브(영구) 둘 다, 중복제거 — 월요일 정리로 옮겨가도 협상기록 안 사라짐
+  [iv, ss.getSheetByName('✅ 완료_아카이브')].forEach(function (sh) {
+    if (!sh || sh.getLastRow() < 2) return;
+    sh.getDataRange().getValues().slice(1).forEach(function (r) {
+      if (!inMonth(r[0]) || String(r[7]) !== '완료') return;
+      var k = String(r[2]); if (seenDone[k]) return; seenDone[k] = true;
+      var ba = (r[4] ? 'Before ' + r[4] : '') + (r[5] ? ' → After ' + r[5] : '');
+      done.push('- ' + k + (ba ? ' (' + ba + ')' : ''));
+    });
+  });
+  var convLine = '';
+  var ws = ss.getSheetByName('주간_요약');
+  if (ws && ws.getLastRow() > 1) {
+    var hdr = ws.getRange(1, 1, 1, ws.getLastColumn()).getValues()[0];
+    var ci = hdr.indexOf('전환율'), si = hdr.indexOf('카페24매출');
+    var rows = ws.getDataRange().getValues().slice(1).filter(function (r) { return inMonth(r[0]); });
+    if (rows.length && ci >= 0) {
+      var f = rows[0], l = rows[rows.length - 1];
+      convLine = '전환율 ' + f[ci] + '% → ' + l[ci] + '%';
+      if (si >= 0 && f[si] && l[si]) convLine += ' · 매출 ' + Math.round(f[si] / 10000) + '만→' + Math.round(l[si] / 10000) + '만(주)';
+    }
+  }
+  var attrLine = '';
+  var am = ss.getSheetByName('💰 은우 귀속 매출');
+  if (am && am.getLastRow() > 1) attrLine = '💰 귀속매출 시트 ' + (am.getLastRow() - 1) + '행 (상세 참조)';
+  var txt = '📊 은우 월간 성과 — ' + month + '\n━━━━━━━━━━\n'
+    + '📈 수치개선(완료):\n' + (done.length ? done.join('\n') : '- (완료 개입 없음)') + '\n\n'
+    + '🔧 진행/착수:\n' + (wip.length ? wip.join('\n') : '- 없음') + '\n\n'
+    + '📊 지표변화:\n' + (convLine || '- 데이터 부족') + '\n'
+    + (attrLine ? '\n' + attrLine + '\n' : '')
+    + '\n※협상 초안 — 맥락(공구·휴무·광고) 감안해 다듬어 사용. 실무완료=COMPASS D열 참조';
+  var sh = ensureSheetWithHeaders_(ss, '📊 월간_성과요약', ['월', '요약', '생성일시']);
+  var data = sh.getDataRange().getValues();
+  for (var i = data.length - 1; i >= 1; i--) { if (String(data[i][0]) === month) sh.deleteRow(i + 1); }
+  sh.appendRow([month, txt, new Date()]);
+  return { ok: true, month: month, text: txt, done: done.length, wip: wip.length };
+}
+
+// ① 백업(비파괴, 회의 전 9시): 개입기록 완료 → ✅완료_아카이브 복사. 중복(날짜+내용)은 skip. 삭제 안 함.
+function archiveCx_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var iv = ss.getSheetByName('🛠 개입기록');
+  if (!iv || iv.getLastRow() < 2) return { ok: true, archived: 0 };
+  var arch = ensureSheetWithHeaders_(ss, '✅ 완료_아카이브', ['날짜', '영역', '개입내용', '맥락', 'Before', 'After', '측정단위', '판정', '아카이브일']);
+  var seen = {};
+  if (arch.getLastRow() > 1) arch.getDataRange().getValues().slice(1).forEach(function (r) { seen[String(r[0]) + '|' + String(r[2])] = true; });
+  var n = 0;
+  iv.getDataRange().getValues().slice(1).forEach(function (r) {
+    if (String(r[7]) !== '완료') return;
+    var k = String(r[0]) + '|' + String(r[2]); if (seen[k]) return; seen[k] = true;
+    arch.appendRow([r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], new Date()]); n++;
+  });
+  return { ok: true, archived: n };
+}
+// ② 정리(삭제, 회의 후): 백업 먼저 보장 후 개입기록 완료 삭제 + (weekLabel 주면) 지난주 미소화 후보 삭제.
+function pruneCx_(weekLabel) {
+  archiveCx_(); // 삭제 전 백업 보장
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var iv = ss.getSheetByName('🛠 개입기록');
+  if (!iv || iv.getLastRow() < 2) return { ok: true, pruned: 0 };
+  var data = iv.getDataRange().getValues(); var del = 0;
+  for (var i = data.length - 1; i >= 1; i--) {
+    var v = String(data[i][7]);
+    if (v === '완료' || (v === '후보' && weekLabel && String(data[i][0]) !== String(weekLabel))) { iv.deleteRow(i + 1); del++; }
+  }
+  return { ok: true, pruned: del };
 }
 
 // 미주 송마망 시트 전체 구조 dump + 키워드 매칭 (2026-06-01 — 솔라피/알림톡 데이터 위치 탐색용)
@@ -1889,6 +2224,115 @@ function removeUXTodo(date) {
     if (String(data[i][0]) === String(date)) { td.deleteRow(i + 1); return { ok: true }; }
   }
   return { ok: false, error: 'no todo' };
+}
+
+// ===== 은우 성과 추적 (월간 baseline + 개입기록) — 한 시트에 모음 =====
+function ensureSheetWithHeaders_(ss, name, headers) {
+  var sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+    sh.appendRow(headers);
+    sh.setFrozenRows(1);
+    sh.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#1f2a44').setFontColor('#ffffff');
+  }
+  return sh;
+}
+// payload.monthly[] = {month,revenue,orders,aov,skuShare,dailyAvg,note}
+// payload.interventions[] = {date,area,action,context,before,after,unit,verdict}
+function initEunwooTracking_(payload) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var added = { monthly: 0, interventions: 0 };
+  var b = ensureSheetWithHeaders_(ss, '📊 월간지표', ['월', '매출', '주문수', 'AOV', '핵심SKU 비중', '일평균매출', '메모']);
+  (payload.monthly || []).forEach(function (r) {
+    b.appendRow([r.month, r.revenue, r.orders, r.aov, r.skuShare, r.dailyAvg, r.note || '']); added.monthly++;
+  });
+  var t = ensureSheetWithHeaders_(ss, '🛠 개입기록', ['날짜', '영역', '개입내용', '맥락(휴무/공구/광고)', 'Before(지표)', 'After(지표)', '측정단위', '판정']);
+  (payload.interventions || []).forEach(function (r) {
+    t.appendRow([r.date, r.area, r.action, r.context || '', r.before || '', r.after || '', r.unit || '', r.verdict || '']); added.interventions++;
+  });
+  return { ok: true, added: added };
+}
+
+// 월별 결제수단 비율 (자체결제=결제창 / 네이버·카카오=외부 비회원). payload.rows[]={month,total,self,naver,kakao,etc,selfPct,extPct}
+function appendPayMethodMonthly_(payload) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ensureSheetWithHeaders_(ss, '💳 월별_결제수단', ['월', '총주문', '자체결제(결제창)', '네이버페이', '카카오페이', '기타', '자체결제비율', '외부(네이버+카카오)비율']);
+  (payload.rows || []).forEach(function (r) {
+    var data = sh.getDataRange().getValues();
+    for (var i = data.length - 1; i >= 1; i--) { if (String(data[i][0]) === String(r.month)) sh.deleteRow(i + 1); }
+    sh.appendRow([r.month, r.total, r.self, r.naver, r.kakao, r.etc, r.selfPct, r.extPct]);
+  });
+  return { ok: true, added: (payload.rows || []).length };
+}
+
+// 월별 결제수단 × 회원/비회원 교차. payload.rows[]={month,tot,self_m,self_g,naver_m,naver_g,kakao_m,kakao_g,guestPct}
+function appendPayMemberMonthly_(payload) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ensureSheetWithHeaders_(ss, '💳 결제수단×회원', ['월', '총', '자체_회원', '자체_비회원', '네이버_회원', '네이버_비회원', '카카오_회원', '카카오_비회원', '비회원비율']);
+  (payload.rows || []).forEach(function (r) {
+    var data = sh.getDataRange().getValues();
+    for (var i = data.length - 1; i >= 1; i--) { if (String(data[i][0]) === String(r.month)) sh.deleteRow(i + 1); }
+    sh.appendRow([r.month, r.tot, r.self_m, r.self_g, r.naver_m, r.naver_g, r.kakao_m, r.kakao_g, r.guestPct]);
+  });
+  return { ok: true, added: (payload.rows || []).length };
+}
+
+// ★올바른 결제구분 (order_place_name 기준: 결제창=모바일웹/PC, 외부=네이버주문형/톡체크아웃) × 회원
+// 기존 gateway 기준 잘못된 탭 2개 삭제 후 정확본 1개로 통합.
+// payload.rows[]={month,tot,store,store_m,store_g,naver,talk,storePct,extPct,guestPct}
+function recordPayBreakdown_(payload) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ensureSheetWithHeaders_(ss, '💳 월별_결제구분',
+    ['월', '총주문', '결제창:자체(카드·계좌)', '결제창:네이버페이', '결제창:카카오페이', '외부:네이버페이(주문형)', '외부:톡체크아웃', '회원', '비회원', '결제창%', '외부%']);
+  (payload.rows || []).forEach(function (r) {
+    var data = sh.getDataRange().getValues();
+    for (var i = data.length - 1; i >= 1; i--) { if (String(data[i][0]) === String(r.month)) sh.deleteRow(i + 1); }
+    sh.appendRow([r.month, r.tot, r.cc_self, r.cc_naver, r.cc_kakao, r.ext_naver, r.ext_talk, r.mem, r.guest, r.storePct, r.extPct]);
+  });
+  return { ok: true, added: (payload.rows || []).length };
+}
+
+// 월별 결제수단(payment_method 코드) 분포. ⚠️cafe24 'card'=신용+체크 통합(분리불가). payload.rows[]={month,tot,card,prepaid,transfer,cell,cardPct,prepaidPct,transferPct}
+function recordPayMethodDetail_(payload) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ensureSheetWithHeaders_(ss, '💳 월별_결제수단상세',
+    ['월', '총주문', '카드(신용+체크)', '예치금/선결제', '송금(계좌이체)', '휴대폰', '카드%', '예치금%', '송금%']);
+  (payload.rows || []).forEach(function (r) {
+    var data = sh.getDataRange().getValues();
+    for (var i = data.length - 1; i >= 1; i--) { if (String(data[i][0]) === String(r.month)) sh.deleteRow(i + 1); }
+    sh.appendRow([r.month, r.tot, r.card, r.prepaid, r.transfer, r.cell, r.cardPct, r.prepaidPct, r.transferPct]);
+  });
+  return { ok: true, added: (payload.rows || []).length };
+}
+
+// 월별 유입 채널 (GA4 sessionDefaultChannelGroup). 결제수단≠유입경로 — 유입의 진실. payload.rows[]={month,tot,paidSocial,youtube,direct,search,navershop,etc,psPct}
+function recordTrafficMonthly_(payload) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ensureSheetWithHeaders_(ss, '📥 월별_유입',
+    ['월', '총세션', '메타·인스타(광고)', '유튜브', 'Direct', '검색(구글·네이버)', '네이버쇼핑', '기타', '메타광고비중%']);
+  (payload.rows || []).forEach(function (r) {
+    var data = sh.getDataRange().getValues();
+    for (var i = data.length - 1; i >= 1; i--) { if (String(data[i][0]) === String(r.month)) sh.deleteRow(i + 1); }
+    sh.appendRow([r.month, r.tot, r.paidSocial, r.youtube, r.direct, r.search, r.navershop, r.etc, r.psPct]);
+  });
+  return { ok: true, added: (payload.rows || []).length };
+}
+
+// 주간 분석→액션을 개입기록(🛠)에 "후보"로 자동 적재 + Before 스냅샷. 중복방지(날짜+개입내용). 은우가 착수/완료로 바꿈.
+function appendCxCandidates_(payload) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var t = ensureSheetWithHeaders_(ss, '🛠 개입기록', ['날짜', '영역', '개입내용', '맥락(휴무/공구/광고)', 'Before(지표)', 'After(지표)', '측정단위', '판정']);
+  var data = t.getDataRange().getValues();
+  var seen = {};
+  for (var i = 1; i < data.length; i++) { seen[String(data[i][0]) + '|' + String(data[i][2])] = true; }
+  var added = 0;
+  (payload.rows || []).forEach(function (r) {
+    var key = String(r.date) + '|' + String(r.action);
+    if (seen[key]) return;
+    t.appendRow([r.date, r.area || 'CX주간', r.action, r.context || '', r.before || '', '', '주간', '후보']);
+    seen[key] = true; added++;
+  });
+  return { ok: true, added: added };
 }
 
 // ===== 외부 cron 핑거: GAS 시간 트리거 -> GitHub Actions 강제 실행 =====
