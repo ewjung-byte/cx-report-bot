@@ -990,12 +990,16 @@ async function getGA4Weekly() {
       channels[ch].prev.sessions = parseInt(r.metricValues[0].value);
     });
 
+    // ★fix: 'returning'만 재방문. '(not set)'(외부결제 미귀속 버킷)은 제외 — 안 그러면 재방문 CVR이 외부결제로 뻥튀기됨.
+    //   기존 버그: key 삼항이 returning·(not set) 둘 다 ret로 보내고 '='로 덮어써서 (not set)가 returning을 덮음.
     const parseUT = (rows) => {
       const res = { new:{sessions:0,conv:0}, ret:{sessions:0,conv:0} };
       (rows||[]).forEach(r => {
-        const key = r.dimensionValues[0].value === 'new' ? 'new' : 'ret';
-        res[key].sessions = parseInt(r.metricValues[0].value);
-        res[key].conv = parseInt(r.metricValues[1].value);
+        const v = r.dimensionValues[0].value;
+        const key = v === 'new' ? 'new' : v === 'returning' ? 'ret' : null;
+        if (!key) return; // (not set) 제외
+        res[key].sessions += parseInt(r.metricValues[0].value);
+        res[key].conv += parseInt(r.metricValues[1].value);
       });
       return res;
     };
@@ -1089,9 +1093,11 @@ async function getGA4Daily(dateStrYmd) {
     }));
     const userType = { new:{sessions:0,purchases:0}, ret:{sessions:0,purchases:0} };
     (utRes.rows||[]).forEach(r => {
-      const k = r.dimensionValues[0].value === 'new' ? 'new' : 'ret';
-      userType[k].sessions = parseInt(r.metricValues[0].value);
-      userType[k].purchases = parseInt(r.metricValues[1].value);
+      const v = r.dimensionValues[0].value;
+      const k = v === 'new' ? 'new' : v === 'returning' ? 'ret' : null;
+      if (!k) return; // (not set) 제외 (외부결제 미귀속)
+      userType[k].sessions += parseInt(r.metricValues[0].value);
+      userType[k].purchases += parseInt(r.metricValues[1].value);
     });
     let surlSessions = 0;
     (pageRes.rows||[]).forEach(r => {
@@ -2700,7 +2706,7 @@ async function weeklyReport() {
 
   const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, clarity, ga4, reviews, repurchase });
 
-  const chMap = { 'Paid Social':'유료SNS', 'Organic Social':'자연SNS', 'Direct':'직접유입', 'Organic Search':'검색', 'Paid Other':'기타광고' };
+  const chMap = { 'Paid Social':'유료SNS(메타·인스타)', 'Paid Search':'유료검색(구글)', 'Organic Social':'자연SNS', 'Organic Search':'자연검색', 'Organic Video':'유튜브', 'Organic Shopping':'네이버쇼핑', 'Direct':'직접유입', 'Referral':'추천유입', 'Paid Other':'기타광고', 'Unassigned':'미분류' };
   const chLines = Object.entries(ga4?.channels||{}).sort((a,b)=>b[1].cur.sessions-a[1].cur.sessions).slice(0,4).map(([ch, v]) =>
     `${chMap[ch]||ch}: ${v.cur.sessions}명${diff(v.cur.sessions, v.prev.sessions)}`
   ).join('\n');
