@@ -2922,6 +2922,7 @@ module.exports = {
   getClaudeAnalysis,
   buildWeeklySnapshot,
   saveWeeklySnapshot,
+  recordMonthlyAuto,
   backfillWeeklySnapshots,
   weekRange,
   dateStr,
