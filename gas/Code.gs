@@ -853,12 +853,16 @@ function handleEunwooDM(msg) {
   if (text === '/작업목록') { listActiveWorks(chatId); return; }
   if ((m = text.match(/^\/메모\s+([\s\S]+)/))) {
     var memoText = m[1].trim();
-    var res = appendEunwooCompassMemo_(memoText);
-    if (res.ok) sendTGMessage(chatId, '✅ 개인메모 저장 (전략 대시보드 COMPASS)\n• ' + memoText);
-    else sendTGMessage(chatId, '⚠️ 메모 저장 실패: ' + res.error);
+    var _p = PropertiesService.getScriptProperties();
+    var _cur = _p.getProperty('EUNWOO_MEMO') || '';
+    var _d = Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd');
+    _p.setProperty('EUNWOO_MEMO', (_cur ? _cur + '\n' : '') + '• ' + _d + ' ' + memoText);
+    refreshCockpit_();
+    sendTGMessage(chatId, '✅ 메모 — 콕핏(📝메모)에 추가.\n• ' + memoText);
     return;
   }
-  if (text === '/메모목록') { sendTGMessage(chatId, '📝 <b>개인메모</b> (COMPASS)\n' + readEunwooCompassMemo_()); return; }
+  if (text === '/메모목록') { sendTGMessage(chatId, '📝 <b>메모</b> (콕핏)\n' + (PropertiesService.getScriptProperties().getProperty('EUNWOO_MEMO') || '(비어있음)')); return; }
+  if (text === '/메모비우기' || text === '/메모삭제') { PropertiesService.getScriptProperties().deleteProperty('EUNWOO_MEMO'); refreshCockpit_(); sendTGMessage(chatId, '🧹 메모 전체 삭제 — 콕핏 갱신.'); return; }
   if (text === '/성과' || text === '/성과요약') {
     var sm = buildEunwooMonthlySummary_();
     sendTGMessage(chatId, sm.ok ? sm.text : '⚠️ 성과요약 실패: ' + sm.error);
@@ -1686,7 +1690,7 @@ function setEunwooCompassRemarks_(text) {
         var lines = text.split('\n'), pos = 0;
         for (var L = 0; L < lines.length; L++) {
           var ln = lines[L];
-          if (ln.length > 0 && /^(📍|🎯|📌|📋|✅|🥇|📥)/.test(ln)) b.setTextStyle(pos, pos + ln.length, headStyle);
+          if (ln.length > 0 && /^(📍|🎯|📌|📋|✅|🥇|📥|📝)/.test(ln)) b.setTextStyle(pos, pos + ln.length, headStyle);
           pos += ln.length + 1;
         }
         cell.setRichTextValue(b.build());
@@ -1725,7 +1729,10 @@ function refreshCockpit_() {
       var k = String(r[2]); if (seenD[k]) return; seenD[k] = true; doneN++; // 개입기록+아카이브 중복 제거
     });
   });
-  var oneThing = PropertiesService.getScriptProperties().getProperty('EUNWOO_ONE_THING') || '';
+  var props0 = PropertiesService.getScriptProperties();
+  var oneThing = props0.getProperty('EUNWOO_ONE_THING') || '';
+  var memoStr = props0.getProperty('EUNWOO_MEMO') || '';
+  var memoLines = memoStr ? memoStr.split('\n').filter(function (s) { return s.trim(); }) : [];
   // 표시: lim까지 보여주고 넘치면 "…외 N건" (count와 보이는 줄 불일치 방지)
   var fmt = function (arr, lim) { if (!arr.length) return '· 없음'; var s = arr.slice(0, lim).join('\n'); return arr.length > lim ? s + '\n· …외 ' + (arr.length - lim) + '건' : s; };
   var inbox = '· CX후보 ' + cand.length + ' · UX채택 ' + uxN + ' · D2C는 케이스북→/적용';
@@ -1734,6 +1741,7 @@ function refreshCockpit_() {
     + '📌 진행중 (' + wip.length + ')\n' + fmt(wip, 10) + '\n\n'
     + '📥 들어온 것 (확인→/할거·/적용)\n' + inbox + (cand.length ? '\n' + cand.slice(0, 2).join('\n') : '') + '\n\n'
     + '📋 나중에 (' + backlog.length + ')\n' + fmt(backlog, 10) + '\n\n'
+    + (memoLines.length ? '📝 메모\n' + fmt(memoLines, 8) + '\n\n' : '')
     + '✅ 이번달 완료 ' + doneN + '건';
   var res = setEunwooCompassRemarks_(txt);
   return { ok: res.ok, row: res.row, error: res.error, text: txt }; // text=콕핏 내용(텔레그램 표시용)
