@@ -426,6 +426,9 @@ function doPost(e) {
     if (action === 'get_eunwoo_memo') {
       return jsonOut({ ok: true, memo: readEunwooCompassMemo_() });
     }
+    if (action === 'get_eunwoo_row') {
+      return jsonOut(getEunwooCompassRow_());
+    }
     if (action === 'save_levers') {
       return jsonOut(saveLevers_(contents));
     }
@@ -1652,6 +1655,21 @@ function readEunwooCompassMemo_() {
     if (!cell) return '(은우 행 못 찾음)';
     return String(cell.getValue() || '(비어있음)');
   } catch (e) { return '(읽기 오류: ' + e.message + ')'; }
+}
+// 은우 COMPASS 행 전체 읽기 (B포커스·C메모·D실무·E콕핏) — 진단/정리용
+function getEunwooCompassRow_() {
+  try {
+    var sh = SpreadsheetApp.openById(STRATEGY_SHEET_ID).getSheetByName('🧭 COMPASS');
+    if (!sh) return { ok: false, error: 'COMPASS 없음' };
+    var aCol = sh.getRange('A49:A60').getValues();
+    for (var i = 0; i < aCol.length; i++) {
+      if (String(aCol[i][0]).trim() === '은우') {
+        var row = 49 + i, v = sh.getRange(row, 1, 1, 5).getValues()[0];
+        return { ok: true, row: row, focus: String(v[1] || ''), memo: String(v[2] || ''), work: String(v[3] || ''), cockpit: String(v[4] || '') };
+      }
+    }
+    return { ok: false, error: '은우 행 못 찾음' };
+  } catch (e) { return { ok: false, error: e.message }; }
 }
 // 은우 COMPASS 비고(E열)에 봇 측정 할일 갱신(replace). 매주 데이터→액션을 "월요일 첫 화면"에 일원화.
 function setEunwooCompassRemarks_(text) {
