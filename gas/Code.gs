@@ -895,7 +895,12 @@ function handleEunwooDM(msg) {
   if ((m = text.match(/^\/보류\s+([\s\S]+)/))) {
     var hr = setCxVerdictByKeyword_(m[1].trim(), '보류');
     if (hr.ok) { refreshCockpit_(); sendTGMessage(chatId, '⏸ 보류 — 📋나중에로 이동·콕핏 갱신.\n· ' + hr.content); }
-    else if (hr.multi) sendTGMessage(chatId, '⚠️ 여러 개 매칭 — 더 구체적으로:\n' + hr.matches.map(function (x) { return '· ' + x.content; }).join('\n'));
+    else if (hr.multi) {  // 보류는 되돌리기 쉬워 안전 → 매칭 전부 보류 (중복항목 한번에 정리)
+      var _iv = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID).getSheetByName('🛠 개입기록');
+      hr.matches.forEach(function (x) { _iv.getRange(x.row, 8).setValue('보류'); });
+      refreshCockpit_();
+      sendTGMessage(chatId, '⏸ ' + hr.matches.length + '건 보류 — 📋나중에로.\n' + hr.matches.map(function (x) { return '· ' + x.content; }).join('\n'));
+    }
     else sendTGMessage(chatId, '⚠️ ' + hr.error);
     return;
   }
@@ -1703,12 +1708,14 @@ function refreshCockpit_() {
     });
   });
   var oneThing = PropertiesService.getScriptProperties().getProperty('EUNWOO_ONE_THING') || '';
+  // 표시: lim까지 보여주고 넘치면 "…외 N건" (count와 보이는 줄 불일치 방지)
+  var fmt = function (arr, lim) { if (!arr.length) return '· 없음'; var s = arr.slice(0, lim).join('\n'); return arr.length > lim ? s + '\n· …외 ' + (arr.length - lim) + '건' : s; };
   var inbox = '· CX후보 ' + cand.length + ' · UX채택 ' + uxN + ' · D2C는 케이스북→/적용';
   var txt = '📍 이번주 콕핏 (' + Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd') + ')\n\n'
     + '🥇 CX 관리자 ONE THING\n' + (oneThing ? '· ' + oneThing : '· (미설정 — /원씽 [내용])') + '\n\n'
-    + '📌 진행중 (' + wip.length + ')\n' + (wip.length ? wip.slice(0, 5).join('\n') : '· 없음') + '\n\n'
+    + '📌 진행중 (' + wip.length + ')\n' + fmt(wip, 10) + '\n\n'
     + '📥 들어온 것 (확인→/적용·/개입)\n' + inbox + (cand.length ? '\n' + cand.slice(0, 2).join('\n') : '') + '\n\n'
-    + '📋 나중에 (' + backlog.length + ')\n' + (backlog.length ? backlog.slice(0, 4).join('\n') : '· 없음') + '\n\n'
+    + '📋 나중에 (' + backlog.length + ')\n' + fmt(backlog, 10) + '\n\n'
     + '✅ 이번달 완료 ' + doneN + '건';
   return setEunwooCompassRemarks_(txt);
 }
