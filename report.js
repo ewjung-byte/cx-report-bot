@@ -2790,7 +2790,7 @@ async function weeklyReport() {
     if (rp && rc < rp) weeklyActions.push(`📖 레시피 PV ↓${Math.round((1 - rc / rp) * 100)}% → 상세→레시피 동선 강화 (재구매 입구)`);
     else if (rc > rp) weeklyActions.push(`📖 레시피 PV ↑ 효과 나는 중 → 상세페이지 레시피 링크 더 노출`);
   }
-  const weeklyActionSection = weeklyActions.length ? `🎯 <b>이번주 할 것</b>\n${weeklyActions.join('\n')}\n\n` : '';
+  const weeklyActionSection = weeklyActions.length ? `📊 <b>저번주 분석 → 🎯 이번주 액션</b>\n${weeklyActions.join('\n')}\n\n` : '';
 
   const weeklyMsg = `📈 <b>이태리정미소 지난주 CX 리포트</b>
 📅 ${display}
