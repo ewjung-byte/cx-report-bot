@@ -862,6 +862,11 @@ function handleEunwooDM(msg) {
     sendTGMessage(chatId, gr.ok ? '✅ 개입 착수 — 개입기록·콕핏 갱신.\n• ' + m[1].trim() : '⚠️ 실패: ' + gr.error);
     return;
   }
+  if ((m = text.match(/^\/(백로그|나중)\s+([\s\S]+)/))) {
+    var blr = addCxStart_(m[2].trim(), 'CX', '백로그'); refreshCockpit_();
+    sendTGMessage(chatId, blr.ok ? '📋 나중에 목록 추가 — 콕핏 갱신 (급하지 않지만 할 것).\n• ' + m[2].trim() : '⚠️ 실패: ' + blr.error);
+    return;
+  }
   if (text === '/정리' || text === '/완료정리') {
     var pc = pruneCx_(''); refreshCockpit_();
     sendTGMessage(chatId, pc.ok ? '🧹 정리 완료 — 완료 ' + pc.pruned + '건 삭제(✅아카이브 백업됨)·콕핏 갱신.' : '⚠️ 정리 실패: ' + pc.error);
@@ -1617,7 +1622,7 @@ function setEunwooCompassRemarks_(text) {
         var lines = text.split('\n'), pos = 0;
         for (var L = 0; L < lines.length; L++) {
           var ln = lines[L];
-          if (ln.length > 0 && /^(📍|🎯|📌|🥇)/.test(ln)) b.setTextStyle(pos, pos + ln.length, headStyle);
+          if (ln.length > 0 && /^(📍|🎯|📌|📋|✅|🥇)/.test(ln)) b.setTextStyle(pos, pos + ln.length, headStyle);
           pos += ln.length + 1;
         }
         cell.setRichTextValue(b.build());
@@ -1634,13 +1639,14 @@ function refreshCockpit_() {
   var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
   var iv = ss.getSheetByName('🛠 개입기록');
   var month = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyyMM');
-  var cand = [], wip = [], doneN = 0;
+  var cand = [], wip = [], backlog = [], doneN = 0;
   var inM = function (dt) { if (Object.prototype.toString.call(dt) === '[object Date]') dt = Utilities.formatDate(dt, 'Asia/Seoul', 'yyyy-MM-dd'); return String(dt).replace(/[-.]/g, '').indexOf(month) >= 0; };
   if (iv && iv.getLastRow() > 1) {
     iv.getDataRange().getValues().slice(1).forEach(function (r) {
       var v = String(r[7]);
       if (v === '착수' || v === '진행중') wip.push('· ' + String(r[2]));
       else if (v === '후보') cand.push('· ' + String(r[2]));
+      else if (v === '백로그' || v === '보류') backlog.push('· ' + String(r[2]));
     });
   }
   var seenD = {};
@@ -1654,7 +1660,8 @@ function refreshCockpit_() {
   var txt = '📍 이번주 콕핏 (' + Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd') + ')\n\n'
     + '🎯 데이터 액션\n' + (cand.slice(0, 3).join('\n') || '· 없음') + '\n\n'
     + '📌 진행중\n' + (wip.length ? wip.slice(0, 6).join('\n') : '· 없음') + '\n\n'
-    + '🥇 이번달 완료 ' + doneN + '건  →  /성과 로 협상카드';
+    + '📋 나중에 (급하지 않지만 할 것)\n' + (backlog.length ? backlog.slice(0, 6).join('\n') : '· 없음') + '\n\n'
+    + '✅ 이번달 완료 ' + doneN + '건';
   return setEunwooCompassRemarks_(txt);
 }
 
@@ -1715,8 +1722,8 @@ function buildEunwooMonthlySummary_(month) {
   return { ok: true, month: month, text: txt, done: done.length, wip: wip.length };
 }
 
-// 텔레그램 한 줄로 개입기록에 착수 추가 (Before=최신 주간_요약 전환율 자동). /적용·/개입 공용.
-function addCxStart_(content, area) {
+// 텔레그램 한 줄로 개입기록에 추가 (Before=최신 주간_요약 전환율 자동). /적용·/개입·/백로그 공용. verdict 기본 착수.
+function addCxStart_(content, area, verdict) {
   var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
   var t = ensureSheetWithHeaders_(ss, '🛠 개입기록', ['날짜', '영역', '개입내용', '맥락(휴무/공구/광고)', 'Before(지표)', 'After(지표)', '측정단위', '판정']);
   var before = '';
@@ -1727,7 +1734,7 @@ function addCxStart_(content, area) {
     if (ci >= 0) { var last = ws.getRange(ws.getLastRow(), 1, 1, ws.getLastColumn()).getValues()[0]; before = '전환율 ' + last[ci] + '% (착수시점)'; }
   }
   var d = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
-  t.appendRow([d, area || 'CX', content, '', before, '', '-', '착수']);
+  t.appendRow([d, area || 'CX', content, '', before, '', '-', verdict || '착수']);
   return { ok: true };
 }
 
