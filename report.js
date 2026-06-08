@@ -2852,6 +2852,10 @@ ${analysis}` : '';
 
   // 📋 분석→액션을 개입기록(🛠)에 "후보"로 자동 적재 + Before 스냅샷 — 데이터→내 할일 루프 (은우가 착수/완료로)
   try {
+    // 🗄️ 회의(월 10시) 전 백업: 완료 성과 ✅아카이브 복사 + 📊월간 협상요약 생성 (비파괴 — 삭제는 회의 후 /정리)
+    await postToAppsScript({ action: 'archive_cx' }, APPS_SCRIPT_URL).catch(() => {});
+    const ms = await postToAppsScript({ action: 'build_monthly_summary' }, APPS_SCRIPT_URL).catch(() => null);
+    console.log('[월간 성과요약]', ms && ms.ok ? `완료${ms.done}·진행${ms.wip}` : '실패');
     const utc = ga4?.userType?.cur;
     const beforeSnap = `전환율 ${siteCvr} · 재구매 ${repurchase?.repurchaseRate?.toFixed(1) || '-'}% · 재방문CVR ${utc ? pct(utc.ret.conv, utc.ret.sessions) : '-'} · 골든 ${goldenZone?.d21_35 || '-'}명`;
     const candRows = (weeklyActions || []).map(a => ({ date: display, area: 'CX주간', action: a.replace(/<[^>]+>/g, ''), context: '', before: beforeSnap }));
