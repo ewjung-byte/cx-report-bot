@@ -2725,12 +2725,11 @@ async function weeklyReport() {
   }).join('\n');
 
   // 상품별 페이지 성과 (top 5) — ★구매수는 GA4 대신 cafe24 실판매(GA4는 외부결제 미귀속으로 0 나옴). CVR=실판매÷GA4세션.
+  // ★상품별 실판매 = cafe24 byProduct(진실). GA4 상품페이지 세션은 surl 유입으로 과소집계라 CVR 무의미 → 실판매·매출만.
   const cpById = (cafe24Products && cafe24Products.byProduct) || {};
-  const productLines = (ga4?.topProducts||[]).map(p => {
-    const nm = PRODUCT_NAME[p.id] || `상품 #${p.id}`;
-    const sold = cpById[String(p.id)]?.count || 0;
-    const cvr = p.sessions > 0 ? (sold / p.sessions * 100).toFixed(1) + '%' : '-';
-    return `${nm}: ${p.sessions}세션 · 실판매 ${sold}건 (CVR ${cvr})`;
+  const productLines = Object.values(cpById).sort((a, b) => b.amount - a.amount).slice(0, 5).map(p => {
+    const nm = PRODUCT_NAME[String(p.productNo)] || p.name || `#${p.productNo}`;
+    return `${nm}(#${p.productNo}): 실판매 ${p.count}건 · ${formatMoney(p.amount)}`;
   }).join('\n');
 
   // 결제 누수 추정액 (Clarity 스크립트에러 × 세션 × 자사몰 CVR × AOV)
@@ -2820,7 +2819,7 @@ ${userTypeLine}
 🏠 <b>랜딩 페이지 CVR</b>
 ${landingLines}
 
-🛍️ <b>상품 페이지 성과 (top 5)</b>
+🛍️ <b>상품별 실판매 (cafe24, top 5)</b>
 ${productLines || '데이터 없음'}
 
 🔽 <b>구매 퍼널 (Clarity)</b>
