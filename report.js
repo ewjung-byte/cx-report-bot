@@ -2704,6 +2704,15 @@ async function weeklyReport() {
   // 월별 결제구분·결제수단·유입 자동 적재 (현재월 MTD + 지난달 finalize)
   await recordMonthlyAuto();
 
+  // 📄 주간 페이지뷰 시트 적재 (PV=실측 사람트래픽, 비교 baseline 누적) — 매주 자동, 같은 주차 upsert
+  try {
+    const _t = await getGA4Token();
+    const _pv = await ga4Fetch(_t, { dateRanges: [{ startDate: thisStart, endDate: thisEnd }], metrics: [{ name: 'screenPageViews' }, { name: 'sessions' }, { name: 'activeUsers' }] });
+    const _mv = _pv.rows && _pv.rows[0] ? _pv.rows[0].metricValues : null;
+    await postToAppsScript({ action: 'record_weekly_pv', rows: [{ period: `${thisStart}~${thisEnd}`, start: thisStart, end: thisEnd, pv: _mv ? +_mv[0].value : 0, sessions: _mv ? +_mv[1].value : 0, users: _mv ? +_mv[2].value : 0 }] }, APPS_SCRIPT_URL).catch(() => {});
+    console.log('[주간 PV 적재]', `${thisStart}~${thisEnd}`, _mv ? _mv[0].value : 0);
+  } catch (e) { console.error('[주간 PV]', e.message); }
+
   const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, clarity, ga4, reviews, repurchase });
 
   const chMap = { 'Paid Social':'유료SNS(메타·인스타)', 'Paid Search':'유료검색(구글)', 'Organic Social':'자연SNS', 'Organic Search':'자연검색', 'Organic Video':'유튜브', 'Organic Shopping':'네이버쇼핑', 'Direct':'직접유입', 'Referral':'추천유입', 'Paid Other':'기타광고', 'Unassigned':'미분류' };

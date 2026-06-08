@@ -402,6 +402,9 @@ function doPost(e) {
     if (action === 'save_weekly') {
       return jsonOut(saveWeeklySnapshot_(contents));
     }
+    if (action === 'record_weekly_pv') {
+      return jsonOut(recordWeeklyPV_(contents));
+    }
     if (action === 'format_weekly') {
       return jsonOut(formatWeeklyTabs_());
     }
@@ -854,17 +857,17 @@ function handleEunwooDM(msg) {
   }
   if ((m = text.match(/^\/적용\s+([\s\S]+)/))) {
     var ar = addCxStart_(m[1].trim(), 'D2C마케팅(적용)'); refreshCockpit_();
-    sendTGMessage(chatId, ar.ok ? '✅ 적용 착수 — 개입기록·콕핏 갱신 (완료 시 After 측정).\n• ' + m[1].trim() : '⚠️ 실패: ' + ar.error);
+    sendTGMessage(chatId, ar.ok ? '✅ [' + cxSourceTag_(ar.area) + '] 적용 착수 — 개입기록·콕핏 갱신.\n• ' + ar.content : '⚠️ 실패: ' + ar.error);
     return;
   }
-  if ((m = text.match(/^\/개입\s+([\s\S]+)/))) {
-    var gr = addCxStart_(m[1].trim(), 'CX'); refreshCockpit_();
-    sendTGMessage(chatId, gr.ok ? '✅ 개입 착수 — 개입기록·콕핏 갱신.\n• ' + m[1].trim() : '⚠️ 실패: ' + gr.error);
+  if ((m = text.match(/^\/(할거|개입)\s+([\s\S]+)/))) {  // /개입은 구버전 alias
+    var gr = addCxStart_(m[2].trim(), 'CX'); refreshCockpit_();
+    sendTGMessage(chatId, gr.ok ? '✅ [' + cxSourceTag_(gr.area) + '] 등록 — 개입기록·콕핏 갱신.\n• ' + gr.content : '⚠️ 실패: ' + gr.error);
     return;
   }
-  if ((m = text.match(/^\/(백로그|나중)\s+([\s\S]+)/))) {
+  if ((m = text.match(/^\/(백로그|나중에?)\s+([\s\S]+)/))) {
     var blr = addCxStart_(m[2].trim(), 'CX', '백로그'); refreshCockpit_();
-    sendTGMessage(chatId, blr.ok ? '📋 나중에 목록 추가 — 콕핏 갱신 (급하지 않지만 할 것).\n• ' + m[2].trim() : '⚠️ 실패: ' + blr.error);
+    sendTGMessage(chatId, blr.ok ? '📋 [' + cxSourceTag_(blr.area) + '] 나중에 추가 — 콕핏 갱신.\n• ' + blr.content : '⚠️ 실패: ' + blr.error);
     return;
   }
   if (text === '/정리' || text === '/완료정리') {
@@ -875,6 +878,25 @@ function handleEunwooDM(msg) {
   if (text === '/콕핏' || text === '/현황') {
     var rc = refreshCockpit_();
     sendTGMessage(chatId, rc.ok ? '📍 콕핏(COMPASS 비고) 갱신 완료 — 전략대시보드 은우 행 확인' : '⚠️ 실패: ' + rc.error);
+    return;
+  }
+  if ((m = text.match(/^\/원씽\s+([\s\S]+)/))) {
+    PropertiesService.getScriptProperties().setProperty('EUNWOO_ONE_THING', m[1].trim()); refreshCockpit_();
+    sendTGMessage(chatId, '🥇 ONE THING 설정 — 콕핏 맨 위에 고정.\n· ' + m[1].trim());
+    return;
+  }
+  if ((m = text.match(/^\/끝\s+([\s\S]+)/))) {
+    var er = setCxVerdictByKeyword_(m[1].trim(), '완료');
+    if (er.ok) { refreshCockpit_(); sendTGMessage(chatId, '✅ 완료 처리 — 콕핏 갱신.\n· ' + er.content + '\n(수치 바뀐 거 있으면 개입기록 After 칸에 숫자 적어두면 협상카드에 들어감)'); }
+    else if (er.multi) sendTGMessage(chatId, '⚠️ 여러 개 매칭 — 더 구체적으로:\n' + er.matches.map(function (x) { return '· ' + x.content; }).join('\n'));
+    else sendTGMessage(chatId, '⚠️ ' + er.error);
+    return;
+  }
+  if ((m = text.match(/^\/보류\s+([\s\S]+)/))) {
+    var hr = setCxVerdictByKeyword_(m[1].trim(), '보류');
+    if (hr.ok) { refreshCockpit_(); sendTGMessage(chatId, '⏸ 보류 — 📋나중에로 이동·콕핏 갱신.\n· ' + hr.content); }
+    else if (hr.multi) sendTGMessage(chatId, '⚠️ 여러 개 매칭 — 더 구체적으로:\n' + hr.matches.map(function (x) { return '· ' + x.content; }).join('\n'));
+    else sendTGMessage(chatId, '⚠️ ' + hr.error);
     return;
   }
   if (text === '/UX 발송' || text === '/UX발송') { handleUXSend(chatId); return; }
@@ -902,7 +924,7 @@ function handleEunwooDM(msg) {
     return;
   }
   if (text === '/도움' || text === '/help') {
-    sendTGMessage(chatId, '<b>은우봇 명령어</b>\n<b>· 개인</b>\n/작업 [내용] — 새 작업 등록\n/작업목록 — 진행 중 작업 보기\n/메모 [내용] — 메모 추가\n/메모목록 — 메모 보기\n\n<b>· UX 사례 (월·목)</b>\n/UX 발송 · /UX 보류 · /UX 수정 [요청]\n\n<b>· 미주 송마망 시트 조회 (read-only)</b>\n/내것 (또는 /조회 내것) — 은우 언급 통합 (액션·결정·공유·리마인드·멘션)\n/조회 액션 [담당자=은우] — 미완료 액션\n/완료 [번호] — 직전 /조회 액션의 N번 시트에 완료 마킹 (예: /완료 1 3)\n/조회 결정 — 최근 결정사항\n/조회 공유 — 최근 공유링크\n/조회 리마인드 — 오늘 도래\n/조회 멘션 — 단톡방에서 은우 멘션');
+    sendTGMessage(chatId, '<b>은우봇 명령어</b>\n<b>· 콕핏 (내 액션 1곳)</b>\n/원씽 [내용] — 이번주 ONE THING\n/할거 [내용] — 자사몰·CX 시작\n/적용 [내용] — D2C·마케팅 시작\n/백로그 [내용] — 나중에 추가\n/끝 [키워드] — 완료 / /보류 [키워드] — 나중에로\n/콕핏 — 현황 / /성과 — 협상카드 / /정리 — 완료 비우기\n💡 출처 직접: /할거 @대표 레시피수정 → [대표] 태그\n\n<b>· 개인</b>\n/작업 [내용] · /작업목록 · /메모 [내용] · /메모목록\n\n<b>· UX 사례 (월·목)</b>\n/UX 발송 · /UX 보류 · /UX 수정 [요청]\n\n<b>· 미주 송마망 시트 조회 (read-only)</b>\n/내것 (또는 /조회 내것) — 은우 언급 통합 (액션·결정·공유·리마인드·멘션)\n/조회 액션 [담당자=은우] — 미완료 액션\n/완료 [번호] — 직전 /조회 액션의 N번 시트에 완료 마킹 (예: /완료 1 3)\n/조회 결정 — 최근 결정사항\n/조회 공유 — 최근 공유링크\n/조회 리마인드 — 오늘 도래\n/조회 멘션 — 단톡방에서 은우 멘션');
     return;
   }
 }
@@ -1362,6 +1384,23 @@ function getWeeklyTab_(key) {
   return { sh: sh, headers: cfg.headers };
 }
 
+// 주간 페이지뷰 기록 (개인성과시트 📄 주간_페이지뷰 탭). 기간(시작~종료)로 upsert.
+// payload.rows[] = {period, start, end, pv, sessions, users}. PV=실측 사람트래픽, 세션/방문자는 MP외부결제 푸시로 부풀려짐.
+function recordWeeklyPV_(payload) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ensureSheetWithHeaders_(ss, '📄 주간_페이지뷰', ['기간', '시작', '종료', 'PV(실측)', '세션(MP부풀림)', '방문자', '전주대비PV%', '기록일']);
+  var rows = (payload.rows || []).slice().sort(function (a, b) { return String(a.start) < String(b.start) ? -1 : 1; });
+  var prevPv = null, n = 0;
+  rows.forEach(function (r) {
+    var wow = (prevPv && prevPv > 0) ? Math.round((r.pv - prevPv) / prevPv * 100) : '';
+    var data = sh.getDataRange().getValues();
+    for (var i = data.length - 1; i >= 1; i--) { if (String(data[i][0]) === String(r.period)) sh.deleteRow(i + 1); }
+    sh.appendRow([r.period, r.start, r.end, r.pv, r.sessions, r.users, wow, new Date()]); n++;
+    prevPv = r.pv;
+  });
+  return { ok: true, added: n };
+}
+
 function saveWeeklySnapshot_(contents) {
   var week = String(contents.week || '');
   if (!week) return { ok: false, error: 'no week' };
@@ -1622,7 +1661,7 @@ function setEunwooCompassRemarks_(text) {
         var lines = text.split('\n'), pos = 0;
         for (var L = 0; L < lines.length; L++) {
           var ln = lines[L];
-          if (ln.length > 0 && /^(📍|🎯|📌|📋|✅|🥇)/.test(ln)) b.setTextStyle(pos, pos + ln.length, headStyle);
+          if (ln.length > 0 && /^(📍|🎯|📌|📋|✅|🥇|📥)/.test(ln)) b.setTextStyle(pos, pos + ln.length, headStyle);
           pos += ln.length + 1;
         }
         cell.setRichTextValue(b.build());
@@ -1634,7 +1673,7 @@ function setEunwooCompassRemarks_(text) {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
-// 📍 콕핏 = COMPASS E55 = 개입기록의 라이브 뷰 (이번주 액션 + 진행중 + 이번달 완료). 명령/주간마다 갱신 → "보는 1곳".
+// 📍 콕핏 = COMPASS E55 = 개입기록 라이브 뷰. 🥇ONE THING(이번주 1개)+📌진행중+📥들어온것(CX후보·UX채택 카운트, D2C는 /적용)+📋나중에+✅완료수. 명령/주간마다 갱신 → "보는 1곳".
 function refreshCockpit_() {
   var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
   var iv = ss.getSheetByName('🛠 개입기록');
@@ -1644,11 +1683,15 @@ function refreshCockpit_() {
   if (iv && iv.getLastRow() > 1) {
     iv.getDataRange().getValues().slice(1).forEach(function (r) {
       var v = String(r[7]);
-      if (v === '착수' || v === '진행중') wip.push('· ' + String(r[2]));
-      else if (v === '후보') cand.push('· ' + String(r[2]));
-      else if (v === '백로그' || v === '보류') backlog.push('· ' + String(r[2]));
+      if (v === '착수' || v === '진행중') wip.push('· [' + cxSourceTag_(r[1]) + '] ' + String(r[2]));
+      else if (v === '후보') cand.push('· [' + cxSourceTag_(r[1]) + '] ' + String(r[2]));
+      else if (v === '백로그' || v === '보류') backlog.push('· [' + cxSourceTag_(r[1]) + '] ' + String(r[2]));
     });
   }
+  // UX 케이스북 채택(UX_할일 '할일'=아직 손 안 댄 것) 개수 — 같은 시트라 직접 카운트
+  var uxN = 0;
+  var ut = ss.getSheetByName('UX_할일');
+  if (ut && ut.getLastRow() > 1) ut.getDataRange().getValues().slice(1).forEach(function (r) { if (String(r[4]) === '할일') uxN++; });
   var seenD = {};
   [iv, ss.getSheetByName('✅ 완료_아카이브')].forEach(function (sh) {
     if (!sh || sh.getLastRow() < 2) return;
@@ -1657,10 +1700,13 @@ function refreshCockpit_() {
       var k = String(r[2]); if (seenD[k]) return; seenD[k] = true; doneN++; // 개입기록+아카이브 중복 제거
     });
   });
+  var oneThing = PropertiesService.getScriptProperties().getProperty('EUNWOO_ONE_THING') || '';
+  var inbox = '· CX후보 ' + cand.length + ' · UX채택 ' + uxN + ' · D2C는 케이스북→/적용';
   var txt = '📍 이번주 콕핏 (' + Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd') + ')\n\n'
-    + '🎯 데이터 액션\n' + (cand.slice(0, 3).join('\n') || '· 없음') + '\n\n'
-    + '📌 진행중\n' + (wip.length ? wip.slice(0, 6).join('\n') : '· 없음') + '\n\n'
-    + '📋 나중에 (급하지 않지만 할 것)\n' + (backlog.length ? backlog.slice(0, 6).join('\n') : '· 없음') + '\n\n'
+    + '🥇 ONE THING\n' + (oneThing ? '· ' + oneThing : '· (미설정 — /원씽 [내용])') + '\n\n'
+    + '📌 진행중 (' + wip.length + ')\n' + (wip.length ? wip.slice(0, 5).join('\n') : '· 없음') + '\n\n'
+    + '📥 들어온 것 (확인→/적용·/개입)\n' + inbox + (cand.length ? '\n' + cand.slice(0, 2).join('\n') : '') + '\n\n'
+    + '📋 나중에 (' + backlog.length + ')\n' + (backlog.length ? backlog.slice(0, 4).join('\n') : '· 없음') + '\n\n'
     + '✅ 이번달 완료 ' + doneN + '건';
   return setEunwooCompassRemarks_(txt);
 }
@@ -1726,6 +1772,10 @@ function buildEunwooMonthlySummary_(month) {
 function addCxStart_(content, area, verdict) {
   var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
   var t = ensureSheetWithHeaders_(ss, '🛠 개입기록', ['날짜', '영역', '개입내용', '맥락(휴무/공구/광고)', 'Before(지표)', 'After(지표)', '측정단위', '판정']);
+  // @출처 인라인 지정: "@대표 레시피 수정" → 출처(영역)=대표, 내용=레시피 수정. 있으면 기본 영역 덮어씀.
+  var sm = String(content).match(/^@(\S+)\s+([\s\S]+)/);
+  var finalArea = sm ? sm[1] : (area || 'CX');
+  var finalContent = sm ? sm[2].trim() : String(content).trim();
   var before = '';
   var ws = ss.getSheetByName('주간_요약');
   if (ws && ws.getLastRow() > 1) {
@@ -1734,8 +1784,37 @@ function addCxStart_(content, area, verdict) {
     if (ci >= 0) { var last = ws.getRange(ws.getLastRow(), 1, 1, ws.getLastColumn()).getValues()[0]; before = '전환율 ' + last[ci] + '% (착수시점)'; }
   }
   var d = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
-  t.appendRow([d, area || 'CX', content, '', before, '', '-', verdict || '착수']);
-  return { ok: true };
+  t.appendRow([d, finalArea, finalContent, '', before, '', '-', verdict || '착수']);
+  return { ok: true, content: finalContent, area: finalArea };
+}
+
+// 영역 → 콕핏 출처 태그 (은우가 진행중 항목 출처 한눈에 — D2C=미주봇 케이스북·UX=UX사례 채택·CX=직접개입).
+function cxSourceTag_(area) {
+  var a = String(area);
+  if (a.indexOf('D2C') >= 0) return 'D2C';      // /적용 = D2C 케이스북(미주봇) 인풋
+  if (a.indexOf('UX') >= 0) return 'UX';        // UX 사례 채택
+  if (a.indexOf('CX주간') >= 0) return 'CX주간'; // 주간 리포트 자동 후보
+  if (a.indexOf('CX') >= 0) return 'CX';        // /할거 = 자사몰·CX 직접
+  return a || '직접';
+}
+
+// 개입기록 항목 판정 변경 (키워드 부분매칭). /끝(완료)·/보류 공용. 완료된 건 제외하고 검색.
+// 1개 매칭 → 변경, 여러 개 → multi:true로 후보 반환(사용자가 더 구체적으로), 0개 → error.
+function setCxVerdictByKeyword_(keyword, verdict) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var iv = ss.getSheetByName('🛠 개입기록');
+  if (!iv || iv.getLastRow() < 2) return { ok: false, error: '개입기록이 비어있음' };
+  var data = iv.getDataRange().getValues();
+  var kw = String(keyword).toLowerCase().trim();
+  var matches = [];
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][7]) === '완료') continue; // 이미 완료는 스킵
+    if (String(data[i][2]).toLowerCase().indexOf(kw) >= 0) matches.push({ row: i + 1, content: String(data[i][2]) });
+  }
+  if (matches.length === 0) return { ok: false, error: '"' + keyword + '" 매칭 없음 — /콕핏 으로 항목 확인' };
+  if (matches.length > 1) return { ok: false, multi: true, matches: matches };
+  iv.getRange(matches[0].row, 8).setValue(verdict);
+  return { ok: true, content: matches[0].content };
 }
 
 // ① 백업(비파괴, 회의 전 9시): 개입기록 완료 → ✅완료_아카이브 복사. 중복(날짜+내용)은 skip. 삭제 안 함.
