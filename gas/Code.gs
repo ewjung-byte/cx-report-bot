@@ -883,7 +883,7 @@ function handleEunwooDM(msg) {
   }
   if (text === '/콕핏' || text === '/현황') {
     var rc = refreshCockpit_();
-    sendTGMessage(chatId, rc.ok ? '📍 콕핏(COMPASS 비고) 갱신 완료 — 전략대시보드 은우 행 확인' : '⚠️ 실패: ' + rc.error);
+    sendTGMessage(chatId, rc.ok ? rc.text : '⚠️ 실패: ' + rc.error);  // 콕핏 내용 직접 표시 + 시트도 갱신됨
     return;
   }
   if ((m = text.match(/^\/원씽\s+([\s\S]+)/))) {
@@ -1717,7 +1717,8 @@ function refreshCockpit_() {
     + '📥 들어온 것 (확인→/할거·/적용)\n' + inbox + (cand.length ? '\n' + cand.slice(0, 2).join('\n') : '') + '\n\n'
     + '📋 나중에 (' + backlog.length + ')\n' + fmt(backlog, 10) + '\n\n'
     + '✅ 이번달 완료 ' + doneN + '건';
-  return setEunwooCompassRemarks_(txt);
+  var res = setEunwooCompassRemarks_(txt);
+  return { ok: res.ok, row: res.row, error: res.error, text: txt }; // text=콕핏 내용(텔레그램 표시용)
 }
 
 // 🥇 은우 월간 성과 요약 자동초안 (연봉협상 카드). 개입기록(완료 Before/After)+주간_요약(전환율·매출 변화)+귀속매출 → 📊 월간_성과요약 탭 upsert.
