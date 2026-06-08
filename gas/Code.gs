@@ -885,13 +885,7 @@ function handleEunwooDM(msg) {
     sendTGMessage(chatId, '🥇 ONE THING 설정 — 콕핏 맨 위에 고정.\n· ' + m[1].trim());
     return;
   }
-  if ((m = text.match(/^\/끝\s+([\s\S]+)/))) {
-    var er = setCxVerdictByKeyword_(m[1].trim(), '완료');
-    if (er.ok) { refreshCockpit_(); sendTGMessage(chatId, '✅ 완료 처리 — 콕핏 갱신.\n· ' + er.content + '\n(수치 바뀐 거 있으면 개입기록 After 칸에 숫자 적어두면 협상카드에 들어감)'); }
-    else if (er.multi) sendTGMessage(chatId, '⚠️ 여러 개 매칭 — 더 구체적으로:\n' + er.matches.map(function (x) { return '· ' + x.content; }).join('\n'));
-    else sendTGMessage(chatId, '⚠️ ' + er.error);
-    return;
-  }
+  if ((m = text.match(/^\/끝\s+([\s\S]+)/))) { handleCxDone_(chatId, m[1].trim()); return; }
   if ((m = text.match(/^\/보류\s+([\s\S]+)/))) {
     var hr = setCxVerdictByKeyword_(m[1].trim(), '보류');
     if (hr.ok) { refreshCockpit_(); sendTGMessage(chatId, '⏸ 보류 — 📋나중에로 이동·콕핏 갱신.\n· ' + hr.content); }
@@ -919,8 +913,10 @@ function handleEunwooDM(msg) {
   if (text === '/미주') { handleMisuPerson(chatId, '미주', 5); return; }
   if (text === '/경태') { handleMisuPerson(chatId, '경태', 5); return; }
   if ((m = text.match(/^\/완료\s+(.+)$/))) {
-    var nums = (m[1].match(/\d+/g) || []);  // 숫자만 추출 — "1번 2번"·"1,2"·"1 2" 다 OK
-    handleMisuComplete(chatId, nums);
+    var arg = m[1].trim();
+    // 숫자만 = 미주 시트 액션 번호 / 텍스트 = 개입기록 완료(=/끝). 직관적으로 둘 다 받음.
+    if (/^[\d\s,번]+$/.test(arg)) handleMisuComplete(chatId, (arg.match(/\d+/g) || []));
+    else handleCxDone_(chatId, arg);
     return;
   }
   if (text === '/도움' || text === '/help') {
@@ -1800,7 +1796,7 @@ function cxSourceTag_(area) {
 
 // 개입기록 항목 판정 변경 (키워드 부분매칭). /끝(완료)·/보류 공용. 완료된 건 제외하고 검색.
 // 1개 매칭 → 변경, 여러 개 → multi:true로 후보 반환(사용자가 더 구체적으로), 0개 → error.
-function setCxVerdictByKeyword_(keyword, verdict) {
+function setCxVerdictByKeyword_(keyword, verdict, after) {
   var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
   var iv = ss.getSheetByName('🛠 개입기록');
   if (!iv || iv.getLastRow() < 2) return { ok: false, error: '개입기록이 비어있음' };
@@ -1814,7 +1810,24 @@ function setCxVerdictByKeyword_(keyword, verdict) {
   if (matches.length === 0) return { ok: false, error: '"' + keyword + '" 매칭 없음 — /콕핏 으로 항목 확인' };
   if (matches.length > 1) return { ok: false, multi: true, matches: matches };
   iv.getRange(matches[0].row, 8).setValue(verdict);
+  if (after) iv.getRange(matches[0].row, 6).setValue(after); // After(지표) 칼럼 — 협상카드 Before/After
   return { ok: true, content: matches[0].content };
+}
+
+// /끝·/완료(텍스트) 공용 완료 처리. "앵커 = 3.2%" → 키워드=앵커, After=3.2%. ONE THING이면 자동 클리어.
+function handleCxDone_(chatId, arg) {
+  var after = '', kw = String(arg).trim();
+  var mm = kw.match(/^([\s\S]+?)\s*=\s*(.+)$/);
+  if (mm) { kw = mm[1].trim(); after = mm[2].trim(); }
+  var er = setCxVerdictByKeyword_(kw, '완료', after);
+  if (er.ok) {
+    var props = PropertiesService.getScriptProperties();
+    var ot = props.getProperty('EUNWOO_ONE_THING') || '';
+    if (ot && (ot.indexOf(kw) >= 0 || (er.content && (er.content.indexOf(ot) >= 0 || ot.indexOf(er.content) >= 0)))) props.deleteProperty('EUNWOO_ONE_THING'); // 완료한 게 ONE THING이면 비움
+    refreshCockpit_();
+    sendTGMessage(chatId, '✅ 완료 — 콕핏 갱신.\n· ' + er.content + (after ? '\n· After: ' + after + ' (협상카드 반영)' : '\n💡 수치 있으면 「/끝 ' + kw + ' = 3.2%」처럼 = 뒤에 적으면 협상카드에 자동'));
+  } else if (er.multi) sendTGMessage(chatId, '⚠️ 여러 개 매칭 — 더 구체적으로:\n' + er.matches.map(function (x) { return '· ' + x.content; }).join('\n'));
+  else sendTGMessage(chatId, '⚠️ ' + er.error);
 }
 
 // ① 백업(비파괴, 회의 전 9시): 개입기록 완료 → ✅완료_아카이브 복사. 중복(날짜+내용)은 skip. 삭제 안 함.
