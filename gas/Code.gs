@@ -831,6 +831,12 @@ function handleTelegramUpdate(update) {
 // ===== 은우 개인 DM 처리 =====
 function handleEunwooDM(msg) {
   var text = msg.text.trim();
+  // 붙여넣기 다중 명령: 2줄 이상 + 모든 줄이 '/'로 시작 → 한 줄씩 처리. (단일 멀티라인 명령은 안 쪼갬)
+  var _lines = text.split('\n').map(function (s) { return s.trim(); }).filter(function (s) { return s; });
+  if (_lines.length > 1 && _lines.every(function (s) { return s.charAt(0) === '/'; })) {
+    for (var _k = 0; _k < _lines.length; _k++) handleEunwooDM({ text: _lines[_k], chat: msg.chat, date: msg.date });
+    return;
+  }
   var chatId = msg.chat.id;
   var msgTime = new Date(msg.date * 1000);
   var date = Utilities.formatDate(msgTime, 'Asia/Seoul', 'yyyy-MM-dd');
