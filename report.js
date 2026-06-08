@@ -2406,13 +2406,13 @@ ${productSalesOnly}${promoScheduleSection}${actionSection}${analysisSection}`;
   if (warnings.length) console.error('⚠️ 데이터 점검 경고:\n- ' + warnings.join('\n- '));
   const healthSectionDM = warnings.length ? `\n\n🔧 <b>데이터 점검</b>\n${warnings.map(x => `⚠️ ${x}`).join('\n')}` : '';
 
-  // 개인 DM: 할일 + 메모 + CX 분석 + (이상 시) 데이터 점검
-  const personalMsg = `☀️ <b>오늘 할일</b>${tasksSection}${memoSection}${cxManagerSection}${healthSectionDM}`;
+  // 개인 DM: CX 관리자 분석 + 데이터 점검만 (오늘 할일=시트 B/D 미러라 중복 → 제거 2026-06-08). 개인메모(/메모 리마인더)는 유지.
+  const personalMsg = `☀️ <b>CX 데일리</b> (${today})${cxManagerSection}${healthSectionDM}${memoSection}`;
 
   const groupResult = await sendTelegramGroup(msg);
   if (groupResult.ok) {
     // 🤖 CX 판단은 이제 msg 본문(analysisSection)에 통합 — 별도 발송 안 함 (묻힘 방지)
-    if (tasksSection || memoSection || cxManagerSection || healthSectionDM) await sendTelegram(personalMsg);
+    if (cxManagerSection || healthSectionDM || memoSection) await sendTelegram(personalMsg);
     console.log('일간 발송 완료 ✅');
   } else {
     console.error('발송 실패 ❌:', JSON.stringify(groupResult));
