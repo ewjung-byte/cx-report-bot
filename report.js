@@ -2841,7 +2841,7 @@ ${leakageLine}
 ⭐ <b>고객 리뷰</b>
 ${reviews ? `${reviews.count}건 | 평균 ${reviews.avg}점 | 5점 ${reviews.dist[5]}건 / 4점 ${reviews.dist[4]}건 / 3점이하 ${reviews.dist.low}건` : '데이터 없음'}`;
 
-  const claudeMsg = analysis ? `🤖 <b>이번 주 분석</b>
+  const claudeMsg = analysis ? `🤖 <b>저번주 분석 → 이번주 액션</b>
 ━━━━━━━━━━━━━━━━━
 ${analysis}` : '';
 
@@ -2850,10 +2850,11 @@ ${analysis}` : '';
   if (claudeMsg) { console.log('\n--- Claude 분석 ---'); console.log(claudeMsg.replace(/<[^>]+>/g, '')); }
   console.log('=====================================\n');
 
-  const r1 = await sendTelegram(weeklyMsg);
-  if (claudeMsg) await sendTelegram(claudeMsg);
-  if (r1.ok) {
-    console.log('주간 발송 완료 ✅');
+  // 매주 월요일 송마망 단톡방으로 — 저번주 CX 리포트 + 분석→액션 2개 다 (2026-06-08 DM→단톡방 변경)
+  const r1 = await sendTelegramChunked(weeklyMsg, true);
+  if (claudeMsg) await sendTelegramChunked(claudeMsg, true);
+  if (r1 && r1.ok) {
+    console.log('주간 발송 완료 ✅ (단톡방)');
   } else {
     console.error('발송 실패 ❌:', JSON.stringify(r1));
   }
