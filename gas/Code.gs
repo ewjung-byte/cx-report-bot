@@ -849,6 +849,16 @@ function handleEunwooDM(msg) {
     sendTGMessage(chatId, sm.ok ? sm.text : '⚠️ 성과요약 실패: ' + sm.error);
     return;
   }
+  if ((m = text.match(/^\/적용\s+([\s\S]+)/))) {
+    var ar = addCxStart_(m[1].trim(), 'D2C마케팅(적용)');
+    sendTGMessage(chatId, ar.ok ? '✅ 적용 착수 기록 — 개입기록에 박힘 (완료 시 After 측정). \n• ' + m[1].trim() : '⚠️ 실패: ' + ar.error);
+    return;
+  }
+  if ((m = text.match(/^\/개입\s+([\s\S]+)/))) {
+    var gr = addCxStart_(m[1].trim(), 'CX');
+    sendTGMessage(chatId, gr.ok ? '✅ 개입 착수 기록 — 개입기록에 박힘.\n• ' + m[1].trim() : '⚠️ 실패: ' + gr.error);
+    return;
+  }
   if (text === '/정리' || text === '/완료정리') {
     var pc = pruneCx_('');
     sendTGMessage(chatId, pc.ok ? '🧹 정리 완료 — 완료항목 ' + pc.pruned + '건 삭제(✅완료_아카이브에 백업됨). 새 주차로 채우세요.' : '⚠️ 정리 실패: ' + pc.error);
@@ -1652,6 +1662,22 @@ function buildEunwooMonthlySummary_(month) {
   for (var i = data.length - 1; i >= 1; i--) { if (String(data[i][0]) === month) sh.deleteRow(i + 1); }
   sh.appendRow([month, txt, new Date()]);
   return { ok: true, month: month, text: txt, done: done.length, wip: wip.length };
+}
+
+// 텔레그램 한 줄로 개입기록에 착수 추가 (Before=최신 주간_요약 전환율 자동). /적용·/개입 공용.
+function addCxStart_(content, area) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var t = ensureSheetWithHeaders_(ss, '🛠 개입기록', ['날짜', '영역', '개입내용', '맥락(휴무/공구/광고)', 'Before(지표)', 'After(지표)', '측정단위', '판정']);
+  var before = '';
+  var ws = ss.getSheetByName('주간_요약');
+  if (ws && ws.getLastRow() > 1) {
+    var hdr = ws.getRange(1, 1, 1, ws.getLastColumn()).getValues()[0];
+    var ci = hdr.indexOf('전환율');
+    if (ci >= 0) { var last = ws.getRange(ws.getLastRow(), 1, 1, ws.getLastColumn()).getValues()[0]; before = '전환율 ' + last[ci] + '% (착수시점)'; }
+  }
+  var d = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
+  t.appendRow([d, area || 'CX', content, '', before, '', '-', '착수']);
+  return { ok: true };
 }
 
 // ① 백업(비파괴, 회의 전 9시): 개입기록 완료 → ✅완료_아카이브 복사. 중복(날짜+내용)은 skip. 삭제 안 함.
