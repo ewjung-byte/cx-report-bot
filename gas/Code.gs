@@ -1609,7 +1609,21 @@ function setEunwooCompassRemarks_(text) {
     if (!sh) return { ok: false, error: 'COMPASS 없음' };
     var aCol = sh.getRange('A49:A60').getValues();
     for (var i = 0; i < aCol.length; i++) {
-      if (String(aCol[i][0]).trim() === '은우') { sh.getRange(49 + i, 5).setValue(text); return { ok: true, row: 49 + i }; } // E열=비고
+      if (String(aCol[i][0]).trim() === '은우') {
+        var cell = sh.getRange(49 + i, 5); // E열=비고
+        // 가독성: 섹션 헤더(📍🎯📌🥇) 줄 굵게 RichText + 줄바꿈 + 상단정렬
+        var b = SpreadsheetApp.newRichTextValue().setText(text);
+        var bold = SpreadsheetApp.newTextStyle().setBold(true).build();
+        var lines = text.split('\n'), pos = 0;
+        for (var L = 0; L < lines.length; L++) {
+          var ln = lines[L];
+          if (ln.length > 0 && /^(📍|🎯|📌|🥇)/.test(ln)) b.setTextStyle(pos, pos + ln.length, bold);
+          pos += ln.length + 1;
+        }
+        cell.setRichTextValue(b.build());
+        cell.setWrap(true).setVerticalAlignment('top');
+        return { ok: true, row: 49 + i };
+      }
     }
     return { ok: false, error: '은우 행 못 찾음 (COMPASS A49:A60)' };
   } catch (e) { return { ok: false, error: e.message }; }
@@ -1637,10 +1651,10 @@ function refreshCockpit_() {
       var k = String(r[2]); if (seenD[k]) return; seenD[k] = true; doneN++; // 개입기록+아카이브 중복 제거
     });
   });
-  var txt = '📍 이번주 콕핏 (' + Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd') + ')\n'
-    + '🎯 데이터 액션:\n' + (cand.slice(0, 3).join('\n') || '· 없음') + '\n'
-    + '📌 진행중:\n' + (wip.length ? wip.slice(0, 6).join('\n') : '· 없음') + '\n'
-    + '🥇 이번달 완료 ' + doneN + '건 → /성과 로 협상카드';
+  var txt = '📍 이번주 콕핏 (' + Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd') + ')\n\n'
+    + '🎯 데이터 액션\n' + (cand.slice(0, 3).join('\n') || '· 없음') + '\n\n'
+    + '📌 진행중\n' + (wip.length ? wip.slice(0, 6).join('\n') : '· 없음') + '\n\n'
+    + '🥇 이번달 완료 ' + doneN + '건  →  /성과 로 협상카드';
   return setEunwooCompassRemarks_(txt);
 }
 
