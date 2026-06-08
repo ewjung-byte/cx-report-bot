@@ -2618,6 +2618,48 @@ async function getUtmChannelEffect() {
   } catch (e) { console.error('[UTM 채널 효과]', e.message); return null; }
 }
 
+// ── 월별 결제구분·결제수단·유입 자동 적재 (weeklyReport서 매주 호출, 현재월+지난달 upsert) ──
+async function recordMonthlyAuto() {
+  const mr = (y, m) => {
+    const today = new Date();
+    const isCur = (y === today.getFullYear() && m === today.getMonth());
+    const endD = isCur ? today.getDate() : new Date(y, m + 1, 0).getDate();
+    const mm = String(m + 1).padStart(2, '0');
+    return { start: `${y}-${mm}-01`, end: `${y}-${mm}-${String(endD).padStart(2, '0')}`, label: `${y}-${mm}` };
+  };
+  const now = new Date();
+  const cur = mr(now.getFullYear(), now.getMonth());
+  const pd = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prev = mr(pd.getFullYear(), pd.getMonth());
+  for (const m of [prev, cur]) {
+    try {
+      const v = (await fetchCafe24OrdersRange(m.start, m.end)).filter(o => o.canceled === 'F');
+      const c = { cc_self: 0, cc_naver: 0, cc_kakao: 0, ext_naver: 0, ext_talk: 0, mem: 0, guest: 0, card: 0, prepaid: 0, transfer: 0, cell: 0 };
+      v.forEach(o => {
+        const p = String(o.order_place_name || ''); const g = (o.payment_gateway_names || []).join('').toLowerCase();
+        if (String(o.member_id || '').trim() !== '') c.mem++; else c.guest++;
+        if (p.indexOf('네이버') >= 0) c.ext_naver++;
+        else if (p.indexOf('톡') >= 0) c.ext_talk++;
+        else if (g.includes('naver')) c.cc_naver++;
+        else if (g.includes('kakao')) c.cc_kakao++;
+        else c.cc_self++;
+        const pm = (o.payment_method || []).map(x => String(x).toLowerCase()); const prim = pm.filter(x => x !== 'coupon' && x !== 'point')[0] || pm[0] || '';
+        if (prim === 'card') c.card++; else if (prim === 'prepaid') c.prepaid++; else if (prim === 'cell') c.cell++; else if (['cash', 'tcash', 'icash'].indexOf(prim) >= 0) c.transfer++;
+      });
+      const tot = v.length, store = c.cc_self + c.cc_naver + c.cc_kakao, ext = c.ext_naver + c.ext_talk, P = (n) => tot > 0 ? +(n / tot * 100).toFixed(1) : 0;
+      await postToAppsScript({ action: 'record_pay_breakdown', rows: [{ month: m.label, tot, cc_self: c.cc_self, cc_naver: c.cc_naver, cc_kakao: c.cc_kakao, ext_naver: c.ext_naver, ext_talk: c.ext_talk, mem: c.mem, guest: c.guest, storePct: P(store), extPct: P(ext) }] }, APPS_SCRIPT_URL).catch(() => {});
+      await postToAppsScript({ action: 'record_pay_method_detail', rows: [{ month: m.label, tot, card: c.card, prepaid: c.prepaid, transfer: c.transfer, cell: c.cell, cardPct: P(c.card), prepaidPct: P(c.prepaid), transferPct: P(c.transfer) }] }, APPS_SCRIPT_URL).catch(() => {});
+      const g4 = await getGA4Slices(m.start, m.end);
+      const ch = {}; (g4.channels || []).forEach(x => ch[x.channel] = x.sessions);
+      const gtot = Object.values(ch).reduce((a, b) => a + b, 0);
+      const search = (ch['Organic Search'] || 0) + (ch['Paid Search'] || 0);
+      const known = (ch['Paid Social'] || 0) + (ch['Organic Video'] || 0) + (ch['Direct'] || 0) + search + (ch['Organic Shopping'] || 0);
+      await postToAppsScript({ action: 'record_traffic_monthly', rows: [{ month: m.label, tot: gtot, paidSocial: ch['Paid Social'] || 0, youtube: ch['Organic Video'] || 0, direct: ch['Direct'] || 0, search, navershop: ch['Organic Shopping'] || 0, etc: gtot - known, psPct: gtot > 0 ? +((ch['Paid Social'] || 0) / gtot * 100).toFixed(1) : 0 }] }, APPS_SCRIPT_URL).catch(() => {});
+      console.log('[월별 자동적재]', m.label, 'orders', tot, 'sessions', gtot);
+    } catch (e) { console.error('[월별 자동적재]', m.label, e.message); }
+  }
+}
+
 // ── 주간 리포트 (월요일) ────────────────────────────────
 async function weeklyReport() {
   const thisStart = dateStr(7), thisEnd = dateStr(1);
@@ -2652,6 +2694,9 @@ async function weeklyReport() {
     await postToAppsScript({ action: 'save_levers', 주차: display, 쿠폰전환: avgCoupon, 골든타임: goldenZone?.d21_35 || '', 레시피PV: pvWoW?.cur?.레시피 || '', 재구매율: repurchase?.repurchaseRate || '', 게스트: guestPct }, APPS_SCRIPT_URL).catch(() => {});
     console.log('[레버 baseline] 저장:', display);
   } catch (e) { console.error('[레버 저장]', e.message); }
+
+  // 월별 결제구분·결제수단·유입 자동 적재 (현재월 MTD + 지난달 finalize)
+  await recordMonthlyAuto();
 
   const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, clarity, ga4, reviews, repurchase });
 
