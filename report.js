@@ -2850,6 +2850,17 @@ ${analysis}` : '';
   if (claudeMsg) { console.log('\n--- Claude 분석 ---'); console.log(claudeMsg.replace(/<[^>]+>/g, '')); }
   console.log('=====================================\n');
 
+  // 📋 분석→액션을 개입기록(🛠)에 "후보"로 자동 적재 + Before 스냅샷 — 데이터→내 할일 루프 (은우가 착수/완료로)
+  try {
+    const utc = ga4?.userType?.cur;
+    const beforeSnap = `전환율 ${siteCvr} · 재구매 ${repurchase?.repurchaseRate?.toFixed(1) || '-'}% · 재방문CVR ${utc ? pct(utc.ret.conv, utc.ret.sessions) : '-'} · 골든 ${goldenZone?.d21_35 || '-'}명`;
+    const candRows = (weeklyActions || []).map(a => ({ date: display, area: 'CX주간', action: a.replace(/<[^>]+>/g, ''), context: '', before: beforeSnap }));
+    if (candRows.length) {
+      const cr = await postToAppsScript({ action: 'append_cx_candidates', rows: candRows }, APPS_SCRIPT_URL).catch(() => null);
+      console.log('[CX 후보 적재]', cr && cr.ok ? `+${cr.added}` : '실패');
+    }
+  } catch (e) { console.error('[CX 후보 적재]', e.message); }
+
   // 매주 월요일 송마망 단톡방으로 — 저번주 CX 리포트 + 분석→액션 2개 다 (2026-06-08 DM→단톡방 변경)
   const r1 = await sendTelegramChunked(weeklyMsg, true);
   if (claudeMsg) await sendTelegramChunked(claudeMsg, true);
