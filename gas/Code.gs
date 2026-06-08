@@ -459,6 +459,9 @@ function doPost(e) {
     if (action === 'set_compass_remarks') {
       return jsonOut(setEunwooCompassRemarks_(contents.text || ''));
     }
+    if (action === 'refresh_cockpit') {
+      return jsonOut(refreshCockpit_());
+    }
     if (action === 'build_monthly_summary') {
       return jsonOut(buildEunwooMonthlySummary_(contents.month || ''));
     }
@@ -850,18 +853,23 @@ function handleEunwooDM(msg) {
     return;
   }
   if ((m = text.match(/^\/적용\s+([\s\S]+)/))) {
-    var ar = addCxStart_(m[1].trim(), 'D2C마케팅(적용)');
-    sendTGMessage(chatId, ar.ok ? '✅ 적용 착수 기록 — 개입기록에 박힘 (완료 시 After 측정). \n• ' + m[1].trim() : '⚠️ 실패: ' + ar.error);
+    var ar = addCxStart_(m[1].trim(), 'D2C마케팅(적용)'); refreshCockpit_();
+    sendTGMessage(chatId, ar.ok ? '✅ 적용 착수 — 개입기록·콕핏 갱신 (완료 시 After 측정).\n• ' + m[1].trim() : '⚠️ 실패: ' + ar.error);
     return;
   }
   if ((m = text.match(/^\/개입\s+([\s\S]+)/))) {
-    var gr = addCxStart_(m[1].trim(), 'CX');
-    sendTGMessage(chatId, gr.ok ? '✅ 개입 착수 기록 — 개입기록에 박힘.\n• ' + m[1].trim() : '⚠️ 실패: ' + gr.error);
+    var gr = addCxStart_(m[1].trim(), 'CX'); refreshCockpit_();
+    sendTGMessage(chatId, gr.ok ? '✅ 개입 착수 — 개입기록·콕핏 갱신.\n• ' + m[1].trim() : '⚠️ 실패: ' + gr.error);
     return;
   }
   if (text === '/정리' || text === '/완료정리') {
-    var pc = pruneCx_('');
-    sendTGMessage(chatId, pc.ok ? '🧹 정리 완료 — 완료항목 ' + pc.pruned + '건 삭제(✅완료_아카이브에 백업됨). 새 주차로 채우세요.' : '⚠️ 정리 실패: ' + pc.error);
+    var pc = pruneCx_(''); refreshCockpit_();
+    sendTGMessage(chatId, pc.ok ? '🧹 정리 완료 — 완료 ' + pc.pruned + '건 삭제(✅아카이브 백업됨)·콕핏 갱신.' : '⚠️ 정리 실패: ' + pc.error);
+    return;
+  }
+  if (text === '/콕핏' || text === '/현황') {
+    var rc = refreshCockpit_();
+    sendTGMessage(chatId, rc.ok ? '📍 콕핏(COMPASS 비고) 갱신 완료 — 전략대시보드 은우 행 확인' : '⚠️ 실패: ' + rc.error);
     return;
   }
   if (text === '/UX 발송' || text === '/UX발송') { handleUXSend(chatId); return; }
@@ -1605,6 +1613,31 @@ function setEunwooCompassRemarks_(text) {
     }
     return { ok: false, error: '은우 행 못 찾음 (COMPASS A49:A60)' };
   } catch (e) { return { ok: false, error: e.message }; }
+}
+
+// 📍 콕핏 = COMPASS E55 = 개입기록의 라이브 뷰 (이번주 액션 + 진행중 + 이번달 완료). 명령/주간마다 갱신 → "보는 1곳".
+function refreshCockpit_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var iv = ss.getSheetByName('🛠 개입기록');
+  var month = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyyMM');
+  var cand = [], wip = [], doneN = 0;
+  var inM = function (dt) { if (Object.prototype.toString.call(dt) === '[object Date]') dt = Utilities.formatDate(dt, 'Asia/Seoul', 'yyyy-MM-dd'); return String(dt).replace(/[-.]/g, '').indexOf(month) >= 0; };
+  if (iv && iv.getLastRow() > 1) {
+    iv.getDataRange().getValues().slice(1).forEach(function (r) {
+      var v = String(r[7]);
+      if (v === '착수' || v === '진행중') wip.push('· ' + String(r[2]));
+      else if (v === '후보') cand.push('· ' + String(r[2]));
+    });
+  }
+  [iv, ss.getSheetByName('✅ 완료_아카이브')].forEach(function (sh) {
+    if (!sh || sh.getLastRow() < 2) return;
+    sh.getDataRange().getValues().slice(1).forEach(function (r) { if (inM(r[0]) && String(r[7]) === '완료') doneN++; });
+  });
+  var txt = '📍 이번주 콕핏 (' + Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd') + ')\n'
+    + '🎯 데이터 액션:\n' + (cand.slice(0, 3).join('\n') || '· 없음') + '\n'
+    + '📌 진행중:\n' + (wip.length ? wip.slice(0, 6).join('\n') : '· 없음') + '\n'
+    + '🥇 이번달 완료 ' + doneN + '건 → /성과 로 협상카드';
+  return setEunwooCompassRemarks_(txt);
 }
 
 // 🥇 은우 월간 성과 요약 자동초안 (연봉협상 카드). 개입기록(완료 Before/After)+주간_요약(전환율·매출 변화)+귀속매출 → 📊 월간_성과요약 탭 upsert.
