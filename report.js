@@ -2859,7 +2859,12 @@ ${analysis}` : '';
       const cr = await postToAppsScript({ action: 'append_cx_candidates', rows: candRows }, APPS_SCRIPT_URL).catch(() => null);
       console.log('[CX 후보 적재]', cr && cr.ok ? `+${cr.added}` : '실패');
     }
-  } catch (e) { console.error('[CX 후보 적재]', e.message); }
+    // COMPASS 은우 비고(E열) 갱신 — 월요일 첫 화면에 데이터 액션 일원화 (매주 replace)
+    const top = (weeklyActions || []).slice(0, 3).map((a, i) => `${i + 1}. ${a.replace(/<[^>]+>/g, '')}`).join('\n') || '이번주 특이 CX 액션 없음';
+    const remarks = `🤖 데이터 액션 (${display})\n${top}\nBefore: ${beforeSnap}\n※상세/진행: 개인성과시트 개입기록`;
+    const rr = await postToAppsScript({ action: 'set_compass_remarks', text: remarks }, APPS_SCRIPT_URL).catch(() => null);
+    console.log('[COMPASS 비고]', rr && rr.ok ? `행${rr.row}` : '실패');
+  } catch (e) { console.error('[CX 후보/비고 적재]', e.message); }
 
   // 매주 월요일 송마망 단톡방으로 — 저번주 CX 리포트 + 분석→액션 2개 다 (2026-06-08 DM→단톡방 변경)
   const r1 = await sendTelegramChunked(weeklyMsg, true);
