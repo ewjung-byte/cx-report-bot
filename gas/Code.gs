@@ -1629,9 +1629,13 @@ function refreshCockpit_() {
       else if (v === '후보') cand.push('· ' + String(r[2]));
     });
   }
+  var seenD = {};
   [iv, ss.getSheetByName('✅ 완료_아카이브')].forEach(function (sh) {
     if (!sh || sh.getLastRow() < 2) return;
-    sh.getDataRange().getValues().slice(1).forEach(function (r) { if (inM(r[0]) && String(r[7]) === '완료') doneN++; });
+    sh.getDataRange().getValues().slice(1).forEach(function (r) {
+      if (!inM(r[0]) || String(r[7]) !== '완료') return;
+      var k = String(r[2]); if (seenD[k]) return; seenD[k] = true; doneN++; // 개입기록+아카이브 중복 제거
+    });
   });
   var txt = '📍 이번주 콕핏 (' + Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd') + ')\n'
     + '🎯 데이터 액션:\n' + (cand.slice(0, 3).join('\n') || '· 없음') + '\n'
