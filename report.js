@@ -1138,6 +1138,17 @@ async function getClarityData() {
     const totalSessions = parseInt(traffic?.totalSessionCount || 1);
     const browsers = get('Browser')?.information || [];
     const instagramPct = ((parseInt(browsers.find(b=>b.name==='InstagramApp')?.sessionsCount||0) / totalSessions) * 100).toFixed(1);
+    // 방문환경 그룹: 메타 인앱(인스타+페북)=열악 vs 정상 모바일 브라우저(삼성·크롬·사파리) + 기기(모바일/PC)
+    const bN = (name) => parseInt(browsers.find(b=>b.name===name)?.sessionsCount||0);
+    const devices = get('Device')?.information || [];
+    const dN = (name) => parseInt(devices.find(d=>d.name===name)?.sessionsCount||0);
+    const P = (n) => Math.round((n / totalSessions) * 100);
+    const env = {
+      inAppMetaPct: P(bN('InstagramApp') + bN('FacebookApp')),
+      samsungPct: P(bN('SamsungInternet')), chromeMPct: P(bN('ChromeMobile')), safariMPct: P(bN('MobileSafari')),
+      normalPct: P(bN('SamsungInternet') + bN('ChromeMobile') + bN('MobileSafari')),
+      mobilePct: P(dN('Mobile')), pcPct: P(dN('PC')),
+    };
     const popularPages = get('PopularPages')?.information || [];
     const topPages = get('PageTitle')?.information || [];
     const getVisits = (kw) => parseInt(popularPages.find(p=>p.url?.includes(kw))?.visitsCount||0);
@@ -1152,6 +1163,7 @@ async function getClarityData() {
       scrollDepth: get('ScrollDepth')?.information[0]?.averageScrollDepth || 0,
       activeTimeSec: parseInt(get('EngagementTime')?.information[0]?.activeTime || 0),
       instagramPct: parseFloat(instagramPct),
+      env,
       funnel: {
         landing: getVisits('surl/p'),
         product: getVisits('product/detail'),
@@ -2143,8 +2155,11 @@ async function dailyReport() {
   // 인스타인앱 비중과 GA4 funnel만 핵심 신호로 노출.
   let healthSection;
   if (clarity) {
-    const inappPct = parseFloat(clarity.instagramPct || 0);
-    healthSection = `인스타인앱 ${inappPct}%${inappPct >= 50 ? '⚠️' : ''}`;
+    const e = clarity.env || {};
+    const inappPct = e.inAppMetaPct != null ? e.inAppMetaPct : parseFloat(clarity.instagramPct || 0);
+    healthSection = `방문환경 (${clarity.totalSessions}세션 · 📱모바일 ${e.mobilePct || 0}%·💻PC ${e.pcPct || 0}%)`;
+    healthSection += `\n· 메타 인앱(인스타+페북) ${inappPct}%${inappPct >= 50 ? ' ⚠️' : ''} 간편결제 깨짐 환경`;
+    healthSection += `\n· 정상 브라우저 ${e.normalPct || 0}% (삼성 ${e.samsungPct || 0}·크롬 ${e.chromeMPct || 0}·사파리 ${e.safariMPct || 0})`;
     // 💳 결제수단 분포 (cafe24 raw — GA4 funnel보다 정확. 실주문 기준)
     if (dailyOrders?.payMethods) {
       const pm = dailyOrders.payMethods;
