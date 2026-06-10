@@ -501,16 +501,23 @@ async function getCafe24DailyOrders(startDate, endDate) {
     const channelList = Object.entries(channels).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
     // 결제수단 분포 — ★order_place 우선(네이버페이 주문형은 payment_gateway가 빈값이라 gateway만 보면 자체결제로 오분류됨).
     // 네이버페이/카카오 총합 = 외부(주문형·톡체크아웃) + 결제창 내 버튼(gateway). 2026-06-08 fix.
-    const payMethods = { 자체결제: 0, 네이버페이: 0, 카카오페이: 0, 기타간편: 0 };
+    // 세부 분해: 외부(주문형/톡)=거의 100% 게스트 vs 결제창버튼=거의 회원, + 회원/비회원(member_id)
+    const payMethods = {
+      자체결제: 0, 네이버페이: 0, 카카오페이: 0, 기타간편: 0,
+      자체_회원: 0, 자체_게스트: 0, 네이버_외부: 0, 네이버_버튼: 0, 카카오_외부: 0, 카카오_버튼: 0,
+      회원: 0, 비회원: 0,
+    };
     valid.forEach(o => {
       const place = String(o.order_place_name || '');
       const gw = (o.payment_gateway_names || []).join('').toLowerCase();
-      if (place.indexOf('네이버') >= 0) payMethods.네이버페이++;        // 네이버페이 주문형(외부)
-      else if (place.indexOf('톡') >= 0) payMethods.카카오페이++;       // 톡체크아웃(외부 카카오)
-      else if (gw.includes('naver')) payMethods.네이버페이++;           // 결제창 내 네이버페이 버튼
-      else if (gw.includes('kakao')) payMethods.카카오페이++;           // 결제창 내 카카오페이 버튼
+      const mem = String(o.member_id || '').trim() !== '';
+      if (mem) payMethods.회원++; else payMethods.비회원++;
+      if (place.indexOf('네이버') >= 0) { payMethods.네이버페이++; payMethods.네이버_외부++; }       // 네이버페이 주문형(외부, 게스트)
+      else if (place.indexOf('톡') >= 0) { payMethods.카카오페이++; payMethods.카카오_외부++; }      // 톡체크아웃(외부 카카오, 게스트)
+      else if (gw.includes('naver')) { payMethods.네이버페이++; payMethods.네이버_버튼++; }          // 결제창 내 네이버페이 버튼(회원多)
+      else if (gw.includes('kakao')) { payMethods.카카오페이++; payMethods.카카오_버튼++; }          // 결제창 내 카카오페이 버튼(회원多)
       else if (gw.includes('payco') || gw.includes('toss') || gw.includes('ssg') || gw.includes('smilepay')) payMethods.기타간편++;
-      else payMethods.자체결제++;                                       // 결제창 카드·계좌 등
+      else { payMethods.자체결제++; mem ? payMethods.자체_회원++ : payMethods.자체_게스트++; }          // 결제창 카드·계좌 등
     });
     return {
       totalCount: all.length,
@@ -2144,11 +2151,13 @@ async function dailyReport() {
       const tot = pm.자체결제 + pm.네이버페이 + pm.카카오페이 + pm.기타간편;
       if (tot > 0) {
         const pct = v => Math.round(v / tot * 100);
-        const parts = [`자체 ${pct(pm.자체결제)}%`];
-        if (pm.네이버페이) parts.push(`네이버페이 ${pct(pm.네이버페이)}%`);
-        if (pm.카카오페이) parts.push(`카카오페이 ${pct(pm.카카오페이)}%`);
-        if (pm.기타간편) parts.push(`기타간편 ${pct(pm.기타간편)}%`);
-        healthSection += `\n💳 결제수단 (${tot}건): ${parts.join(' · ')}`;
+        healthSection += `\n💳 결제수단 (${tot}건) · 회원 ${pct(pm.회원)}% / 비회원 ${pct(pm.비회원)}%`;
+        healthSection += `\n· 자체결제(결제창) ${pct(pm.자체결제)}% — 회원 ${pm.자체_회원}·게스트 ${pm.자체_게스트}`;
+        if (pm.네이버페이) healthSection += `\n· 네이버페이 ${pct(pm.네이버페이)}% — 외부주문형 ${pm.네이버_외부}(게스트)·결제창버튼 ${pm.네이버_버튼}`;
+        if (pm.카카오페이) healthSection += `\n· 카카오 ${pct(pm.카카오페이)}% — 톡체크아웃 ${pm.카카오_외부}(게스트)·결제창버튼 ${pm.카카오_버튼}`;
+        if (pm.기타간편) healthSection += `\n· 기타간편 ${pct(pm.기타간편)}%`;
+        const extGuest = pm.네이버_외부 + pm.카카오_외부;
+        if (pm.비회원 > 0 && extGuest > 0) healthSection += `\n★ 비회원의 핵심=외부 간편결제 ${extGuest}건(회원가입 미발생) → 게스트→회원 후크 타깃`;
       }
     }
     if (ga4Daily?.checkoutFunnel) {
