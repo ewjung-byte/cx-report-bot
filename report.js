@@ -2635,25 +2635,36 @@ async function getPageViewWoW() {
 
 // ── UTM 채널 효과 (우리가 정한 campaign별 클릭→주문→매출) ──
 // 카카오 친구톡·구글 검색광고·엽서 QR. UTM 적용 후 데이터 들어오기 시작.
+// 수동 UTM(print·cta·influencer) 채널별 퍼널: 유입→장바구니→구매→매출. medium 기준 자동 그룹 → channel-* 등 새 캠페인 자동 포함.
+// ⚠️ 구매=자사몰 결제분만(외부 간편결제는 GA4 미집계라 floor).
 async function getUtmChannelEffect() {
   try {
     const token = await getGA4Token();
     if (!token) return null;
     const tw = { startDate: dateStr(7), endDate: dateStr(1) };
-    const ours = ['welcome', 'restock', 'grade-coupon', 'pc-v1', 'pesto_search'];
     const res = await ga4Fetch(token, {
       dateRanges: [tw],
-      metrics: [{ name: 'sessions' }, { name: 'ecommercePurchases' }, { name: 'totalRevenue' }],
-      dimensions: [{ name: 'sessionCampaignName' }],
-      dimensionFilter: { filter: { fieldName: 'sessionCampaignName', inListFilter: { values: ours } } },
-      limit: 20, orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
+      metrics: [{ name: 'sessions' }, { name: 'addToCarts' }, { name: 'ecommercePurchases' }, { name: 'purchaseRevenue' }],
+      dimensions: [{ name: 'sessionMedium' }, { name: 'sessionCampaignName' }],
+      dimensionFilter: { filter: { fieldName: 'sessionMedium', inListFilter: { values: ['print', 'cta', 'influencer'] } } },
+      limit: 50, orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
     });
-    return (res.rows || []).map(rr => ({
-      campaign: rr.dimensionValues[0].value,
-      sessions: parseInt(rr.metricValues[0].value) || 0,
-      purchases: parseInt(rr.metricValues[1].value) || 0,
-      revenue: Math.round(Number(rr.metricValues[2].value)) || 0,
-    }));
+    const grp = {};
+    (res.rows || []).forEach(rr => {
+      const med = rr.dimensionValues[0].value, camp = rr.dimensionValues[1].value, m = rr.metricValues;
+      let key;
+      if (med === 'print') key = '엽서 QR';
+      else if (med === 'influencer') key = '인플루언서';
+      else if (med === 'cta' && /^channel-|welcome-benefit/.test(camp)) key = '카톡 채널메뉴';
+      else if (med === 'cta') key = '친구톡 CRM';
+      else key = '기타';
+      const g = grp[key] || (grp[key] = { ch: key, sessions: 0, carts: 0, purchases: 0, revenue: 0 });
+      g.sessions += parseInt(m[0].value) || 0;
+      g.carts += parseInt(m[1].value) || 0;
+      g.purchases += parseInt(m[2].value) || 0;
+      g.revenue += Math.round(Number(m[3].value)) || 0;
+    });
+    return Object.values(grp).filter(g => g.sessions > 0).sort((a, b) => b.sessions - a.sessions);
   } catch (e) { console.error('[UTM 채널 효과]', e.message); return null; }
 }
 
@@ -2811,11 +2822,13 @@ async function weeklyReport() {
     pvLine = `레시피 ${c.레시피}${diff(c.레시피, p.레시피)} · 상품상세 ${c.상품상세}${diff(c.상품상세, p.상품상세)} · 장바구니 ${c.장바구니}${diff(c.장바구니, p.장바구니)} · 메인 ${c.메인}${diff(c.메인, p.메인)}`;
   }
 
-  // 📡 UTM 채널 효과 (카카오·구글·엽서 → 매출). 적용 전엔 데이터 없음
-  const UTM_LABEL = { welcome: '친구톡 웰컴', restock: '친구톡 재입고', 'grade-coupon': '친구톡 등급쿠폰', 'pc-v1': '엽서 QR', pesto_search: '구글 검색광고' };
-  let utmLine = '아직 데이터 없음 — 미주 UTM 적용 후 측정 시작 (카카오 친구톡·엽서 QR)';
+  // 📲 UTM 채널 퍼널 (유입→장바구니→구매). 적용 전엔 데이터 없음
+  let utmLine = '아직 데이터 없음 — UTM 적용 후 측정 시작';
   if (utmEffect && utmEffect.length) {
-    utmLine = utmEffect.map(u => `${UTM_LABEL[u.campaign] || u.campaign}: ${u.sessions}클릭 → ${u.purchases}주문 → ${formatMoney(u.revenue)}`).join('\n');
+    utmLine = utmEffect.map(u => {
+      const cvr = u.sessions ? (u.purchases / u.sessions * 100).toFixed(1) : '0';
+      return `· ${u.ch}: 유입 ${u.sessions} → 장바구니 ${u.carts} → 구매 ${u.purchases} (전환 ${cvr}%)${u.revenue ? ' · ' + formatMoney(u.revenue) : ''}`;
+    }).join('\n') + '\n※ 구매=자사몰 결제분만 (외부 간편결제 미집계, 최소치)';
   }
 
   // 🎯 이번주 할 것 — 레버 종합 (데이터→행동, 측정값 직결). 각 줄 = "지표 → 바꿀 행동".
@@ -2855,7 +2868,7 @@ ${goldenLine}
 📄 <b>헤더 페이지뷰</b> (전주 대비)
 ${pvLine}
 
-📡 <b>UTM 채널 효과</b> (발송→클릭→매출)
+📲 <b>UTM 채널 퍼널</b> (유입→장바구니→구매)
 ${utmLine}
 
 📊 <b>GA4 채널</b>
