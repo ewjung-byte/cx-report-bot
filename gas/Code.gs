@@ -429,6 +429,9 @@ function doPost(e) {
     if (action === 'get_eunwoo_row') {
       return jsonOut(getEunwooCompassRow_());
     }
+    if (action === 'track_alert_ages') {
+      return jsonOut(trackAlertAges_(contents));
+    }
     if (action === 'save_levers') {
       return jsonOut(saveLevers_(contents));
     }
@@ -1823,6 +1826,32 @@ function addCxStart_(content, area, verdict) {
   var d = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
   t.appendRow([d, finalArea, finalContent, '', before, '', '-', verdict || '착수']);
   return { ok: true, content: finalContent, area: finalArea };
+}
+
+// ⏳ 반복 경고/액션 에이징 — 같은 알림이 며칠째인지 추적 (무뎌짐 방지). 키가 안 오면 해소로 보고 🔔 경고_해소로그에 기록(지속일 = 은우가 닫은 증거).
+function trackAlertAges_(payload) {
+  var keys = (payload.keys || []).map(String);
+  var props = PropertiesService.getScriptProperties();
+  var map = {};
+  try { map = JSON.parse(props.getProperty('CX_ALERT_AGES') || '{}'); } catch (e) { map = {}; }
+  var today = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
+  var dayDiff = function (a, b) { return Math.floor((new Date(b) - new Date(a)) / 86400000) + 1; };
+  var ages = {};
+  keys.forEach(function (k) {
+    if (!map[k]) map[k] = today;
+    ages[k] = dayDiff(map[k], today);
+  });
+  var resolved = [];
+  Object.keys(map).forEach(function (k) {
+    if (keys.indexOf(k) < 0) { resolved.push([k, map[k], today, dayDiff(map[k], today)]); delete map[k]; }
+  });
+  if (resolved.length) {
+    var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+    var sh = ensureSheetWithHeaders_(ss, '🔔 경고_해소로그', ['경고', '최초발생', '해소일', '지속일']);
+    resolved.forEach(function (r) { sh.appendRow(r); });
+  }
+  props.setProperty('CX_ALERT_AGES', JSON.stringify(map));
+  return { ok: true, ages: ages, resolved: resolved.length };
 }
 
 // 영역 → 콕핏 출처 태그 (은우가 진행중 항목 출처 한눈에 — D2C=미주봇 케이스북·UX=UX사례 채택·CX=직접개입).

@@ -1889,7 +1889,7 @@ ${reviews ? `이번 주 리뷰 ${reviews.count}건 기준, 반복 칭찬 키워�
 // ── CX 관리자 분석 (개인 DM용) ─────────────────────────
 async function getCXManagerAnalysis(data) {
   if (!CLAUDE_API_KEY) return null;
-  const { activities, dailyMessages, clarity, ga4Daily, dailyOrders, segments, voc, restock, adAudit } = data;
+  const { activities, dailyMessages, clarity, ga4Daily, dailyOrders, segments, voc, restock, adAudit, cockpitText } = data;
 
   const activitiesText = activities && activities.length
     ? activities.slice(-15).map(a => `[${a.id} ${a.status}] ${a.content}`).join('\n')
@@ -1924,16 +1924,20 @@ ${facts}
 [데이터 신호 (어제)]
 ${signals}
 
+[콕핏 — 은우 현황 (ONE THING·진행중 개입·나중에)]
+${cockpitText || '(없음)'}
+
 [은우 작업 (24h)]
 ${activitiesText}
 
 [단톡방 (24h)]
 ${chatText}
 
-요청:
-- 데이터+작업+단톡방 연결해서 오늘 우선 봐야 할 것 1~2개
-- 측정 공백/무시된 신호 있으면 지적
-- 단톡방 결정 중 은우 작업과 연관된 것 있으면 연결
+요청 — ⚠️단톡방 'CX 일간' 리포트와 중복 금지 (게스트 후크·공구 점검·휴면 리마인드처럼 매일 반복되는 주제는 단톡방이 이미 다룸. 여긴 은우 전용):
+- ① 콕핏 '진행중' 개입과 관련된 지표 변화 — 개입이 숫자를 움직이고 있는지 (Before/After 신호). 변화 없으면 "아직 변화 없음"도 정보.
+- ② 단톡방에 쓰기 애매한 내부 판단 (팀·채널·측정 공백·미주 영역 관찰)
+- ③ 어제 없던 새 신호
+해당 없는 항목은 생략. 억지로 채우지 마.
 
 5줄 이내, 마크다운 X, 짧은 문단으로.`;
 
@@ -2419,12 +2423,15 @@ ${productSalesOnly}${promoScheduleSection}${actionSection}${analysisSection}`;
   // (processTelegramMessages/getRemindersFromSheet/saveMeetingNotes/getDailyMessagesFromSheet 함수는 personal-metrics 등 추후 재사용 위해 export 유지)
 
   // ── CX 관리자 분석 (개인 DM에 추가) ──
+  // 콕핏 갱신+읽기 — ①분석 입력(진행중 개입 관련 지표 변화) ②DM 끝 한 줄 (보는 1곳)
+  let cockpitText = '';
+  try { const ck = await postToAppsScript({ action: 'refresh_cockpit' }, APPS_SCRIPT_URL); cockpitText = ck?.text || ''; } catch (e) {}
   const [activities, dailyMessages] = await Promise.all([
     getRecentActivities(24).catch(() => []),
     getDailyMessagesFromSheet(today).catch(() => [])
   ]);
   const cxManagerAnalysis = await getCXManagerAnalysis({
-    activities, dailyMessages, clarity, ga4Daily, dailyOrders, segments, voc, restock, adAudit
+    activities, dailyMessages, clarity, ga4Daily, dailyOrders, segments, voc, restock, adAudit, cockpitText
   });
   const cxManagerSection = cxManagerAnalysis
     ? `\n\n🎯 <b>CX 관리자 분석</b>\n${cxManagerAnalysis}`
@@ -2437,12 +2444,35 @@ ${productSalesOnly}${promoScheduleSection}${actionSection}${analysisSection}`;
     ltv: ltvForReport, songmamansSales, meta: metaToday, promos, reportDate: today,
   });
   if (warnings.length) console.error('⚠️ 데이터 점검 경고:\n- ' + warnings.join('\n- '));
-  const healthSectionDM = warnings.length ? `\n\n🔧 <b>데이터 점검</b>\n${warnings.map(x => `⚠️ ${x}`).join('\n')}` : '';
 
-  // 개인 DM: CX 관리자 분석 + 데이터 점검만 (오늘 할일·개인메모 제거 2026-06-08 — 둘 다 시트/콕핏에 있음). 메모는 콕핏 📝메모로 이전.
-  const personalMsg = `☀️ <b>CX 데일리</b> (${today})${cxManagerSection}${healthSectionDM}`;
+  // ⏳ 반복 경고/액션 에이징 — 같은 알림이 N일째인지 (무뎌짐 방지). 키=숫자 제거 정규화(수치만 바뀌어도 같은 경고).
+  // 해소되면 GAS가 🔔 경고_해소로그에 지속일 기록 (은우가 닫은 증거). DRY_RUN은 상태 오염 방지 위해 skip.
+  const alertKey = (s) => String(s).replace(/<[^>]+>/g, '').replace(/[\d,.%]+/g, '#').replace(/\s+/g, ' ').trim().slice(0, 80);
+  let alertAges = {};
+  if (!DRY_RUN) {
+    try {
+      const ar = await postToAppsScript({ action: 'track_alert_ages', keys: [...dailyActions, ...warnings].map(alertKey) }, APPS_SCRIPT_URL);
+      alertAges = ar?.ages || {};
+    } catch (e) { console.error('[경고 에이징]', e.message); }
+  }
+  const withAge = (s) => { const a = alertAges[alertKey(s)]; return a >= 2 ? `${s} ⏳${a}일째` : s; };
+  let msgToSend = msg;
+  dailyActions.forEach(a => { const t = withAge(a); if (t !== a) msgToSend = msgToSend.replace(a, t); });
+  const healthSectionDM = warnings.length ? `\n\n🔧 <b>데이터 점검</b>\n${warnings.map(x => `⚠️ ${withAge(x)}`).join('\n')}` : '';
 
-  const groupResult = await sendTelegramGroup(msg);
+  // 📍 DM 끝 콕핏 한 줄 — 아침 DM에서 바로 "오늘 뭐" (보는 1곳)
+  let cockpitLine = '';
+  if (cockpitText) {
+    const oneM = cockpitText.match(/ONE THING\n· ?(.+)/);
+    const wipM = cockpitText.match(/📌 진행중 \((\d+)\)/);
+    const one = oneM ? oneM[1].trim() : '';
+    cockpitLine = `\n\n📍 <b>콕핏</b> 🥇 ${one && !one.startsWith('(미설정') ? one : '미설정 (/원씽)'} · 📌 진행중 ${wipM ? wipM[1] : '-'}`;
+  }
+
+  // 개인 DM: CX 관리자 분석(은우 전용) + 데이터 점검 + 콕핏 한 줄
+  const personalMsg = `☀️ <b>CX 데일리</b> (${today})${cxManagerSection}${healthSectionDM}${cockpitLine}`;
+
+  const groupResult = await sendTelegramGroup(msgToSend);
   if (groupResult.ok) {
     // 🤖 CX 판단은 이제 msg 본문(analysisSection)에 통합 — 별도 발송 안 함 (묻힘 방지)
     if (cxManagerSection || healthSectionDM) await sendTelegram(personalMsg);
