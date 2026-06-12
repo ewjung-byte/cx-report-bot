@@ -2679,6 +2679,16 @@ async function getUtmChannelEffect() {
       dimensionFilter: { filter: { fieldName: 'sessionMedium', inListFilter: { values: ['print', 'cta', 'influencer'] } } },
       limit: 50, orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
     });
+    // 캠페인 한글 라벨 — 그룹 안 세부 표시용 (재입고·웰컴 등이 그룹에 묻히지 않게)
+    const campLabel = (c) => {
+      if (/^recipe/.test(c)) return '레시피';
+      if (c === 'restock') return '재입고';
+      if (c === 'welcome') return '웰컴';
+      if (c === 'grade-coupon') return '등급쿠폰';
+      if (c === 'welcome-benefit') return '웰컴혜택';
+      if (c.startsWith('channel-')) return ({ home: '홈', buy: '구매', recipe: '레시피', magazine: '매거진', story: '스토리', cs: '문의' })[c.slice(8)] || c.slice(8);
+      return c;
+    };
     const grp = {};
     (res.rows || []).forEach(rr => {
       const med = rr.dimensionValues[0].value, camp = rr.dimensionValues[1].value, m = rr.metricValues;
@@ -2688,11 +2698,14 @@ async function getUtmChannelEffect() {
       else if (med === 'cta' && /^channel-|welcome-benefit/.test(camp)) key = '카톡 채널메뉴';
       else if (med === 'cta') key = '친구톡 CRM';
       else key = '기타';
-      const g = grp[key] || (grp[key] = { ch: key, sessions: 0, carts: 0, purchases: 0, revenue: 0 });
-      g.sessions += parseInt(m[0].value) || 0;
+      const g = grp[key] || (grp[key] = { ch: key, sessions: 0, carts: 0, purchases: 0, revenue: 0, camps: {} });
+      const ss = parseInt(m[0].value) || 0;
+      g.sessions += ss;
       g.carts += parseInt(m[1].value) || 0;
       g.purchases += parseInt(m[2].value) || 0;
       g.revenue += Math.round(Number(m[3].value)) || 0;
+      const cl = campLabel(camp);
+      g.camps[cl] = (g.camps[cl] || 0) + ss;
     });
     return Object.values(grp).filter(g => g.sessions > 0).sort((a, b) => b.sessions - a.sessions);
   } catch (e) { console.error('[UTM 채널 효과]', e.message); return null; }
@@ -2857,8 +2870,10 @@ async function weeklyReport() {
   if (utmEffect && utmEffect.length) {
     utmLine = utmEffect.map(u => {
       const cvr = u.sessions ? (u.purchases / u.sessions * 100).toFixed(1) : '0';
-      return `· ${u.ch}: 유입 ${u.sessions} → 장바구니 ${u.carts} → 구매 ${u.purchases} (전환 ${cvr}%)${u.revenue ? ' · ' + formatMoney(u.revenue) : ''}`;
-    }).join('\n') + '\n※ 구매=자사몰 결제분만 (외부 간편결제 미집계, 최소치)';
+      const camps = Object.entries(u.camps || {}).sort((a, b) => b[1] - a[1]);
+      const detail = camps.length > 1 ? ` [${camps.map(([k, v]) => `${k} ${v}`).join('·')}]` : '';
+      return `· ${u.ch}: 유입 ${u.sessions} → 장바구니 ${u.carts} → 구매 ${u.purchases} (전환 ${cvr}%)${u.revenue ? ' · ' + formatMoney(u.revenue) : ''}${detail}`;
+    }).join('\n') + '\n※ 구매=자사몰 결제분만 (외부 간편결제 미집계, 최소치) · 재입고 UTM은 발송 있을 때만 표시';
   }
 
   // 🎯 이번주 할 것 — 레버 종합 (데이터→행동, 측정값 직결). 각 줄 = "지표 → 바꿀 행동".
