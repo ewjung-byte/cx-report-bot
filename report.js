@@ -2318,7 +2318,7 @@ async function dailyReport() {
     const totalRev = (m?.newAmt || 0) + (m?.retAmt || 0) + (g?.newAmt || 0) + (g?.repeatAmt || 0);
     if (totalRev > 0) {
       const pct = (v) => (v / totalRev * 100).toFixed(0);
-      segmentSalesSection = `\n\n📊 <b>세그먼트 매출 분해</b>\n신규 회원: ${formatMoney(m.newAmt)} (${pct(m.newAmt)}%)\n재방문 회원: ${formatMoney(m.retAmt)} (${pct(m.retAmt)}%)\n게스트 신규: ${formatMoney(g.newAmt)} (${pct(g.newAmt)}%)\n게스트 반복: ${formatMoney(g.repeatAmt)} (${pct(g.repeatAmt)}%)`;
+      segmentSalesSection = `\n\n📊 <b>세그먼트 매출 분해</b> (주문금액·배송비 포함)\n신규 회원: ${formatMoney(m.newAmt)} (${pct(m.newAmt)}%)\n재방문 회원: ${formatMoney(m.retAmt)} (${pct(m.retAmt)}%)\n게스트 신규: ${formatMoney(g.newAmt)} (${pct(g.newAmt)}%)\n게스트 반복: ${formatMoney(g.repeatAmt)} (${pct(g.repeatAmt)}%)`;
     }
   }
 
@@ -2378,7 +2378,7 @@ ${healthSection}${inappNotice}${checkoutSection}${productPageSection}
 🔁 <b>리텐션</b> (Cafe24 raw)
 ${retentionSection}${ltvSection}${segmentSalesSection}
 
-🛍️ <b>상품 별 매출</b>
+🛍️ <b>상품 별 매출</b> (상품금액·배송비 제외)
 ${productSalesOnly}${promoScheduleSection}${actionSection}${analysisSection}`;
 
   const analysisMsg = analysis ? `🤖 <b>CX 판단</b>\n${analysis}` : null;
