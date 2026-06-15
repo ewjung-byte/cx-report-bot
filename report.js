@@ -420,7 +420,10 @@ async function getSheetsTasks() {
 // 검증(2026-05-21): canceled=F 합계 = 카페24 대시보드 매출 2,043,300원과 정확히 일치.
 function cafe24OrderRevenue(o) {
   const a = (o && o.actual_order_amount) || {};
-  return parseFloat(a.order_price_amount || 0) + parseFloat(a.shipping_fee || 0);
+  // 실결제(payment_amount)=쿠폰·적립·멤버십 할인 반영한 받은 돈. 단 네이버주문형 등 외부결제는
+  // cafe24에 payment_amount=0(네이버가 결제처리)이라 주문가(상품+배송)로 폴백. 둘 섞인 하이브리드가 가장 정확.
+  const pay = parseFloat(a.payment_amount || 0);
+  return pay > 0 ? pay : (parseFloat(a.order_price_amount || 0) + parseFloat(a.shipping_fee || 0));
 }
 
 // ── 카페24 매출 (단순 합계) ────────────────────────────
@@ -2834,14 +2837,14 @@ async function weeklyReport() {
     return `${nm}(#${p.productNo}): 실판매 ${p.count}건 · ${formatMoney(p.amount)}`;
   }).join('\n');
 
-  // 결제 누수 추정액 (Clarity 스크립트에러 × 세션 × 자사몰 CVR × AOV)
+  // 결제 누수 추정액 — GA4 전체 세션 기준으로 통일(분모 일치). ⚠️상한 추정: 스크립트에러는 인앱 노이즈가 多라 전부 손실 아님.
   let leakageLine = '데이터 부족';
-  if (clarity && clarity.totalSessions && clarity.scriptErrorPct && cafe24This.count > 0) {
-    const errorSessions = clarity.totalSessions * (clarity.scriptErrorPct / 100);
+  if (clarity && clarity.scriptErrorPct && ga4TotalSess > 0 && cafe24This.count > 0) {
+    const errorSessions = ga4TotalSess * (clarity.scriptErrorPct / 100);
     const aov = cafe24This.sales / cafe24This.count;
-    const siteCVR = cafe24This.count / Math.max(clarity.totalSessions, 1);
+    const siteCVR = cafe24This.count / Math.max(ga4TotalSess, 1);
     const lostRevenue = errorSessions * siteCVR * aov;
-    leakageLine = `${formatMoney(lostRevenue)}/주 잠재손실 추정 (에러 ${errorSessions.toFixed(0)}세션 × CVR ${(siteCVR*100).toFixed(1)}% × AOV ${formatMoney(aov)})`;
+    leakageLine = `~${formatMoney(lostRevenue)}/주 상한 추정 (에러 ${errorSessions.toFixed(0)}세션 × CVR ${(siteCVR * 100).toFixed(1)}% × AOV ${formatMoney(aov)}) ※스크립트에러 상당수 인앱 노이즈라 실손실은 이보다 작음`;
   }
 
   // 💳 쿠폰 전환 (등급쿠폰 사용률 — 직전월 발급분)
