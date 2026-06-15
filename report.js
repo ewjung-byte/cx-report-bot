@@ -2325,7 +2325,7 @@ async function dailyReport() {
     const totalRev = (m?.newAmt || 0) + (m?.retAmt || 0) + (g?.newAmt || 0) + (g?.repeatAmt || 0);
     if (totalRev > 0) {
       const pct = (v) => (v / totalRev * 100).toFixed(0);
-      segmentSalesSection = `\n\n📊 <b>세그먼트 매출 분해</b> (주문금액·배송비 포함)\n신규 회원: ${formatMoney(m.newAmt)} (${pct(m.newAmt)}%)\n재방문 회원: ${formatMoney(m.retAmt)} (${pct(m.retAmt)}%)\n게스트 신규: ${formatMoney(g.newAmt)} (${pct(g.newAmt)}%)\n게스트 반복: ${formatMoney(g.repeatAmt)} (${pct(g.repeatAmt)}%)`;
+      segmentSalesSection = `\n\n📊 <b>세그먼트 매출 분해</b> (실결제 기준)\n신규 회원: ${formatMoney(m.newAmt)} (${pct(m.newAmt)}%)\n재방문 회원: ${formatMoney(m.retAmt)} (${pct(m.retAmt)}%)\n게스트 신규: ${formatMoney(g.newAmt)} (${pct(g.newAmt)}%)\n게스트 반복: ${formatMoney(g.repeatAmt)} (${pct(g.repeatAmt)}%)`;
     }
   }
 
