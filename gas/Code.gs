@@ -865,7 +865,16 @@ function handleEunwooDM(msg) {
     return;
   }
   if (text === '/메모목록') { sendTGMessage(chatId, '📝 <b>메모</b> (콕핏)\n' + (PropertiesService.getScriptProperties().getProperty('EUNWOO_MEMO') || '(비어있음)')); return; }
-  if (text === '/메모비우기' || text === '/메모삭제') { PropertiesService.getScriptProperties().deleteProperty('EUNWOO_MEMO'); refreshCockpit_(); sendTGMessage(chatId, '🧹 메모 전체 삭제 — 콕핏 갱신.'); return; }
+  if ((m = text.match(/^\/메모삭제\s+([\s\S]+)/))) {
+    var _kw = m[1].trim(), _pp = PropertiesService.getScriptProperties();
+    var _lines = (_pp.getProperty('EUNWOO_MEMO') || '').split('\n').filter(function (s) { return s.trim(); });
+    var _kept = _lines.filter(function (s) { return s.indexOf(_kw) < 0; });
+    var _rm = _lines.length - _kept.length;
+    _pp.setProperty('EUNWOO_MEMO', _kept.join('\n')); refreshCockpit_();
+    sendTGMessage(chatId, _rm ? '🗑 메모 ' + _rm + '개 삭제 ("' + _kw + '") — 콕핏 갱신.' : '⚠️ "' + _kw + '" 매칭 메모 없음. /메모목록 확인');
+    return;
+  }
+  if (text === '/메모비우기') { PropertiesService.getScriptProperties().deleteProperty('EUNWOO_MEMO'); refreshCockpit_(); sendTGMessage(chatId, '🧹 메모 전체 삭제 — 콕핏 갱신.'); return; }
   if (text === '/성과' || text === '/성과요약') {
     var sm = buildEunwooMonthlySummary_();
     sendTGMessage(chatId, sm.ok ? sm.text : '⚠️ 성과요약 실패: ' + sm.error);
@@ -1745,7 +1754,7 @@ function refreshCockpit_() {
     + '📌 진행중 (' + wip.length + ')\n' + fmt(wip, 10) + '\n\n'
     + '📥 들어온 것 (확인→/할거·/적용)\n' + inbox + (cand.length ? '\n' + cand.slice(0, 2).join('\n') : '') + '\n\n'
     + '📋 나중에 (' + backlog.length + ')\n' + fmt(backlog, 10) + '\n\n'
-    + (memoLines.length ? '📝 메모\n' + fmt(memoLines, 8) + '\n\n' : '')
+    + (memoLines.length ? '📝 메모 (' + memoLines.length + ')\n' + memoLines.join('\n') + '\n\n' : '')
     + '✅ 이번달 완료 ' + doneN + '건';
   var res = setEunwooCompassRemarks_(txt);
   return { ok: res.ok, row: res.row, error: res.error, text: txt }; // text=콕핏 내용(텔레그램 표시용)
