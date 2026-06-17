@@ -186,7 +186,7 @@ var UX_CASES_CLIENT_JS_ = [
   'function closeModal(){document.getElementById("modal").classList.remove("open");}',
   // 상태 변경 콜백
   'function setStatus(date,status,btn){var grp=btn.parentNode;var bs=grp.querySelectorAll("button");for(var i=0;i<bs.length;i++)bs[i].disabled=true;btn.textContent="처리중…";',
-  ' google.script.run.withSuccessHandler(function(res){if(res&&res.ok){var c=findCase(date);if(c)c.status=status;closeModal();render();}else{alert("실패: "+((res&&res.error)||"알수없음"));render();}})',
+  ' google.script.run.withSuccessHandler(function(res){if(res&&res.ok){var c=findCase(date);if(c)c.status=status;if(res.todo&&!inTodo(date))TODOS.push(res.todo);closeModal();render();renderTodos();}else{alert("실패: "+((res&&res.error)||"알수없음"));render();}})',
   ' .withFailureHandler(function(e){alert("오류: "+((e&&e.message)||e));for(var i=0;i<bs.length;i++)bs[i].disabled=false;}).setUXCaseStatus(date,status);}',
   // 내 할일 탭 렌더
   'function renderTodos(){var box=document.getElementById("todos");document.getElementById("todo-cnt").textContent=TODOS.length;',
@@ -444,6 +444,18 @@ function doPost(e) {
     if (action === 'set_cx_today_actions') { // 일간 DM 액션 목록 저장 (나중에 버튼 콜백이 인덱스로 조회)
       PropertiesService.getScriptProperties().setProperty('CX_TODAY_ACTIONS', JSON.stringify(contents.actions || []));
       return jsonOut({ ok: true, n: (contents.actions || []).length });
+    }
+    if (action === 'test_cx_buttons') { // 액션 버튼 실발송 테스트 (은우 DM)
+      var acts = contents.actions || [];
+      PropertiesService.getScriptProperties().setProperty('CX_TODAY_ACTIONS', JSON.stringify(acts));
+      var txt = '🧪 <b>버튼 테스트</b> — 오늘 액션\n' + acts.map(function (a, i) { return (i + 1) + '. ' + a; }).join('\n') + '\n\n각 줄 버튼 눌러봐 → 콕핏 진행중/나중에 들어가는지 확인';
+      var kb = { inline_keyboard: acts.map(function (a, i) { return [
+        { text: (i + 1) + ' ✅오늘', callback_data: 'cxa:T:' + i },
+        { text: '📋나중에', callback_data: 'cxa:L:' + i },
+        { text: '✕패스', callback_data: 'cxa:P:' + i }
+      ]; }) };
+      sendTGMessage(EUNWOO_CHAT_ID, txt, kb);
+      return jsonOut({ ok: true, sent: acts.length });
     }
     if (action === 'get_eunwoo_row') {
       return jsonOut(getEunwooCompassRow_());
@@ -1334,7 +1346,7 @@ function handleCallbackQuery(query) {
   } else if (parts[0] === 'cxa') {
     // 일간 DM 액션 3버튼: T=오늘 액션(착수→진행중) · L=나중에(백로그) · P=패스(무시)
     var mode = parts[1], idx = parseInt(parts[2]);
-    if (mode === 'P') { label = '패스 ✕'; }
+    if (mode === 'P') { label = '패스 ✕'; sendTGMessage(chatId, '✕ 패스'); }
     else {
       var arr = [];
       try { arr = JSON.parse(PropertiesService.getScriptProperties().getProperty('CX_TODAY_ACTIONS') || '[]'); } catch (e) {}
@@ -1342,9 +1354,18 @@ function handleCallbackQuery(query) {
       if (act) {
         var clean = String(act).replace(/^[^\w가-힣]+/, '').trim(); // 앞 이모지 제거
         addCxStart_(clean, 'CX', mode === 'T' ? '착수' : '백로그'); refreshCockpit_();
-        label = mode === 'T' ? '오늘 착수 ✅ (콕핏 진행중)' : '나중에 📋 (콕핏 나중에)';
-      } else { label = '항목 만료 — 새 리포트에서 다시'; }
+        label = mode === 'T' ? '오늘 착수 ✅' : '나중에 📋';
+        sendTGMessage(chatId, (mode === 'T' ? '✅ 콕핏 <b>진행중</b>에 담음' : '📋 콕핏 <b>나중에</b>에 담음') + '\n· ' + clean);
+      } else { label = '항목 만료 — 새 리포트에서 다시'; sendTGMessage(chatId, '⚠️ 항목 만료 — 새 리포트에서 다시 눌러줘'); }
     }
+  } else if (parts[0] === 'uxc') {
+    // 단톡방 UX 사례 큐레이션 버튼: add=채택(케이스북+콕핏 나중에+내할일) / pass=패스
+    var uact = parts[1], udate = parts.slice(2).join(':');
+    var ur = setUXCaseStatus(udate, uact === 'add' ? '채택' : '패스');
+    if (ur && ur.ok) {
+      label = uact === 'add' ? '케이스북+콕핏 ✓' : '패스 ✕';
+      sendTGMessage(chatId, uact === 'add' ? '✓ 케이스북 채택 + 콕핏 나중에로 보냄' : '✕ 패스');
+    } else { label = '처리 실패'; sendTGMessage(chatId, '⚠️ UX 큐레이션 실패: ' + ((ur && ur.error) || '')); }
   } else {
     return;
   }
@@ -1798,7 +1819,7 @@ function refreshCockpit_() {
   var memoLines = memoStr ? memoStr.split('\n').filter(function (s) { return s.trim(); }) : [];
   // 표시: lim까지 보여주고 넘치면 "…외 N건" (count와 보이는 줄 불일치 방지)
   var fmt = function (arr, lim) { if (!arr.length) return '· 없음'; var s = arr.slice(0, lim).join('\n'); return arr.length > lim ? s + '\n· …외 ' + (arr.length - lim) + '건' : s; };
-  var inbox = '· CX후보 ' + cand.length + ' · UX채택 ' + uxN + ' · D2C는 케이스북→/적용';
+  var inbox = '· CX후보 ' + cand.length + ' · D2C는 케이스북→/적용 · UX채택은 콕핏 나중에로 자동';
   var txt = '📍 이번주 콕핏 (' + Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd') + ')\n\n'
     + '🥇 CX 관리자 ONE THING\n' + (oneThing ? '· ' + oneThing : '· (미설정 — /원씽 [내용])') + '\n\n'
     + '📌 진행중 (' + wip.length + ')\n' + fmt(wip, 10) + '\n\n'
@@ -2465,7 +2486,12 @@ function setUXCaseStatus(date, status) {
     var shown = (st === 'sent' || st === '케이스북' || st === '채택' || st === '패스');
     if (String(data[i][0]) === String(date) && shown) {
       sh.getRange(i + 1, 6).setValue(status);
-      return { ok: true, date: String(date), status: status };
+      var todoObj = null;
+      if (status === '채택') {
+        try { var r = addUXTodo(date); if (r && r.todo) todoObj = r.todo; } catch (e) {} // 케이스북 내 할일
+        try { addCxStart_('[UX사례] ' + String(data[i][2]).slice(0, 80), 'UX', '백로그'); refreshCockpit_(); } catch (e) {} // 콕핏 나중에에도 ([UX] 태그)
+      }
+      return { ok: true, date: String(date), status: status, todo: todoObj };
     }
   }
   return { ok: false, error: 'no case for date' };

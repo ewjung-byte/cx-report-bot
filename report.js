@@ -1594,7 +1594,13 @@ async function uxDraftFlow() {
   // 단톡방 자동 발송 (월·목, 컨펌 없이 바로). 사용자가 /UX 발송 안 눌러도 됨.
   const groupMsg = `📚 <b>UX 사례 — ${escapeHtml(technique)}</b>\n\n${escapeHtml(insight)}`;
   await sendTelegramChunked(groupMsg, true);
-  console.log(`[UX auto-send] ${date} ${dowKR} ${technique} → 단톡방 직접 발송 + 시트 sent`);
+  // 큐레이션 버튼 — 단톡방에서 바로 채택(케이스북+콕핏 나중에)/패스
+  const uxKb = { inline_keyboard: [[
+    { text: '✓ 케이스북에 추가', callback_data: 'uxc:add:' + date },
+    { text: '✕ 패스', callback_data: 'uxc:pass:' + date },
+  ]] };
+  await sendTelegramGroup('👆 이 UX 사례 큐레이션', uxKb);
+  console.log(`[UX auto-send] ${date} ${dowKR} ${technique} → 단톡방 직접 발송 + 버튼 + 시트 sent`);
 }
 
 async function uxSendFlow() {
