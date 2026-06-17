@@ -441,6 +441,19 @@ function doPost(e) {
     if (action === 'append_clarity_daily') { // 클러리티 숫자 추세 날짜별 upsert (협상카드용)
       return jsonOut(appendClarityDaily_(contents));
     }
+    if (action === 'backfill_cx_after') { // 완료인데 Before만 있고 After 빈 항목 → 현재 전환율로 채움(협상카드 빈칸 메움)
+      var _bs = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+      var _af = currentConvLabel_('(완료시점·자동backfill)');
+      var _n = 0;
+      [_bs.getSheetByName('🛠 개입기록'), _bs.getSheetByName('✅ 완료_아카이브')].forEach(function (sh) {
+        if (!sh || sh.getLastRow() < 2) return;
+        var d = sh.getDataRange().getValues();
+        for (var i = 1; i < d.length; i++) {
+          if (String(d[i][7]) === '완료' && String(d[i][4]).trim() && !String(d[i][5]).trim()) { sh.getRange(i + 1, 6).setValue(_af); _n++; }
+        }
+      });
+      return jsonOut({ ok: true, filled: _n, after: _af });
+    }
     if (action === 'run_heartbeat') { return jsonOut(cxHeartbeat(true)); } // 수동 테스트(OK여도 발송)
     if (action === 'setup_heartbeat') { // 매일 10:30 헬스체크 트리거 등록 (중복 제거 후)
       ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'cxHeartbeat') ScriptApp.deleteTrigger(t); });
@@ -1958,6 +1971,17 @@ function cxSourceTag_(area) {
 
 // 개입기록 항목 판정 변경 (키워드 부분매칭). /끝(완료)·/보류 공용. 완료된 건 제외하고 검색.
 // 1개 매칭 → 변경, 여러 개 → multi:true로 후보 반환(사용자가 더 구체적으로), 0개 → error.
+// 현재(최신 주간) 전환율 라벨 — Before/After 자동 채움 공용
+function currentConvLabel_(suffix) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var ws = ss.getSheetByName('주간_요약');
+  if (!ws || ws.getLastRow() < 2) return '';
+  var hdr = ws.getRange(1, 1, 1, ws.getLastColumn()).getValues()[0];
+  var ci = hdr.indexOf('전환율');
+  if (ci < 0) return '';
+  var last = ws.getRange(ws.getLastRow(), 1, 1, ws.getLastColumn()).getValues()[0];
+  return '전환율 ' + last[ci] + '% ' + (suffix || '');
+}
 function setCxVerdictByKeyword_(keyword, verdict, after) {
   var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
   var iv = ss.getSheetByName('🛠 개입기록');
@@ -1972,8 +1996,15 @@ function setCxVerdictByKeyword_(keyword, verdict, after) {
   if (matches.length === 0) return { ok: false, error: '"' + keyword + '" 매칭 없음 — /콕핏 으로 항목 확인' };
   if (matches.length > 1) return { ok: false, multi: true, matches: matches };
   iv.getRange(matches[0].row, 8).setValue(verdict);
-  if (after) iv.getRange(matches[0].row, 6).setValue(after); // After(지표) 칼럼 — 협상카드 Before/After
-  return { ok: true, content: matches[0].content };
+  var af = after;
+  if (verdict === '완료') {
+    // After 미입력 → 완료시점 전환율 자동(Before와 동일 지표로 쌍 완성, 협상카드 빈칸 방지)
+    if (!af) af = currentConvLabel_('(완료시점·자동, 정확지표 권장)');
+    if (af) iv.getRange(matches[0].row, 6).setValue(af);
+  } else if (after) {
+    iv.getRange(matches[0].row, 6).setValue(after);
+  }
+  return { ok: true, content: matches[0].content, after: af, autoAfter: !after && !!af };
 }
 
 // /끝·/완료(텍스트) 공용 완료 처리. "앵커 = 3.2%" → 키워드=앵커, After=3.2%. ONE THING이면 자동 클리어.
@@ -1987,7 +2018,7 @@ function handleCxDone_(chatId, arg) {
     var ot = props.getProperty('EUNWOO_ONE_THING') || '';
     if (ot && (ot.indexOf(kw) >= 0 || (er.content && (er.content.indexOf(ot) >= 0 || ot.indexOf(er.content) >= 0)))) props.deleteProperty('EUNWOO_ONE_THING'); // 완료한 게 ONE THING이면 비움
     refreshCockpit_();
-    sendTGMessage(chatId, '✅ 완료 — 콕핏 갱신.\n· ' + er.content + (after ? '\n· After: ' + after + ' (협상카드 반영)' : '\n💡 수치 있으면 「/끝 ' + kw + ' = 3.2%」처럼 = 뒤에 적으면 협상카드에 자동'));
+    sendTGMessage(chatId, '✅ 완료 — 콕핏 갱신.\n· ' + er.content + (er.after ? '\n· After: ' + er.after + (er.autoAfter ? '\n💡 자동(전환율 proxy) — 정확한 지표 있으면 「/끝 ' + kw + ' = 값」으로 다시' : ' (협상카드 반영)') : ''));
   } else if (er.multi) sendTGMessage(chatId, '⚠️ 여러 개 매칭 — 더 구체적으로:\n' + er.matches.map(function (x) { return '· ' + x.content; }).join('\n'));
   else sendTGMessage(chatId, '⚠️ ' + er.error);
 }
