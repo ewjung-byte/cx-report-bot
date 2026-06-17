@@ -441,6 +441,12 @@ function doPost(e) {
     if (action === 'append_clarity_daily') { // 클러리티 숫자 추세 날짜별 upsert (협상카드용)
       return jsonOut(appendClarityDaily_(contents));
     }
+    if (action === 'run_heartbeat') { return jsonOut(cxHeartbeat(true)); } // 수동 테스트(OK여도 발송)
+    if (action === 'setup_heartbeat') { // 매일 10:30 헬스체크 트리거 등록 (중복 제거 후)
+      ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'cxHeartbeat') ScriptApp.deleteTrigger(t); });
+      ScriptApp.newTrigger('cxHeartbeat').timeBased().atHour(10).nearMinute(30).everyDays(1).create();
+      return jsonOut({ ok: true, scheduled: 'daily ~10:30' });
+    }
     if (action === 'get_clarity_latest') { // 📹클러리티_일별 최신행 (리포트가 API 재호출 대신 읽음 — 한도 절약)
       var _cs = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID).getSheetByName('📹 클러리티_일별');
       if (!_cs || _cs.getLastRow() < 2) return jsonOut({ ok: true, row: null });
@@ -2711,6 +2717,32 @@ function appendClarityDaily_(c) {
   }
   t.appendRow(vals);
   return { ok: true, appended: today };
+}
+
+// ===== 🩺 헬스체크 (무인 침묵실패 감지) — report.js(Actions)와 독립된 GAS 트리거 =====
+// 시트 최신행 날짜를 yyyy-MM-dd 문자열로 (Date·"M/d"·"yyyy-MM-dd~" 모두 처리). TZ 안전 위해 문자열 비교.
+function lastRowDateStr_(sheet, col) {
+  if (!sheet || sheet.getLastRow() < 2) return null;
+  var v = sheet.getRange(sheet.getLastRow(), col + 1).getValue();
+  if (Object.prototype.toString.call(v) === '[object Date]') return Utilities.formatDate(v, 'Asia/Seoul', 'yyyy-MM-dd');
+  var s = String(v).split('~')[0].trim().replace(/\./g, '-');
+  if (/^\d{1,2}\/\d{1,2}$/.test(s)) { var p = s.split('/'); return (new Date()).getFullYear() + '-' + ('0' + p[0]).slice(-2) + '-' + ('0' + p[1]).slice(-2); }
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  return null;
+}
+// force=true면 OK여도 결과 발송(수동 테스트). 스케줄(force=false)은 문제 있을 때만 발송(노이즈 X).
+function cxHeartbeat(force) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var ymd = function (off) { return Utilities.formatDate(new Date(Date.now() - off * 86400000), 'Asia/Seoul', 'yyyy-MM-dd'); };
+  var yday = ymd(1);
+  var issues = [];
+  var snapStr = lastRowDateStr_(ss.getSheetByName('일별_스냅샷'), 0);   // 리포트 성공 시 어제 날짜
+  if (!snapStr || snapStr < yday) issues.push('일간 리포트 미갱신 (일별_스냅샷 최근 ' + (snapStr || '없음') + ') → report.js GitHub Actions 점검');
+  var clrStr = lastRowDateStr_(ss.getSheetByName('📹 클러리티_일별'), 0); // 루틴 성공 시 오늘 날짜
+  if (!clrStr || clrStr < yday) issues.push('클러리티 자동수집 미갱신 (📹클러리티_일별 최근 ' + (clrStr || '없음') + ') → 데스크탑 스케줄러/Clarity토큰 점검');
+  if (issues.length) sendTGMessage(EUNWOO_CHAT_ID, '🩺 <b>봇 헬스체크 경고</b>\n' + issues.map(function (x) { return '⚠️ ' + x; }).join('\n'));
+  else if (force) sendTGMessage(EUNWOO_CHAT_ID, '🩺 헬스체크 OK\n· 리포트 최근 ' + snapStr + '\n· 클러리티 최근 ' + clrStr);
+  return { ok: true, issues: issues, snap: snapStr, clr: clrStr };
 }
 
 // ===== 외부 cron 핑거: GAS 시간 트리거 -> GitHub Actions 강제 실행 =====
