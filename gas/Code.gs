@@ -426,6 +426,25 @@ function doPost(e) {
     if (action === 'get_eunwoo_memo') {
       return jsonOut({ ok: true, memo: readEunwooCompassMemo_() });
     }
+    if (action === 'set_clarity_memo') { // 클러리티 자동요약 적재 (이전 [클러리티] 줄만 갈아끼움)
+      var _cp = PropertiesService.getScriptProperties();
+      var _curM = (_cp.getProperty('EUNWOO_MEMO') || '').split('\n');
+      var _keptM = _curM.filter(function (l) { return l.trim() && l.indexOf('[클러리티') < 0; });
+      var _newM = (contents.lines || []).map(function (s) { return String(s).trim(); }).filter(Boolean);
+      _cp.setProperty('EUNWOO_MEMO', _keptM.concat(_newM).join('\n'));
+      refreshCockpit_();
+      return jsonOut({ ok: true, added: _newM.length, kept: _keptM.length });
+    }
+    if (action === 'append_clarity_candidates') { // 클러리티 패턴→액션 후보 (내용만 중복방지: 진행중이면 skip, 완료재발은 재등록)
+      return jsonOut(appendClarityCandidates_(contents));
+    }
+    if (action === 'append_clarity_daily') { // 클러리티 숫자 추세 날짜별 upsert (협상카드용)
+      return jsonOut(appendClarityDaily_(contents));
+    }
+    if (action === 'set_cx_today_actions') { // 일간 DM 액션 목록 저장 (나중에 버튼 콜백이 인덱스로 조회)
+      PropertiesService.getScriptProperties().setProperty('CX_TODAY_ACTIONS', JSON.stringify(contents.actions || []));
+      return jsonOut({ ok: true, n: (contents.actions || []).length });
+    }
     if (action === 'get_eunwoo_row') {
       return jsonOut(getEunwooCompassRow_());
     }
@@ -548,6 +567,23 @@ function doPost(e) {
     if (action === 'list_sheets') {
       var lss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
       return jsonOut({ ok: true, sheets: lss.getSheets().map(function(s){ return { name: s.getName(), gid: s.getSheetId() }; }) });
+    }
+    if (action === 'delete_sheet') { // 탭 삭제 (정확한 이름 1개씩, 비어있을 때만 — 안전장치)
+      var dss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+      var sh = dss.getSheetByName(contents.name);
+      if (!sh) return jsonOut({ ok: false, error: '없는 탭: ' + contents.name });
+      if (sh.getLastRow() > 1 && !contents.force) return jsonOut({ ok: false, error: '데이터 있음(force 필요): ' + contents.name + ' 행' + sh.getLastRow() });
+      dss.deleteSheet(sh);
+      return jsonOut({ ok: true, deleted: contents.name });
+    }
+    if (action === 'sheets_audit') {
+      var ass = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+      return jsonOut({ ok: true, sheets: ass.getSheets().map(function (s) {
+        var lr = s.getLastRow(), lc = s.getLastColumn();
+        var hdr = lr >= 1 ? s.getRange(1, 1, 1, Math.min(lc, 8)).getValues()[0].join(' | ') : '';
+        var last = lr >= 2 ? String(s.getRange(lr, 1).getValue()) : '';
+        return { name: s.getName(), rows: lr, cols: lc, header: hdr, lastA: last };
+      }) });
     }
     return jsonOut({ok: false, error: 'unknown action'});
   } catch(err) {
@@ -1295,6 +1331,20 @@ function handleCallbackQuery(query) {
     if (parts[1] === 'send') { handleUXSend(chatId); label = '단톡방+케이스북 📚'; }
     else if (parts[1] === 'skip') { handleUXSkip(chatId, null); label = '패스 ✕'; }
     else return;
+  } else if (parts[0] === 'cxa') {
+    // 일간 DM 액션 3버튼: T=오늘 액션(착수→진행중) · L=나중에(백로그) · P=패스(무시)
+    var mode = parts[1], idx = parseInt(parts[2]);
+    if (mode === 'P') { label = '패스 ✕'; }
+    else {
+      var arr = [];
+      try { arr = JSON.parse(PropertiesService.getScriptProperties().getProperty('CX_TODAY_ACTIONS') || '[]'); } catch (e) {}
+      var act = arr[idx];
+      if (act) {
+        var clean = String(act).replace(/^[^\w가-힣]+/, '').trim(); // 앞 이모지 제거
+        addCxStart_(clean, 'CX', mode === 'T' ? '착수' : '백로그'); refreshCockpit_();
+        label = mode === 'T' ? '오늘 착수 ✅ (콕핏 진행중)' : '나중에 📋 (콕핏 나중에)';
+      } else { label = '항목 만료 — 새 리포트에서 다시'; }
+    }
   } else {
     return;
   }
@@ -2588,6 +2638,47 @@ function appendCxCandidates_(payload) {
     seen[key] = true; added++;
   });
   return { ok: true, added: added };
+}
+
+// 클러리티 패턴→액션 후보 적재. 중복방지=개입내용 텍스트(날짜 무시). 진행 중(후보/착수/진행중/보류/백로그)이면 skip,
+// 완료(✅)된 액션이 재발하면 다시 후보로 올림(회귀 신호). area='클러리티' → 콕핏 [클러리티] 태그.
+function appendClarityCandidates_(payload) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var t = ensureSheetWithHeaders_(ss, '🛠 개입기록', ['날짜', '영역', '개입내용', '맥락(휴무/공구/광고)', 'Before(지표)', 'After(지표)', '측정단위', '판정']);
+  var data = t.getDataRange().getValues();
+  var active = {};
+  for (var i = 1; i < data.length; i++) {
+    var st = String(data[i][7] || '');
+    if (st.indexOf('완료') < 0 && st.indexOf('✅') < 0) active[String(data[i][2]).trim()] = true;
+  }
+  var today = Utilities.formatDate(new Date(), 'Asia/Seoul', 'M/d');
+  var added = 0, skipped = 0;
+  (payload.rows || []).forEach(function (r) {
+    var act = String(r.action || '').trim();
+    if (!act) return;
+    if (active[act]) { skipped++; return; }
+    t.appendRow([today, '클러리티', act, String(r.context || ''), '', '', '', '후보']);
+    active[act] = true; added++;
+  });
+  if (added) refreshCockpit_();
+  return { ok: true, added: added, skipped: skipped };
+}
+
+// 클러리티 인앱 막힘신호 날짜별 upsert. 인스타 인앱(광고유입 78%) 결제막힘 추세 = 개입 전후 효과 = 협상카드.
+function appendClarityDaily_(c) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var t = ss.getSheetByName('📹 클러리티_일별') || ss.insertSheet('📹 클러리티_일별');
+  var hdr = ['날짜', '인앱_세션', '인앱_데드클릭%', '인앱_빠른뒤로%', '인앱_분노클릭%', '인앱_스크롤깊이'];
+  t.getRange(1, 1, 1, hdr.length).setValues([hdr]);
+  var n = function (v) { return v === 0 ? 0 : (v || ''); };
+  var today = Utilities.formatDate(new Date(), 'Asia/Seoul', 'M/d');
+  var vals = [today, n(c.inappSessions), n(c.inappDeadPct), n(c.inappQuickbackPct), n(c.inappRagePct), n(c.inappScrollDepth)];
+  var data = t.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === today) { t.getRange(i + 1, 1, 1, vals.length).setValues([vals]); return { ok: true, upserted: today }; }
+  }
+  t.appendRow(vals);
+  return { ok: true, appended: today };
 }
 
 // ===== 외부 cron 핑거: GAS 시간 트리거 -> GitHub Actions 강제 실행 =====

@@ -1152,6 +1152,13 @@ async function getClarityData() {
       normalPct: P(bN('SamsungInternet') + bN('ChromeMobile') + bN('MobileSafari')),
       mobilePct: P(dN('Mobile')), pcPct: P(dN('PC')),
     };
+    // 인앱(InstagramApp) 막힘신호 — Browser 분해 (클러리티 아침 루틴과 동일 소스). 리포트 사이트 섹션에 반영.
+    try {
+      const bd = await fetchJson(`https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${CLARITY_PROJECT_ID}&dimension1=Browser`, { 'Authorization': `Bearer ${clarityToken}` });
+      const pick = (m) => (bd.find(x => x.metricName === m)?.information || []).find(e => e.Browser === 'InstagramApp');
+      const dd = pick('DeadClickCount'), qq = pick('QuickbackClick');
+      if (dd || qq) env.inapp = { deadPct: dd?.sessionsWithMetricPercentage ?? null, quickbackPct: qq?.sessionsWithMetricPercentage ?? null, sessions: dd ? parseInt(dd.sessionsCount) : null };
+    } catch (e) { /* 인앱 분해 실패해도 리포트는 진행 */ }
     const popularPages = get('PopularPages')?.information || [];
     const topPages = get('PageTitle')?.information || [];
     const getVisits = (kw) => parseInt(popularPages.find(p=>p.url?.includes(kw))?.visitsCount||0);
@@ -1618,24 +1625,64 @@ const PROMO_SCHEDULE = [
   { title: '유나레시피 공구 (클래식 바질 #88)', productNo: '88', start: '2026-07-08', end: '2026-07-11' },
 ];
 
-// 활성·예정 공구 목록 (오늘 기준 진행 중 또는 30일 이내 시작 예정)
-function getActivePromos() {
+// 공구+광고 일정 = 실무대시보드 "📢 공구&광고" 탭 (SSOT, 사용자가 직접 유지). 실패 시 PROMO_SCHEDULE 폴백.
+// 공구(🟠)=공동구매 할인·기간·큰 spike / 광고(🔵)=인플루언서 PPL·시딩(단발, 게시일 효과 ~2일).
+const PRACTICAL_SHEET_ID = '1r_mmqF46EcOvZDMdqRsmngL26zFZBYJ_vm92ZGiLtLE';
+// 상품 풀네임 → 짧은 이름 (바질페스토·양면팬 등)
+function shortProduct(name) {
+  const s = String(name || '');
+  if (/바질|페스토/.test(s)) return '바질페스토';
+  if (/양면|팬|그릴/.test(s)) return '양면팬';
+  if (/파스타/.test(s)) return '파스타';
+  if (/룽고|파네/.test(s)) return '파네룽고';
+  if (/올리브|EVOO|오일|롤리오/i.test(s)) return '올리브유';
+  return s.replace(/이태리정미소\s*/g, '').split(/\s+/).slice(0, 2).join(' ').trim();
+}
+async function fetchPromoSchedule() {
+  try {
+    const token = await getGA4Token();
+    if (!token) return null;
+    const j = await fetchJson(`https://sheets.googleapis.com/v4/spreadsheets/${PRACTICAL_SHEET_ID}/values/${encodeURIComponent('📢 공구&광고')}?majorDimension=ROWS`, { 'Authorization': 'Bearer ' + token });
+    const norm = d => String(d || '').trim().replace(/\./g, '-').replace(/-+$/, '');
+    const out = [];
+    (j.values || []).forEach(row => {
+      const type = String(row[1] || '');
+      const isGongu = type.includes('공구'), isAd = type.includes('광고');
+      if (!isGongu && !isAd) return;
+      const start = norm(row[2]); if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return;
+      let end = norm(row[3]); if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) end = start;
+      const who = String(row[4] || '').replace(/\s*공구\s*$/, '').trim();
+      const prod = shortProduct(row[5]);
+      const productNo = String(row[18] || '').trim(); // 🔢 상품번호 열
+      out.push({ type: isGongu ? '공구' : '광고', start, end, who, prod, productNo, title: `${who}${prod ? ' ' + prod : ''}`.trim() || (isGongu ? '공구' : '광고') });
+    });
+    return out.length ? out : null;
+  } catch (e) { console.error('[공구광고 시트] 읽기 실패:', e.message); return null; }
+}
+
+// 활성·예정 공구/광고 목록 (오늘 기준 진행 중 또는 30일 이내 시작 예정). schedule 없으면 PROMO_SCHEDULE 폴백.
+function getActivePromos(schedule) {
+  const list = (schedule && schedule.length) ? schedule : PROMO_SCHEDULE.map(p => ({ ...p, type: '공구' }));
   const t0 = new Date(); t0.setHours(0, 0, 0, 0);
   const out = [];
-  PROMO_SCHEDULE.forEach(p => {
+  list.forEach(p => {
     const startD = new Date(p.start + 'T00:00:00');
-    const endD = new Date(p.end + 'T00:00:00');
+    if (isNaN(startD)) return;
+    let effEnd = new Date((p.end || p.start) + 'T00:00:00');
+    if (p.type === '광고') { effEnd = new Date(startD); effEnd.setDate(effEnd.getDate() + 2); } // PPL 효과 게시일+2일
     const dToStart = Math.ceil((startD - t0) / 86400000);
-    const dToEnd = Math.ceil((endD - t0) / 86400000);
-    if (dToEnd < 0) return; // 종료된 공구
+    const dToEnd = Math.ceil((effEnd - t0) / 86400000);
+    if (dToEnd < 0) return; // 끝남
     if (dToStart > 30) return; // 30일 이상 미래 제외
+    const active = dToStart <= 0 && dToEnd >= 0;
     let dDay;
     if (dToStart > 0) dDay = `시작 D-${dToStart} (${p.start})`;
+    else if (p.type === '광고') dDay = active ? `게시 (${p.start})` : `~${p.start}`;
     else if (dToEnd > 0) dDay = `종료 D-${dToEnd} (~${p.end})`;
     else dDay = `오늘 종료 (${p.end})`;
-    out.push({ ...p, dToStart, dToEnd, dDay, active: dToStart <= 0 && dToEnd >= 0 });
+    out.push({ ...p, dToStart, dToEnd, dDay, active });
   });
-  // 활성 먼저, 그 다음 가까운 예정 순
+  // 활성 먼저, 그 다음 가까운 순
   return out.sort((a, b) => (b.active - a.active) || (a.dToStart - b.dToStart));
 }
 
@@ -1936,13 +1983,15 @@ ${activitiesText}
 [단톡방 (24h)]
 ${chatText}
 
-요청 — ⚠️단톡방 'CX 일간' 리포트와 중복 금지 (게스트 후크·공구 점검·휴면 리마인드처럼 매일 반복되는 주제는 단톡방이 이미 다룸. 여긴 은우 전용):
-- ① 콕핏 '진행중' 개입과 관련된 지표 변화 — 개입이 숫자를 움직이고 있는지 (Before/After 신호). 변화 없으면 "아직 변화 없음"도 정보.
+요청 — ⚠️중복 절대 금지. 아래 "매일 나오는 주제"는 단톡방 리포트가 이미 다루니 **여기 쓰지 마**:
+매출 증감·게스트 비중·게스트→회원 후크·휴면 리마인드·공구 점검·재구매율·인앱 결제·결제수단 분포.
+여긴 은우 전용 — 이것만:
+- ① 콕핏 '진행중' 개입의 Before/After 변화 (개입이 숫자를 움직였나/아직인가). 이게 제일 중요.
 - ② 단톡방에 쓰기 애매한 내부 판단 (팀·채널·측정 공백·미주 영역 관찰)
-- ③ 어제 없던 새 신호
-해당 없는 항목은 생략. 억지로 채우지 마.
+- ③ 어제 없던 진짜 새 신호 (위 매일 주제 제외)
+★ 위 3개 중 진짜 쓸 게 없으면 **정확히 "오늘 은우 전용 특이사항 없음" 한 줄만** 출력. 억지로 채우거나 매일 주제 반복하면 안 됨.
 
-5줄 이내, 마크다운 X, 짧은 문단으로.`;
+최대 3줄, 마크다운 X.`;
 
   try {
     const res = await postJson('api.anthropic.com', '/v1/messages',
@@ -2027,14 +2076,12 @@ function buildDataHealthWarnings(d) {
   if (!dailyOrders || dailyOrders.totalCount === 0) {
     w.push('🚨 카페24 주문 0건 — fetch 실패 또는 진짜 0건. 토큰·VPS 확인');
   }
-  // ⑦ 공구 active인데 매출 0
+  // ⑦ 진짜 진행중 공구(productNo 있는 것)인데 그 상품 매출 0 — 광고·미래 예정은 제외
   if (promos && cafe24?.byProduct) {
     promos.forEach(p => {
-      if (p.status === 'active' || (p.dDay || '').includes('D-')) {
+      if (p.active && p.type === '공구' && p.productNo) {
         const sale = cafe24.byProduct[p.productNo];
-        if (!sale || !sale.amount) {
-          w.push(`${p.title} active인데 매출 0 — 발행/링크/재고 확인`);
-        }
+        if (!sale || !sale.amount) w.push(`${p.title} 공구 진행중인데 매출 0 — 발행/링크/재고 확인`);
       }
     });
   }
@@ -2151,7 +2198,7 @@ async function dailyReport() {
     fetchSongmamansContext(),
     getClarityPageStats(1),
   ]);
-  const promos = getActivePromos(); // 공구·콜라보 활성/예정 일정 (sync — 메모리에서 즉시 로드)
+  const promos = getActivePromos(await fetchPromoSchedule()); // 공구+광고 일정 (실무대시보드 시트 SSOT, 실패시 PROMO_SCHEDULE 폴백)
   // pageStats = { byUrl: { url: {dead, quick, scroll, sessions} }, friction: [...top1] }
   if (segments) segments = await enrichGuestSegmentsWithCRM(segments);
 
@@ -2173,28 +2220,25 @@ async function dailyReport() {
   if (clarity) {
     const e = clarity.env || {};
     const inappPct = e.inAppMetaPct != null ? e.inAppMetaPct : parseFloat(clarity.instagramPct || 0);
-    healthSection = `방문환경 (${clarity.totalSessions}세션 · 📱모바일 ${e.mobilePct || 0}%·💻PC ${e.pcPct || 0}%)`;
-    healthSection += `\n· 메타 인앱(인스타+페북) ${inappPct}%${inappPct >= 50 ? ' ⚠️' : ''} 간편결제 깨짐 환경`;
-    healthSection += `\n· 정상 브라우저 ${e.normalPct || 0}% (삼성 ${e.samsungPct || 0}·크롬 ${e.chromeMPct || 0}·사파리 ${e.safariMPct || 0})`;
+    healthSection = `방문환경 ${clarity.totalSessions}세션 · 📱${e.mobilePct || 0}% · 💻${e.pcPct || 0}%`;
+    healthSection += `\n· 인스타 인앱 ${inappPct}%${inappPct >= 50 ? ' ⚠️' : ''}${e.inapp ? ` · 인앱 데드클릭 ${e.inapp.deadPct}%·빠른뒤로 ${e.inapp.quickbackPct}%` : ''}`;
+    healthSection += `\n· 정상 브라우저 ${e.normalPct || 0}% (인앱=간편결제 취약 환경)`;
     // 💳 결제수단 분포 (cafe24 raw — GA4 funnel보다 정확. 실주문 기준)
     if (dailyOrders?.payMethods) {
       const pm = dailyOrders.payMethods;
       const tot = pm.자체결제 + pm.네이버페이 + pm.카카오페이 + pm.기타간편;
       if (tot > 0) {
         const pct = v => Math.round(v / tot * 100);
-        healthSection += `\n💳 결제수단 (${tot}건) · 회원 ${pct(pm.회원)}% / 비회원 ${pct(pm.비회원)}%`;
-        healthSection += `\n· 자체결제(결제창) ${pct(pm.자체결제)}% — 회원 ${pm.자체_회원}·게스트 ${pm.자체_게스트}`;
-        if (pm.네이버페이) healthSection += `\n· 네이버페이 ${pct(pm.네이버페이)}% — 외부주문형 ${pm.네이버_외부}(게스트)·결제창버튼 ${pm.네이버_버튼}`;
-        if (pm.카카오페이) healthSection += `\n· 카카오 ${pct(pm.카카오페이)}% — 톡체크아웃 ${pm.카카오_외부}(게스트)·결제창버튼 ${pm.카카오_버튼}`;
-        if (pm.기타간편) healthSection += `\n· 기타간편 ${pct(pm.기타간편)}%`;
+        const mix = [];
+        if (pm.네이버페이) mix.push(`네이버페이 ${pct(pm.네이버페이)}%`);
+        if (pm.카카오페이) mix.push(`카카오 ${pct(pm.카카오페이)}%`);
+        if (pm.자체결제) mix.push(`자체결제 ${pct(pm.자체결제)}%`);
+        if (pm.기타간편) mix.push(`기타 ${pct(pm.기타간편)}%`);
+        healthSection += `\n\n💳 결제 ${tot}건 · 회원 ${pct(pm.회원)}% : 비회원 ${pct(pm.비회원)}%`;
+        healthSection += `\n· ${mix.join(' · ')}`;
         const extGuest = pm.네이버_외부 + pm.카카오_외부;
-        if (pm.비회원 > 0 && extGuest > 0) healthSection += `\n★ 비회원의 핵심=외부 간편결제 ${extGuest}건(회원가입 미발생) → 게스트→회원 후크 타깃`;
+        if (pm.비회원 > 0 && extGuest > 0) healthSection += `\n· ★ 비회원 ${extGuest}건 = 외부 간편결제(회원가입 0) → 게스트→회원 후크 타깃`;
       }
-    }
-    if (ga4Daily?.checkoutFunnel) {
-      const cf = ga4Daily.checkoutFunnel;
-      const dropPct = cf.addToCart > 0 ? ((cf.addToCart - cf.beginCheckout) / cf.addToCart * 100) : 0;
-      healthSection += `\nGA4 퍼널(참고용): 장바구니 ${cf.addToCart} → 진입 ${cf.beginCheckout} — ⚠️측정착시(외부간편결제·인앱 begin_checkout 누락). 실결제는 위 결제수단 기준`;
     }
     // 진짜 막힘 페이지만 (friction 함수가 이미 DeadClick 기반 필터링하는 곳에서)
     if (pageStats?.friction?.length) {
@@ -2338,7 +2382,17 @@ async function dailyReport() {
   // 🆕 상품 별 매출 (라벨 변경) + 공구 일정 별도 섹션 분리
   let promoScheduleSection = '';
   if (promos && promos.length) {
-    promoScheduleSection = `\n\n📅 <b>공구 일정</b>\n${promos.map(p => `${p.title} — ${p.dDay}`).join('\n')}`;
+    const md = d => { const m = String(d || '').match(/\d{4}-(\d{2})-(\d{2})/); return m ? `${+m[1]}/${+m[2]}` : ''; };
+    const fmtPromo = p => {
+      const emoji = p.type === '광고' ? '🔵' : '🟠';
+      const when = p.type === '광고' ? md(p.start) : `${md(p.start)}~${md(p.end)}`;
+      let tag;
+      if (p.dToStart > 0) tag = `D-${p.dToStart}`;
+      else if (p.active) tag = (p.type === '공구' && p.dToEnd > 0) ? `진행중 ~${md(p.end)}` : '진행중';
+      else tag = '';
+      return `${emoji} ${p.type} · ${p.title} — ${when}${tag ? ` (${tag})` : ''}`;
+    };
+    promoScheduleSection = `\n\n📅 <b>공구·광고 일정</b>\n${promos.map(fmtPromo).join('\n')}`;
   }
   // productSalesSection에서 공구 일정 prepend 제거 — 따로 분리됐으니
   let productSalesOnly = '데이터 없음';
@@ -2357,21 +2411,56 @@ async function dailyReport() {
     }
   }
 
-  // 🎯 오늘 할 것 — 레버 데이터에서 규칙으로 액션 도출 (측정값 직결, Claude 판단의 안전판).
-  // 데이터→행동 루프: 각 줄이 "지표 → 바꿀 행동". 행동하면 그 지표가 다음날 바뀌어야 함.
+  // 🎯 오늘 할 것 — "오늘 데이터에서 변하는 신호"만. 구조 레버(게스트→회원·휴면윈백)는
+  // 콕핏 진행중에 상주하므로 여기서 매일 반복하지 않음(같은 줄 ⏳N일째 나가는 노이즈 제거).
   const dailyActions = [];
-  if (segments && segments.guest && segments.totalOrders) {
-    const gShare = (segments.guest.newCount + segments.guest.repeatCount) / Math.max(segments.totalOrders, 1);
-    if (gShare >= 0.35) dailyActions.push(`👤 게스트 ${Math.round(gShare * 100)}% → 결제완료에 회원전환 쿠폰+친추 후크 (재구매 추적 가능하게)`);
+
+  // (1) 공구·광고 맥락 — 오늘 매출을 어떻게 읽을지 (상태가 매일 달라 자동 변동)
+  const activeGongu = promos && promos.find(p => p.active && p.type === '공구');
+  const activeAd = promos && promos.find(p => p.active && p.type === '광고');
+  const nextP = promos && promos.find(p => !p.active && p.dToStart > 0);
+  if (activeGongu && activeGongu.dToEnd <= 2) {
+    dailyActions.push(`📅 ${activeGongu.title} 공구 종료 D-${activeGongu.dToEnd} → 종료 후 매출 방어 시퀀스(구매자 정가 SKU 쿠폰) 준비`);
+  } else if (activeAd) {
+    dailyActions.push(`🔵 ${activeAd.title} 광고(PPL) 효과일 — 오늘 매출엔 광고 유입 포함(순수 baseline 아님). 유입→구매 전환 점검`);
+  } else if (!activeGongu) {
+    dailyActions.push(`📉 공구·광고 공백${nextP ? ` (다음 ${nextP.type} D-${nextP.dToStart})` : ''} → 오늘=순수 평상시 baseline. 공백 메울 CRM/콘텐츠 1개`);
   }
-  if (ltvForReport && ltvForReport.휴면_91_180d >= 400) {
-    dailyActions.push(`🔁 휴면 ${ltvForReport.휴면_91_180d}명 → 소비주기(20일) 기반 레시피 리마인드 (할인 X·레시피 O)`);
+
+  // (2) 상품 과의존 — 톱 SKU 비중 (어느 상품·몇 %인지가 매일 달라짐)
+  if (cafe24 && cafe24.byProduct) {
+    const all = Object.values(cafe24.byProduct).filter(v => v.count > 0).sort((a, b) => b.amount - a.amount);
+    const tot = all.reduce((s, p) => s + p.amount, 0);
+    if (all.length && tot > 0) {
+      const top = all[0], share = Math.round(top.amount / tot * 100);
+      if (share >= 40) {
+        const id = String(top.productNo), nm = PRODUCT_NAME[id] || `#${id}`;
+        dailyActions.push(`🎯 매출 ${share}%가 ${nm} 하나 — 2위 상품 노출·번들로 분산 (단일 SKU 리스크)`);
+      }
+    }
   }
-  if (promos && promos.length) {
-    const soon = promos.find(p => /D-[0-3]\b/.test(p.dDay || ''));
-    if (soon) dailyActions.push(`📅 ${soon.title} ${soon.dDay} → 발행·링크·재고 점검`);
+
+  // (3) 인스타 인앱 결제 누수 (검증된 상시 이슈) — 비중 높은 날 환기
+  if (inappPct >= 25) {
+    dailyActions.push(`📱 인스타 인앱 ${inappPct}% — 구매하기 Dead click·간편결제 핸드오프 깨짐(녹화 검증). 외부브라우저 배너/카드결제 우선 검토`);
   }
-  const actionSection = dailyActions.length ? `\n\n🎯 <b>오늘 할 것</b>\n${dailyActions.join('\n')}` : '';
+
+  // (4) 공구 임박 점검
+  const soon = promos && promos.find(p => p.dToStart >= 0 && p.dToStart <= 3);
+  if (soon) dailyActions.push(`🗓 ${soon.title} 시작 D-${soon.dToStart} → 발행·링크·재고 점검`);
+
+  // 오늘 액션 = 은우 개인 DM에만(단톡방 중복 제거). 번호 + 3버튼(오늘/나중에/패스)으로 콕핏 연결.
+  const dmActions = dailyActions.slice(0, 3);
+  const actionSection = dmActions.length
+    ? `\n\n🎯 <b>오늘 액션</b> (버튼으로 콕핏에)\n${dmActions.map((a, i) => `${i + 1}. ${a}`).join('\n')}\n· (게스트→회원·휴면윈백 등 구조 레버는 콕핏 진행중 참조)`
+    : '';
+  const actionKeyboard = dmActions.length ? {
+    inline_keyboard: dmActions.map((a, i) => [
+      { text: `${i + 1} ✅오늘`, callback_data: `cxa:T:${i}` },
+      { text: '📋나중에', callback_data: `cxa:L:${i}` },
+      { text: '✕패스', callback_data: `cxa:P:${i}` },
+    ])
+  } : null;
   // 🤖 CX 판단 — Claude 인사이트 1개를 본문에 통합 (별도 발송하면 묻힘). 실발송엔 채워지고 DRY_RUN(로컬 키 X)만 빔.
   const analysisSection = analysis ? `\n\n🤖 <b>CX 판단</b>\n${analysis}` : '';
 
@@ -2386,7 +2475,7 @@ ${healthSection}${inappNotice}${checkoutSection}${productPageSection}
 ${retentionSection}${ltvSection}${segmentSalesSection}
 
 🛍️ <b>상품 별 매출</b> (상품금액·배송비 제외)
-${productSalesOnly}${promoScheduleSection}${actionSection}${analysisSection}`;
+${productSalesOnly}${promoScheduleSection}${analysisSection}`;
 
   const analysisMsg = analysis ? `🤖 <b>CX 판단</b>\n${analysis}` : null;
 
@@ -2454,13 +2543,13 @@ ${productSalesOnly}${promoScheduleSection}${actionSection}${analysisSection}`;
   let alertAges = {};
   if (!DRY_RUN) {
     try {
-      const ar = await postToAppsScript({ action: 'track_alert_ages', keys: [...dailyActions, ...warnings].map(alertKey) }, APPS_SCRIPT_URL);
+      const ar = await postToAppsScript({ action: 'track_alert_ages', keys: warnings.map(alertKey) }, APPS_SCRIPT_URL);
       alertAges = ar?.ages || {};
     } catch (e) { console.error('[경고 에이징]', e.message); }
   }
   const withAge = (s) => { const a = alertAges[alertKey(s)]; return a >= 2 ? `${s} ⏳${a}일째` : s; };
   let msgToSend = msg;
-  dailyActions.forEach(a => { const t = withAge(a); if (t !== a) msgToSend = msgToSend.replace(a, t); });
+  // 액션엔 ⏳에이징 미적용 — 오늘 데이터로 매일 변하는 맥락 신호라(마감 있는 할일 X). 경고만 에이징.
   const healthSectionDM = warnings.length ? `\n\n🔧 <b>데이터 점검</b>\n${warnings.map(x => `⚠️ ${withAge(x)}`).join('\n')}` : '';
 
   // 📍 DM 끝 콕핏 한 줄 — 아침 DM에서 바로 "오늘 뭐" (보는 1곳)
@@ -2472,13 +2561,17 @@ ${productSalesOnly}${promoScheduleSection}${actionSection}${analysisSection}`;
     cockpitLine = `\n\n📍 <b>콕핏</b> 🥇 ${one && !one.startsWith('(미설정') ? one : '미설정 (/원씽)'} · 📌 진행중 ${wipM ? wipM[1] : '-'}`;
   }
 
-  // 개인 DM: CX 관리자 분석(은우 전용) + 데이터 점검 + 콕핏 한 줄
-  const personalMsg = `☀️ <b>CX 데일리</b> (${today})${cxManagerSection}${healthSectionDM}${cockpitLine}`;
+  // 개인 DM: CX 관리자 분석(은우 전용) + 오늘 액션(3버튼) + 데이터 점검 + 콕핏 한 줄
+  const personalMsg = `☀️ <b>CX 데일리</b> (${today})${cxManagerSection}${actionSection}${healthSectionDM}${cockpitLine}`;
+  // 액션 목록을 GAS에 저장 → 버튼 콜백(cxa:T/L/P:N)이 인덱스로 조회
+  if (!DRY_RUN && dmActions.length) {
+    await postToAppsScript({ action: 'set_cx_today_actions', actions: dmActions }, APPS_SCRIPT_URL).catch(() => {});
+  }
 
   const groupResult = await sendTelegramGroup(msgToSend);
   if (groupResult.ok) {
-    // 🤖 CX 판단은 이제 msg 본문(analysisSection)에 통합 — 별도 발송 안 함 (묻힘 방지)
-    if (cxManagerSection || healthSectionDM) await sendTelegram(personalMsg);
+    // 🤖 CX 판단은 단톡방 본문(analysisSection)에. DM=은우 전용 분석+액션버튼.
+    if (cxManagerSection || actionSection || healthSectionDM) await sendTelegram(personalMsg, actionKeyboard);
     console.log('일간 발송 완료 ✅');
   } else {
     console.error('발송 실패 ❌:', JSON.stringify(groupResult));
