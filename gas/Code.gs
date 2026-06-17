@@ -1819,11 +1819,13 @@ function refreshCockpit_() {
   var cand = [], wip = [], backlog = [], doneN = 0;
   var inM = function (dt) { if (Object.prototype.toString.call(dt) === '[object Date]') dt = Utilities.formatDate(dt, 'Asia/Seoul', 'yyyy-MM-dd'); return String(dt).replace(/[-.]/g, '').indexOf(month) >= 0; };
   if (iv && iv.getLastRow() > 1) {
+    var ageD = function (d) { var t = (Object.prototype.toString.call(d) === '[object Date]') ? d : new Date(String(d)); return isNaN(t.getTime()) ? 0 : Math.floor((Date.now() - t.getTime()) / 86400000); };
+    var stale = function (r, s) { var a = ageD(r[0]); return '· [' + cxSourceTag_(r[1]) + '] ' + String(r[2]) + (a >= 14 ? ' ⏳' + a + '일(묵음)' : ''); };
     iv.getDataRange().getValues().slice(1).forEach(function (r) {
       var v = String(r[7]);
       if (v === '착수' || v === '진행중') wip.push('· [' + cxSourceTag_(r[1]) + '] ' + String(r[2]));
-      else if (v === '후보') cand.push('· [' + cxSourceTag_(r[1]) + '] ' + String(r[2]));
-      else if (v === '백로그' || v === '보류') backlog.push('· [' + cxSourceTag_(r[1]) + '] ' + String(r[2]));
+      else if (v === '후보') cand.push(stale(r));
+      else if (v === '백로그' || v === '보류') backlog.push(stale(r));
     });
   }
   // UX 케이스북 채택(UX_할일 '할일'=아직 손 안 댄 것) 개수 — 같은 시트라 직접 카운트
