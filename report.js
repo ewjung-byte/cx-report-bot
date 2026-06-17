@@ -1747,7 +1747,7 @@ function pickClarityPage(byUrl, predicate) {
 
 // ── Claude 분석 ────────────────────────────────────────
 async function getClaudeAnalysis(mode, data) {
-  const { meta, cafe24, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit, baseline, baselineN, pageStats, memos, promos } = data;
+  const { meta, cafe24, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit, baseline, baselineN, pageStats, memos, promos, salesContext } = data;
   const f = clarity?.funnel;
 
   let prompt;
@@ -1865,6 +1865,9 @@ ${(() => {
   });
   return lines.length ? lines.join('\n') + '\n※ 위 폭증·폭락이 진짜 신호. 일상 노이즈와 구분해서 다뤄.' : '- 7일 평균 대비 큰 변화 없음 (정상 범위)';
 })()}
+
+[★매출 해석 맥락 — 위 폭증감지의 매출 수치는 반드시 이걸로 해석할 것]
+${salesContext || '- 없음'}
 
 [활성·예정 공구 일정 — 종료 D-3 이내면 대기열 #4(꿀동이 종료 시퀀스) 트리거 강함]
 ${promos && promos.length ? promos.map(p => `- ${p.title}: ${p.dDay}${p.active ? ' [진행 중]' : ''}`).join('\n') : '- 진행/예정 공구 없음'}
@@ -2213,7 +2216,24 @@ async function dailyReport() {
     fetchSongmamansContext(),
     getClarityPageStats(1),
   ]);
-  const promos = getActivePromos(await fetchPromoSchedule()); // 공구+광고 일정 (실무대시보드 시트 SSOT, 실패시 PROMO_SCHEDULE 폴백)
+  const promoSchedule = await fetchPromoSchedule();
+  const promos = getActivePromos(promoSchedule); // 공구+광고 일정 (실무대시보드 시트 SSOT, 실패시 PROMO_SCHEDULE 폴백)
+  // #2 매출 해석 맥락 — 공구/광고 종료 착시 방지 (7일평균이 공구기간 포함이면 종료일이 "폭락"으로 오판)
+  const salesContext = (() => {
+    const sched = (promoSchedule && promoSchedule.length) ? promoSchedule : PROMO_SCHEDULE.map(p => ({ ...p, type: '공구' }));
+    const inR = (day, p) => day >= p.start && day <= (p.end || p.start);
+    const act = sched.filter(p => inR(today, p));
+    const gonguToday = act.find(p => p.type !== '광고');
+    const adToday = act.find(p => p.type === '광고');
+    let blGongu = 0;
+    for (let d = 1; d <= 7; d++) {
+      const day = new Date(new Date(today + 'T00:00:00Z').getTime() - d * 86400000).toISOString().slice(0, 10);
+      if (sched.some(p => p.type !== '광고' && inR(day, p))) blGongu++;
+    }
+    let s = `데이터일(${today}): ` + (gonguToday ? `공구 진행중(${gonguToday.who || gonguToday.title})` : (adToday ? '광고(PPL) 진행중' : '공구·광고 없음(평상시)')) + ` / 직전 7일 중 공구 ${blGongu}일`;
+    if (!gonguToday && blGongu >= 2) s += `\n★중요: 7일평균은 공구기간으로 부풀려진 값. 데이터일에 공구 없으면 매출이 평균보다 낮은 건 "공구 종료 효과"지 폭락 아님 → 🚨 매출폭락 escalate 금지. 공구 없는 날끼리 비교해야 진짜 추세.`;
+    return s;
+  })();
   // pageStats = { byUrl: { url: {dead, quick, scroll, sessions} }, friction: [...top1] }
   if (segments) segments = await enrichGuestSegmentsWithCRM(segments);
 
@@ -2225,7 +2245,7 @@ async function dailyReport() {
   const baselineRes = await getDailyBaseline(7);
   // Jung 진행 중 메모 fetch — Claude가 CX 개선 대기열 surface 결정 시 참고
   const memosForClaude = await getMemos();
-  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, dailyOrders, cafe24, segments, restock, voc, songmamans, adAudit, baseline: baselineRes.baseline, baselineN: baselineRes.count, pageStats, memos: memosForClaude, promos });
+  const analysis = await getClaudeAnalysis('daily', { clarity, ga4Daily, dailyOrders, cafe24, segments, restock, voc, songmamans, adAudit, baseline: baselineRes.baseline, baselineN: baselineRes.count, pageStats, memos: memosForClaude, promos, salesContext });
 
   // 🚦 사이트 (Clarity 우선, 한도 시 GA4 트래픽 채널 백업) + GA4 결제 퍼널 통합
   // 매출·유입경로는 송마망봇이 통합 발송하므로 여기선 행동·퍼널 신호만.
