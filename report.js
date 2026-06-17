@@ -426,6 +426,13 @@ function cafe24OrderRevenue(o) {
   return pay > 0 ? pay : (parseFloat(a.order_price_amount || 0) + parseFloat(a.shipping_fee || 0));
 }
 
+// 게스트 전화번호 추출 (게스트→회원 매칭 키). ★top-level buyer_cellular/buyer_phone은 항상 빈값 —
+// embed=buyer의 buyer.phone/cellphone에 실번호가 옴(마스킹 X, 2026-06-17 실주문 검증). 회원은 member_id로 매칭.
+function guestTel(o) {
+  const b = (o && o.buyer) || {};
+  return String(b.phone || b.cellphone || o.buyer_cellular || o.buyer_phone || '').replace(/[^0-9]/g, '');
+}
+
 // ── 카페24 매출 (단순 합계) ────────────────────────────
 async function getCafe24Sales(startDate, endDate) {
   endDate = endDate || startDate;
@@ -615,7 +622,7 @@ async function fetchCafe24OrdersRange(startDate, endDate) {
     const ce = chunkEnd.toISOString().slice(0, 10);
     let offset = 0;
     while (true) {
-      const url = `${CAFE24_BASE}orders?start_date=${cs}&end_date=${ce}&limit=100&offset=${offset}`;
+      const url = `${CAFE24_BASE}orders?start_date=${cs}&end_date=${ce}&limit=100&offset=${offset}&embed=buyer`;
       let data = null;
       for (let attempt = 0; attempt < 3; attempt++) {
         data = await fetchJson(url, { 'Authorization': `Bearer ${CAFE24_ACCESS_TOKEN}`, 'X-Cafe24-Api-Version': CAFE24_API_VERSION });
@@ -649,7 +656,7 @@ async function getCafe24CustomerSegments(date, lookbackDays = 365) {
       const mid = (o.member_id || '').trim();
       if (mid) memberIds.add(mid);
       else {
-        const tel = String(o.buyer_cellular || o.buyer_phone || '').replace(/[^0-9]/g, '');
+        const tel = guestTel(o);
         if (tel) guestPhones.add(tel);
       }
     });
@@ -668,7 +675,7 @@ async function getCafe24CustomerSegments(date, lookbackDays = 365) {
       if (mid) {
         if (!firstOrderByMember[mid] || od < firstOrderByMember[mid]) firstOrderByMember[mid] = od;
       } else {
-        const tel = String(o.buyer_cellular || o.buyer_phone || '').replace(/[^0-9]/g, '');
+        const tel = guestTel(o);
         if (tel) priorCountByPhone[tel] = (priorCountByPhone[tel] || 0) + 1;
       }
     });
@@ -686,7 +693,7 @@ async function getCafe24CustomerSegments(date, lookbackDays = 365) {
         if (first && first < date) { member.retCount++; member.retAmt += amt; returnMemberIds.push(mid); }
         else { member.newCount++; member.newAmt += amt; }
       } else {
-        const tel = String(o.buyer_cellular || o.buyer_phone || '').replace(/[^0-9]/g, '');
+        const tel = guestTel(o);
         if (tel && priorCountByPhone[tel] > 0) { guest.repeatCount++; guest.repeatAmt += amt; repeatGuestPhones.push(tel); }
         else { guest.newCount++; guest.newAmt += amt; }
       }
@@ -2107,7 +2114,7 @@ function buildDataHealthWarnings(d) {
   }
   if (!segments) w.push('리텐션(세그먼트) 미수집');
   else if (segments.guest && (segments.guest.newCount + segments.guest.repeatCount) > 0 && (!segments.guestPhones || segments.guestPhones.length === 0)) {
-    w.push('게스트 주문 있는데 전화번호 0건 → 게스트→회원 매칭 불가(embed=receivers 필요)');
+    w.push('게스트 주문 있는데 전화번호 0건 → 게스트→회원 매칭 불가 (embed=buyer 응답·privacy scope 점검)');
   }
   if (!ga4Daily || !ga4Daily.checkoutFunnel) w.push('GA4 미수집');
   else if (ga4Daily.checkoutFunnel.addToCart > 0 && ga4Daily.checkoutFunnel.beginCheckout === 0) {
