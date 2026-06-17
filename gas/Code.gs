@@ -441,6 +441,12 @@ function doPost(e) {
     if (action === 'append_clarity_daily') { // 클러리티 숫자 추세 날짜별 upsert (협상카드용)
       return jsonOut(appendClarityDaily_(contents));
     }
+    if (action === 'get_clarity_latest') { // 📹클러리티_일별 최신행 (리포트가 API 재호출 대신 읽음 — 한도 절약)
+      var _cs = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID).getSheetByName('📹 클러리티_일별');
+      if (!_cs || _cs.getLastRow() < 2) return jsonOut({ ok: true, row: null });
+      var _lr = _cs.getRange(_cs.getLastRow(), 1, 1, 6).getValues()[0];
+      return jsonOut({ ok: true, row: { date: _lr[0], inappSessions: _lr[1], inappDeadPct: _lr[2], inappQuickbackPct: _lr[3], inappRagePct: _lr[4], inappScrollDepth: _lr[5] } });
+    }
     if (action === 'set_cx_today_actions') { // 일간 DM 액션 목록 저장 (나중에 버튼 콜백이 인덱스로 조회)
       PropertiesService.getScriptProperties().setProperty('CX_TODAY_ACTIONS', JSON.stringify(contents.actions || []));
       return jsonOut({ ok: true, n: (contents.actions || []).length });

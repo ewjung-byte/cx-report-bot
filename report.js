@@ -1159,13 +1159,15 @@ async function getClarityData() {
       normalPct: P(bN('SamsungInternet') + bN('ChromeMobile') + bN('MobileSafari')),
       mobilePct: P(dN('Mobile')), pcPct: P(dN('PC')),
     };
-    // 인앱(InstagramApp) 막힘신호 — Browser 분해 (클러리티 아침 루틴과 동일 소스). 리포트 사이트 섹션에 반영.
+    // 인앱(InstagramApp) 막힘신호 — 8시 루틴이 적재한 📹클러리티_일별 최신행 읽기 (Clarity API 재호출 대신 → 한도 절약, #4)
     try {
-      const bd = await fetchJson(`https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${CLARITY_PROJECT_ID}&dimension1=Browser`, { 'Authorization': `Bearer ${clarityToken}` });
-      const pick = (m) => (bd.find(x => x.metricName === m)?.information || []).find(e => e.Browser === 'InstagramApp');
-      const dd = pick('DeadClickCount'), qq = pick('QuickbackClick');
-      if (dd || qq) env.inapp = { deadPct: dd?.sessionsWithMetricPercentage ?? null, quickbackPct: qq?.sessionsWithMetricPercentage ?? null, sessions: dd ? parseInt(dd.sessionsCount) : null };
-    } catch (e) { /* 인앱 분해 실패해도 리포트는 진행 */ }
+      const cl = await postToAppsScript({ action: 'get_clarity_latest' }, APPS_SCRIPT_URL);
+      const r = cl && cl.ok && cl.row;
+      if (r) {
+        const num = (v) => (v !== '' && v != null) ? parseFloat(v) : null;
+        env.inapp = { sessions: parseInt(r.inappSessions) || null, deadPct: num(r.inappDeadPct), quickbackPct: num(r.inappQuickbackPct) };
+      }
+    } catch (e) { /* 시트 못 읽어도 리포트는 진행 */ }
     const popularPages = get('PopularPages')?.information || [];
     const topPages = get('PageTitle')?.information || [];
     const getVisits = (kw) => parseInt(popularPages.find(p=>p.url?.includes(kw))?.visitsCount||0);
