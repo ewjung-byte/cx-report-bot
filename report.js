@@ -1911,6 +1911,7 @@ ${songCtx}
 모두 정상이면 한 줄: ✅ 특이사항 없음 — <오늘 본업 한 줄>
 
 규칙:
+- ★**절대규칙(추측 금지)**: 위 데이터에 실제로 찍힌 측정값만 근거로 써라. 측정 안 된 것을 사실처럼 단정하거나, 측정 없이 액션을 정하지 마(예: "취약 환경"·"누수 의심"·"~일 것"). 액션을 제시하려면 반드시 그 근거 숫자를 같이 대라. 근거 숫자 없으면 "측정 필요"로만.
 - **신호 갯수 채우려고 노이즈 만들지 마.** 진짜 행동이 필요한 것만. 0~3개 사이 자유.
 - 신호당 최대 3줄. 장황한 맥락 설명 금지. 회의록 컨텍스트는 액션의 담당자·기한 결정에만 활용.
 - 액션은 반드시 행동 가능한 한 가지로 압축. "검토 필요"·"확인 필요" 같은 모호한 말 X.
@@ -2008,6 +2009,7 @@ ${chatText}
 - ② 단톡방에 쓰기 애매한 내부 판단 (팀·채널·측정 공백·미주 영역 관찰)
 - ③ 어제 없던 진짜 새 신호 (위 매일 주제 제외)
 ★ 위 3개 중 진짜 쓸 게 없으면 **정확히 "오늘 은우 전용 특이사항 없음" 한 줄만** 출력. 억지로 채우거나 매일 주제 반복하면 안 됨.
+★절대규칙(추측 금지): 위 데이터에 찍힌 측정값만 근거로. 측정 안 된 걸 단정하거나 측정 없이 액션 정하지 마. 액션엔 근거 숫자 동반, 없으면 "측정 필요"로만.
 
 최대 3줄, 마크다운 X.`;
 
@@ -2257,7 +2259,7 @@ async function dailyReport() {
     const inappPct = e.inAppMetaPct != null ? e.inAppMetaPct : parseFloat(clarity.instagramPct || 0);
     healthSection = `방문환경 ${clarity.totalSessions}세션 · 📱${e.mobilePct || 0}% · 💻${e.pcPct || 0}%`;
     healthSection += `\n· 인스타 인앱 ${inappPct}%${inappPct >= 50 ? ' ⚠️' : ''}${e.inapp ? ` · 인앱 데드클릭 ${e.inapp.deadPct}%·빠른뒤로 ${e.inapp.quickbackPct}%` : ''}`;
-    healthSection += `\n· 정상 브라우저 ${e.normalPct || 0}% (인앱=간편결제 취약 환경)`;
+    healthSection += `\n· 정상 브라우저 ${e.normalPct || 0}%`;
     // 💳 결제수단 분포 (cafe24 raw — GA4 funnel보다 정확. 실주문 기준)
     if (dailyOrders?.payMethods) {
       const pm = dailyOrders.payMethods;
@@ -2272,7 +2274,7 @@ async function dailyReport() {
         healthSection += `\n\n💳 결제 ${tot}건 · 회원 ${pct(pm.회원)}% : 비회원 ${pct(pm.비회원)}%`;
         healthSection += `\n· ${mix.join(' · ')}`;
         const extGuest = pm.네이버_외부 + pm.카카오_외부;
-        if (pm.비회원 > 0 && extGuest > 0) healthSection += `\n· ★ 비회원 ${extGuest}건 = 외부 간편결제(회원가입 0) → 게스트→회원 후크 타깃`;
+        if (pm.비회원 > 0 && extGuest > 0) healthSection += `\n· 비회원 ${extGuest}건 외부 간편결제(자사몰 귀속·회원전환 측정 불가)`;
       }
     }
     // 진짜 막힘 페이지만 (friction 함수가 이미 DeadClick 기반 필터링하는 곳에서)
@@ -2475,9 +2477,11 @@ async function dailyReport() {
     }
   }
 
-  // (3) 인스타 인앱 결제 누수 (검증된 상시 이슈) — 비중 높은 날 환기
-  if (inappPct >= 25) {
-    dailyActions.push(`📱 인스타 인앱 ${inappPct}% — 구매하기 Dead click·간편결제 핸드오프 깨짐(녹화 검증). 외부브라우저 배너/카드결제 우선 검토`);
+  // (3) 인스타 인앱 — 추측 라벨/매일반복 액션 제거(2026-06-18). 그날 측정된 인앱 데드클릭%가
+  //     실제 임계 초과일 때만 환기(측정값 surface, 액션 단정 X). 평상시 측정값은 healthSection에 매일 노출.
+  const inDead = clarity?.env?.inapp?.deadPct;
+  if (inappPct >= 25 && inDead != null && inDead >= 5) {
+    dailyActions.push(`📱 인스타 인앱 ${inappPct}% · 데드클릭 ${inDead}%(임계 초과) — 그날 인앱 결제마찰 실측 신호, 녹화로 원인 확인`);
   }
 
   // (4) 공구 임박 점검
