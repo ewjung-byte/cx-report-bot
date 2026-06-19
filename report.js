@@ -2504,12 +2504,30 @@ async function dailyReport() {
   // 🤖 CX 판단 — Claude 인사이트 1개를 본문에 통합 (별도 발송하면 묻힘). 실발송엔 채워지고 DRY_RUN(로컬 키 X)만 빔.
   const analysisSection = analysis ? `\n\n🤖 <b>CX 판단</b>\n${analysis}` : '';
 
+  // 🌐 유입 (GA4 채널 → 일상어 묶음 2줄, 2026-06-19). 미분류(추적 미할당) 높으면 ⚠️ — GTM/추적 건강 신호.
+  let inflowSection = '';
+  if (ga4Daily && ga4Daily.channels && ga4Daily.channels.length) {
+    const ch = ga4Daily.channels;
+    const sumBy = names => ch.filter(c => names.includes(c.name)).reduce((s, c) => s + (+c.sessions || 0), 0);
+    const tot = ch.reduce((s, c) => s + (+c.sessions || 0), 0);
+    if (tot > 0) {
+      const g = sumBy(['Paid Search', 'Cross-network', 'Paid Other', 'Paid Video']); // 구글 광고(검색+자동)
+      const m = sumBy(['Paid Social']);                                              // 메타·인스타 광고
+      const u = sumBy(['Unassigned']);                                              // 미분류(추적 미할당)
+      const d = Math.max(0, tot - g - m - u);                                       // 직접·자연·추천 등
+      const p = v => Math.round(v / tot * 100);
+      inflowSection = `\n\n🌐 <b>유입</b> (${tot}세션)`
+        + `\n· 구글 광고 ${p(g)}% · 메타·인스타 ${p(m)}%`
+        + `\n· 직접·자연 ${p(d)}% · 미분류 ${p(u)}%${p(u) >= 15 ? ' ⚠️추적' : ''}`;
+    }
+  }
+
   // 단톡방 메시지 — 송마망봇과 중복되는 섹션(매출·유입경로·VOC·재입고·광고URL)은 제거.
   // 송마망봇이 매일 통합 발송하므로 은우봇은 CX 고유 차원(사이트행동·결제흐름·상품페이지·리텐션·상품믹스·CX판단)만.
   const msg = `🔎 <b>CX 일간</b> · ${display}
 ━━━━━━━━━━━━━━━━━
 🚦 <b>사이트</b>
-${healthSection}${inappNotice}${checkoutSection}${productPageSection}
+${healthSection}${inappNotice}${checkoutSection}${productPageSection}${inflowSection}
 
 🔁 <b>리텐션</b> (Cafe24 raw)
 ${retentionSection}${ltvSection}${segmentSalesSection}
@@ -2970,15 +2988,7 @@ async function weeklyReport() {
     return `${nm}(#${p.productNo}): 실판매 ${p.count}건 · ${formatMoney(p.amount)}`;
   }).join('\n');
 
-  // 결제 누수 추정액 — GA4 전체 세션 기준으로 통일(분모 일치). ⚠️상한 추정: 스크립트에러는 인앱 노이즈가 多라 전부 손실 아님.
-  let leakageLine = '데이터 부족';
-  if (clarity && clarity.scriptErrorPct && ga4TotalSess > 0 && cafe24This.count > 0) {
-    const errorSessions = ga4TotalSess * (clarity.scriptErrorPct / 100);
-    const aov = cafe24This.sales / cafe24This.count;
-    const siteCVR = cafe24This.count / Math.max(ga4TotalSess, 1);
-    const lostRevenue = errorSessions * siteCVR * aov;
-    leakageLine = `~${formatMoney(lostRevenue)}/주 상한 추정 (에러 ${errorSessions.toFixed(0)}세션 × CVR ${(siteCVR * 100).toFixed(1)}% × AOV ${formatMoney(aov)}) ※스크립트에러 상당수 인앱 노이즈라 실손실은 이보다 작음`;
-  }
+  // (결제 누수 추정 제거 2026-06-19 — 에러세션×CVR×AOV 곱셈 추정치라 측정값 아님. 절대규칙. 측정된 스크립트에러%·빠른뒤로%는 👁️Clarity 섹션에 그대로 노출)
 
   // 💳 쿠폰 전환 (등급쿠폰 사용률 — 직전월 발급분)
   let couponLine = '데이터 없음';
@@ -3070,9 +3080,6 @@ ${funnelLine}
 👁️ <b>Clarity</b>
 스크롤 깊이: ${clarity?.scrollDepth?.toFixed(0)||'-'}% | 체류: ${clarity?.activeTimeSec||'-'}초
 스크립트 에러: ${clarity?.scriptErrorPct?.toFixed(1)||'-'}% ${clarity ? icon(clarity.scriptErrorPct,10,30) : ''} | 빠른뒤로가기: ${clarity?.quickbackPct?.toFixed(1)||'-'}% ${clarity ? icon(clarity.quickbackPct,8,15) : ''}
-
-💸 <b>결제 누수 추정</b>
-${leakageLine}
 
 ⭐ <b>고객 리뷰</b>
 ${reviews ? `${reviews.count}건 | 평균 ${reviews.avg}점 | 5점 ${reviews.dist[5]}건 / 4점 ${reviews.dist[4]}건 / 3점이하 ${reviews.dist.low}건` : '데이터 없음'}`;
