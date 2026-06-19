@@ -1095,18 +1095,26 @@ async function getGA4Daily(dateStrYmd) {
   try {
     const token = await getGA4Token();
     const range = { startDate: dateStrYmd, endDate: dateStrYmd };
-    const [chRes, utRes, pageRes, funnelRes] = await Promise.all([
+    // 전일(D-1) 채널 — 유입 섹션 전일대비용
+    const _pv = new Date(dateStrYmd + 'T00:00:00Z'); _pv.setUTCDate(_pv.getUTCDate() - 1);
+    const prevYmd = _pv.toISOString().slice(0, 10);
+    const [chRes, utRes, pageRes, funnelRes, chPrevRes] = await Promise.all([
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'sessionDefaultChannelGroup'}], limit: 8, orderBys:[{metric:{metricName:'sessions'},desc:true}] }),
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'newVsReturning'}] }),
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'screenPageViews'},{name:'sessions'}], dimensions:[{name:'pagePathPlusQueryString'}], limit: 40, orderBys:[{metric:{metricName:'screenPageViews'},desc:true}] }),
       // 결제 단계별 이탈 — 이벤트 횟수 X, "이벤트가 발생한 세션 수"(사람 기준)로 집계.
       // eventCount는 한 사람이 결제창 들락날락하면 중복 카운트(예: 5/21 begin_checkout 37건=실제 24세션).
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'}], dimensions:[{name:'eventName'}], dimensionFilter:{ filter:{ fieldName:'eventName', inListFilter:{ values:['add_to_cart','begin_checkout','purchase'] } } } }),
+      ga4Fetch(token, { dateRanges:[{startDate:prevYmd,endDate:prevYmd}], metrics:[{name:'sessions'}], dimensions:[{name:'sessionDefaultChannelGroup'}], limit: 12 }),
     ]);
     const channels = (chRes.rows||[]).map(r => ({
       name: r.dimensionValues[0].value,
       sessions: parseInt(r.metricValues[0].value),
       purchases: parseInt(r.metricValues[1].value),
+    }));
+    const channelsPrev = (chPrevRes.rows||[]).map(r => ({
+      name: r.dimensionValues[0].value,
+      sessions: parseInt(r.metricValues[0].value),
     }));
     const userType = { new:{sessions:0,purchases:0}, ret:{sessions:0,purchases:0} };
     (utRes.rows||[]).forEach(r => {
@@ -1135,7 +1143,7 @@ async function getGA4Daily(dateStrYmd) {
     checkoutFunnel.checkoutToPurchasePct = checkoutFunnel.beginCheckout > 0
       ? Math.round(checkoutFunnel.purchase / checkoutFunnel.beginCheckout * 100) : null;
 
-    return { channels, userType, surlSessions, checkoutFunnel };
+    return { channels, channelsPrev, userType, surlSessions, checkoutFunnel };
   } catch(e) { console.error('GA4 일간 오류:', e.message); return null; }
 }
 
@@ -2504,21 +2512,29 @@ async function dailyReport() {
   // 🤖 CX 판단 — Claude 인사이트 1개를 본문에 통합 (별도 발송하면 묻힘). 실발송엔 채워지고 DRY_RUN(로컬 키 X)만 빔.
   const analysisSection = analysis ? `\n\n🤖 <b>CX 판단</b>\n${analysis}` : '';
 
-  // 🌐 유입 (GA4 채널 → 일상어 묶음 2줄, 2026-06-19). 미분류(추적 미할당) 높으면 ⚠️ — GTM/추적 건강 신호.
+  // 🌐 유입 (GA4 채널 → 일상어 묶음 2줄, 2026-06-19). 총 세션 전일대비(항상 신뢰=총량은 추적무관).
+  // 채널 화살표는 미분류<10%일 때만(미분류 높으면 채널 몫 왜곡=거짓화살표). 미분류 높으면 ⚠️추적+비교부정확.
   let inflowSection = '';
   if (ga4Daily && ga4Daily.channels && ga4Daily.channels.length) {
-    const ch = ga4Daily.channels;
-    const sumBy = names => ch.filter(c => names.includes(c.name)).reduce((s, c) => s + (+c.sessions || 0), 0);
+    const ch = ga4Daily.channels, prev = ga4Daily.channelsPrev || [];
+    const G = ['Paid Search', 'Cross-network', 'Paid Other', 'Paid Video'], M = ['Paid Social'], U = ['Unassigned'];
+    const sumBy = (arr, names) => arr.filter(c => names.includes(c.name)).reduce((s, c) => s + (+c.sessions || 0), 0);
     const tot = ch.reduce((s, c) => s + (+c.sessions || 0), 0);
+    const totPrev = prev.reduce((s, c) => s + (+c.sessions || 0), 0);
     if (tot > 0) {
-      const g = sumBy(['Paid Search', 'Cross-network', 'Paid Other', 'Paid Video']); // 구글 광고(검색+자동)
-      const m = sumBy(['Paid Social']);                                              // 메타·인스타 광고
-      const u = sumBy(['Unassigned']);                                              // 미분류(추적 미할당)
-      const d = Math.max(0, tot - g - m - u);                                       // 직접·자연·추천 등
-      const p = v => Math.round(v / tot * 100);
-      inflowSection = `\n\n🌐 <b>유입</b> (${tot}세션)`
-        + `\n· 구글 광고 ${p(g)}% · 메타·인스타 ${p(m)}%`
-        + `\n· 직접·자연 ${p(d)}% · 미분류 ${p(u)}%${p(u) >= 15 ? ' ⚠️추적' : ''}`;
+      const g = sumBy(ch, G), m = sumBy(ch, M), u = sumBy(ch, U), d = Math.max(0, tot - g - m - u);
+      const p = v => Math.round(v / tot * 100), uPct = p(u);
+      const totArrow = totPrev > 0 ? `, 전일 ${tot >= totPrev ? '↑' : '↓'}${Math.round(Math.abs(tot - totPrev) / totPrev * 100)}%` : '';
+      // 채널 화살표 — 미분류 낮을 때만(세션 기준 전일대비). 급락=광고 점검 신호.
+      let gA = '', mA = '';
+      if (uPct < 10 && totPrev > 0) {
+        const arrow = (cur, pr) => { if (pr < 20) return ''; const r = (cur - pr) / pr; return r <= -0.5 ? ' ⚠️절반↓' : r <= -0.3 ? ' ↓' : r >= 0.3 ? ' ↑' : ''; };
+        gA = arrow(g, sumBy(prev, G)); mA = arrow(m, sumBy(prev, M));
+      }
+      const trackNote = uPct >= 15 ? ' ⚠️추적(채널비교 부정확)' : '';
+      inflowSection = `\n\n🌐 <b>유입</b> (${tot}세션${totArrow})`
+        + `\n· 구글 광고 ${p(g)}%${gA} · 메타·인스타 ${p(m)}%${mA}`
+        + `\n· 직접·자연 ${p(d)}% · 미분류 ${uPct}%${trackNote}`;
     }
   }
 
