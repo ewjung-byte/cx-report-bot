@@ -1672,6 +1672,8 @@ async function fetchPromoSchedule() {
       const type = String(row[1] || '');
       const isGongu = type.includes('공구'), isAd = type.includes('광고');
       if (!isGongu && !isAd) return;
+      // 취소 제외 — 종료일(3) or 상태(14) 칸에 "취소" 적히면 일정에서 뺌 (어디 적든 작동)
+      if (String(row[3] || '').includes('취소') || String(row[14] || '').includes('취소')) return;
       const start = norm(row[2]); if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) return;
       let end = norm(row[3]); if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) end = start;
       const who = String(row[4] || '').replace(/\s*공구\s*$/, '').trim();
