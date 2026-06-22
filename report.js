@@ -2537,10 +2537,15 @@ async function dailyReport() {
       const g = sumBy(ch, G), m = sumBy(ch, M), u = sumBy(ch, U), d = Math.max(0, tot - g - m - u);
       const attr = Math.max(1, tot - u);                 // 집계된(출처 확인된) 세션 = 미분류 제외
       const p = v => Math.round(v / attr * 100), uPct = Math.round(u / tot * 100);
-      const totArrow = totPrev > 0 ? `, 전일 ${tot >= totPrev ? '↑' : '↓'}${Math.round(Math.abs(tot - totPrev) / totPrev * 100)}%` : '';
+      const totArrow = totPrev > 0 ? ` (전일 ${tot >= totPrev ? '↑' : '↓'}${Math.round(Math.abs(tot - totPrev) / totPrev * 100)}%)` : '';
       const lagNote = uPct >= 10 ? `\n· 어제 출처 ${uPct}% GA4 집계중 (며칠 뒤 확정·정상 지연)` : '';
-      inflowSection = `\n\n🌐 <b>유입</b> (${tot}세션${totArrow})`
-        + `\n· 구글 광고 ${p(g)}% · 메타·인스타 ${p(m)}% · 직접·자연 ${p(d)}% (집계분 기준)`
+      // 유입→전환 2단계 미니펀널 (2026-06-22): 유입=GA4세션·주문=cafe24 validCount(취소제외)=둘 다 정확.
+      // 장바구니 중간단계는 GA4가 인앱/외부결제 못 잡아 제외(주간 UTM서도 뺀 이유).
+      const ord = (dailyOrders && (dailyOrders.validCount != null ? dailyOrders.validCount : dailyOrders.totalCount));
+      const cvrLine = (ord != null && tot > 0) ? ` → 주문 ${ord}건 · 전환율 ${(ord / tot * 100).toFixed(1)}%` : '';
+      inflowSection = `\n\n🔽 <b>유입→전환</b> (어제)`
+        + `\n유입 ${tot}세션${totArrow}${cvrLine}`
+        + `\n· 구글 광고 ${p(g)}% · 메타·인스타 ${p(m)}% · 직접·자연 ${p(d)}% (집계분)`
         + lagNote;
     }
   }
