@@ -2893,6 +2893,28 @@ async function getUtmChannelEffect() {
   } catch (e) { console.error('[UTM 채널 효과]', e.message); return null; }
 }
 
+// 주간 UTM 캠페인별 유입→전환 rows (📲 주간_UTM성과 적재용). GA4 노이즈 캠페인 제외, 우리 수동 UTM만.
+async function getUtmCampaignRows(start, end) {
+  try {
+    const token = await getGA4Token();
+    if (!token) return [];
+    const MED = { cta: '친구톡/카카오', influencer: '인플루언서', cpc: '구글광고', print: '엽서QR', paid_social: '유료SNS' };
+    const SKIP = ['(not set)', '(referral)', '(direct)', '(organic)', '(data not available)', ''];
+    const res = await ga4Fetch(token, {
+      dateRanges: [{ startDate: start, endDate: end }],
+      metrics: [{ name: 'sessions' }, { name: 'ecommercePurchases' }, { name: 'purchaseRevenue' }],
+      dimensions: [{ name: 'sessionMedium' }, { name: 'sessionCampaignName' }],
+      dimensionFilter: { filter: { fieldName: 'sessionMedium', inListFilter: { values: Object.keys(MED) } } },
+      orderBys: [{ metric: { metricName: 'sessions' }, desc: true }], limit: 100,
+    });
+    const today = dateStr(0);
+    return (res.rows || []).filter(r => !SKIP.includes(r.dimensionValues[1].value)).map(r => ({
+      week: start, group: MED[r.dimensionValues[0].value] || r.dimensionValues[0].value, campaign: r.dimensionValues[1].value,
+      sessions: parseInt(r.metricValues[0].value) || 0, purchases: parseInt(r.metricValues[1].value) || 0, revenue: Math.round(Number(r.metricValues[2].value)) || 0, recordedAt: today,
+    }));
+  } catch (e) { console.error('[UTM 주간 rows]', e.message); return []; }
+}
+
 // ── 월별 결제구분·결제수단·유입 자동 적재 (weeklyReport서 매주 호출, 현재월+지난달 upsert) ──
 async function recordMonthlyAuto() {
   const mr = (y, m) => {
@@ -2972,6 +2994,12 @@ async function weeklyReport() {
 
   // 월별 결제구분·결제수단·유입 자동 적재 (현재월 MTD + 지난달 finalize)
   await recordMonthlyAuto();
+
+  // 📲 주간 UTM 캠페인 성과 적재 (📲 주간_UTM성과 탭) — 매주 자동, 같은 주차 upsert. 유입→전환(GA4, 구매=외부결제 빠진 최소치)
+  try {
+    const utmRows = await getUtmCampaignRows(thisStart, thisEnd);
+    if (utmRows.length) { await postToAppsScript({ action: 'record_utm_weekly', week: thisStart, rows: utmRows }, APPS_SCRIPT_URL); console.log('[주간 UTM 적재]', utmRows.length, '캠페인'); }
+  } catch (e) { console.error('[주간 UTM 적재]', e.message); }
 
   // 📄 주간 페이지뷰 시트 적재 (PV=실측 사람트래픽, 비교 baseline 누적) — 매주 자동, 같은 주차 upsert
   try {
