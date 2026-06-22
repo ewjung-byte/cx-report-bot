@@ -2991,10 +2991,15 @@ async function weeklyReport() {
 재방문: ${ut.ret.sessions.toLocaleString()}명 | 구매전환 ${pct(ut.ret.conv, ut.ret.sessions)}${diff(ut.ret.conv/Math.max(ut.ret.sessions,1)*100, utPrev?.ret?.conv/Math.max(utPrev?.ret?.sessions||1,1)*100)}`
     : '-';
 
-  const landingLines = (ga4?.landings||[]).map(l => {
-    const name = l.page.length > 20 ? l.page.slice(0,20)+'…' : l.page;
-    return `${name}: ${l.sessions}명 CVR ${l.cvr}`;
-  }).join('\n');
+  const landingLines = (ga4?.landings||[])
+    .filter(l => !/not set/i.test(l.page || ''))   // (not set)=GA4 집계중이라 제외
+    .slice(0, 4)
+    .map(l => {
+      let name = (l.page || '').trim() || '홈/기타';
+      if (name.length > 22) name = name.slice(0, 22) + '…';
+      const tag = /member\/login/i.test(name) ? '·결심층' : '';
+      return `${name}: ${l.sessions}명 (CVR ${l.cvr}${tag})`;
+    }).join('\n');
 
   // 상품별 페이지 성과 (top 5) — ★구매수는 GA4 대신 cafe24 실판매(GA4는 외부결제 미귀속으로 0 나옴). CVR=실판매÷GA4세션.
   // ★상품별 실판매 = cafe24 byProduct(진실). GA4 상품페이지 세션은 surl 유입으로 과소집계라 CVR 무의미 → 실판매·매출만.
@@ -3009,8 +3014,10 @@ async function weeklyReport() {
   // 💳 쿠폰 전환 (등급쿠폰 사용률 — 직전월 발급분)
   let couponLine = '데이터 없음';
   if (couponConv && couponConv.coupons && couponConv.coupons.length) {
-    const body = couponConv.coupons.map(c => `${c.name}: ${c.used}/${c.issued} 사용 (${c.rate.toFixed(0)}%)${c.orders ? ` · 주문 ${c.orders}건` : ''}`).join('\n');
-    couponLine = `(${couponConv.month} 발급분)\n${body}`;
+    const issued = couponConv.coupons.reduce((s, c) => s + c.issued, 0);
+    const used = couponConv.coupons.reduce((s, c) => s + c.used, 0);
+    const rate = issued ? Math.round(used / issued * 100) : 0;
+    couponLine = `(${couponConv.month}분·매월재발급) 발급 ${issued} → 사용 ${used} (${rate}%) · 재구매 유도 효과 거의 없음`;
   } else if (couponConv) couponLine = '직전월 등급쿠폰 발급분 없음';
 
   // 🔁 재구매 골든타임 (마지막구매 경과일)
@@ -3034,8 +3041,8 @@ async function weeklyReport() {
       const cvr = u.sessions ? (u.purchases / u.sessions * 100).toFixed(1) : '0';
       const camps = Object.entries(u.camps || {}).sort((a, b) => b[1] - a[1]);
       const detail = camps.length > 1 ? ` [${camps.map(([k, v]) => `${k} ${v}`).join('·')}]` : '';
-      return `· ${u.ch}: 유입 ${u.sessions} → 장바구니 ${u.carts} → 구매 ${u.purchases} (전환 ${cvr}%)${u.revenue ? ' · ' + formatMoney(u.revenue) : ''}${detail}`;
-    }).join('\n') + '\n※ 구매=자사몰 결제분만 (외부 간편결제 미집계, 최소치) · 재입고 UTM은 발송 있을 때만 표시';
+      return `· ${u.ch}: 유입 ${u.sessions} → 구매 ${u.purchases}${u.revenue ? ' · ' + formatMoney(u.revenue) : ''}${detail}`;
+    }).join('\n') + '\n※ 구매=자사몰 결제분만(외부 간편결제 미집계·최소치) · 장바구니 단계는 GA4가 인앱/외부결제 못 잡아 제외';
   }
 
   // 🎯 이번주 할 것 — 레버 종합 (데이터→행동, 측정값 직결). 각 줄 = "지표 → 바꿀 행동".
@@ -3057,8 +3064,8 @@ async function weeklyReport() {
   const weeklyMsg = `📈 <b>이태리정미소 지난주 CX 리포트</b>
 📅 ${display}
 ━━━━━━━━━━━━━━━━━
-${weeklyActionSection}🏪 <b>자사몰 매출 (카페24)</b>
-${formatMoney(cafe24This.sales)}${diff(cafe24This.sales, cafe24Last.sales)} (${cafe24This.count}건)
+${weeklyActionSection}🏪 <b>매출</b> (카페24)
+${formatMoney(cafe24This.sales)}${diff(cafe24This.sales, cafe24Last.sales)} · ${cafe24This.count}건 · 객단가 ${formatMoney(Math.round(cafe24This.sales / Math.max(cafe24This.count, 1)))}
 
 🔁 <b>재구매·리텐션</b> (회원, 최근 90일)
 ${repurchase
@@ -3075,17 +3082,19 @@ ${goldenLine}
 📄 <b>헤더 페이지뷰</b> (전주 대비)
 ${pvLine}
 
-📲 <b>UTM 채널 퍼널</b> (유입→장바구니→구매)
+📲 <b>UTM 유입→구매</b> (자사몰결제만·최소치)
 ${utmLine}
 
-📊 <b>GA4 채널</b>
+📊 <b>GA4 채널</b> (전주대비)
 ${chLines}
+※미분류 = 최근일 GA4 집계중 (며칠 뒤 채워짐·정상 지연)
 
 👥 <b>신규 vs 재방문</b>
 ${userTypeLine}
 
-🏠 <b>랜딩 페이지 CVR</b>
+🏠 <b>랜딩 페이지</b> (방문 top · CVR=GA4 최소치)
 ${landingLines}
+※외부결제 빠진 floor라 실제 전환 더 높음 · (not set)=집계중 제외
 
 🛍️ <b>상품별 실판매 (cafe24, top 5)</b>
 ${productLines || '데이터 없음'}
