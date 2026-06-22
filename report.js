@@ -1178,7 +1178,9 @@ async function getClarityData() {
     } catch (e) { /* 시트 못 읽어도 리포트는 진행 */ }
     const popularPages = get('PopularPages')?.information || [];
     const topPages = get('PageTitle')?.information || [];
-    const getVisits = (kw) => parseInt(popularPages.find(p=>p.url?.includes(kw))?.visitsCount||0);
+    // ★2026-06-22 fix: 대소문자 무시 + 매칭 URL 전부 합산. 기존 .includes(소문자)+.find(첫1개)라
+    //   Clarity가 'surl/P'(대문자)로 줘서 landing=0 나왔고, 여러 URL(surl/P/88+83)도 첫것만 셌음.
+    const getVisits = (kw) => { const k = String(kw).toLowerCase(); return popularPages.filter(p => String(p.url || '').toLowerCase().includes(k)).reduce((s, p) => s + (parseInt(p.visitsCount) || 0), 0); };
     const purchasePages = topPages.filter(p=>p.name?.includes('구매하기'));
 
     return {
