@@ -2514,8 +2514,9 @@ async function dailyReport() {
   // 🤖 CX 판단 — Claude 인사이트 1개를 본문에 통합 (별도 발송하면 묻힘). 실발송엔 채워지고 DRY_RUN(로컬 키 X)만 빔.
   const analysisSection = analysis ? `\n\n🤖 <b>CX 판단</b>\n${analysis}` : '';
 
-  // 🌐 유입 (GA4 채널 → 일상어 묶음 2줄, 2026-06-19). 총 세션 전일대비(항상 신뢰=총량은 추적무관).
-  // 채널 화살표는 미분류<10%일 때만(미분류 높으면 채널 몫 왜곡=거짓화살표). 미분류 높으면 ⚠️추적+비교부정확.
+  // 🌐 유입 (GA4 채널 → 일상어). ★2026-06-22 정정: GA4 출처(sessionDefaultChannelGroup)는 최근 1~2일이 "집계중"이라
+  //   (not set)/미분류가 높게 나왔다 며칠 뒤 채워짐(정상 지연, 추적 깨진 게 아님 — 6/18이 42%→0% 확인). 어제분 리포트는 늘 지연 영향.
+  //   → 미분류는 알람 X "집계중"으로 표기. 채널 믹스는 "집계된 것(미분류 제외) 기준"으로 보여줘야 의미있음. 총세션 전일대비만 항상 신뢰(총량=출처무관).
   let inflowSection = '';
   if (ga4Daily && ga4Daily.channels && ga4Daily.channels.length) {
     const ch = ga4Daily.channels, prev = ga4Daily.channelsPrev || [];
@@ -2525,18 +2526,13 @@ async function dailyReport() {
     const totPrev = prev.reduce((s, c) => s + (+c.sessions || 0), 0);
     if (tot > 0) {
       const g = sumBy(ch, G), m = sumBy(ch, M), u = sumBy(ch, U), d = Math.max(0, tot - g - m - u);
-      const p = v => Math.round(v / tot * 100), uPct = p(u);
+      const attr = Math.max(1, tot - u);                 // 집계된(출처 확인된) 세션 = 미분류 제외
+      const p = v => Math.round(v / attr * 100), uPct = Math.round(u / tot * 100);
       const totArrow = totPrev > 0 ? `, 전일 ${tot >= totPrev ? '↑' : '↓'}${Math.round(Math.abs(tot - totPrev) / totPrev * 100)}%` : '';
-      // 채널 화살표 — 미분류 낮을 때만(세션 기준 전일대비). 급락=광고 점검 신호.
-      let gA = '', mA = '';
-      if (uPct < 10 && totPrev > 0) {
-        const arrow = (cur, pr) => { if (pr < 20) return ''; const r = (cur - pr) / pr; return r <= -0.5 ? ' ⚠️절반↓' : r <= -0.3 ? ' ↓' : r >= 0.3 ? ' ↑' : ''; };
-        gA = arrow(g, sumBy(prev, G)); mA = arrow(m, sumBy(prev, M));
-      }
-      const trackNote = uPct >= 15 ? ' ⚠️추적(채널비교 부정확)' : '';
+      const lagNote = uPct >= 10 ? `\n· 어제 출처 ${uPct}% GA4 집계중 (며칠 뒤 확정·정상 지연)` : '';
       inflowSection = `\n\n🌐 <b>유입</b> (${tot}세션${totArrow})`
-        + `\n· 구글 광고 ${p(g)}%${gA} · 메타·인스타 ${p(m)}%${mA}`
-        + `\n· 직접·자연 ${p(d)}% · 미분류 ${uPct}%${trackNote}`;
+        + `\n· 구글 광고 ${p(g)}% · 메타·인스타 ${p(m)}% · 직접·자연 ${p(d)}% (집계분 기준)`
+        + lagNote;
     }
   }
 
