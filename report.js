@@ -1150,7 +1150,14 @@ async function getGA4Daily(dateStrYmd) {
 // ── Clarity ────────────────────────────────────────────
 async function getClarityData() {
   try {
-    const data = await fetchJson(`https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${CLARITY_PROJECT_ID}`, { 'Authorization': `Bearer ${clarityToken}` });
+    // 재시도(2026-06-22): 순간 네트워크/rate 오류엔 짧은 backoff로 회복. ⚠️하드 일일한도(10콜/일)면 같은 날 회복 안 됨(일 단위 리셋) → 그땐 null로 GA4 백업.
+    let data = null;
+    for (let a = 0; a < 3; a++) {
+      const d = await fetchJson(`https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${CLARITY_PROJECT_ID}`, { 'Authorization': `Bearer ${clarityToken}` }).catch(() => null);
+      if (Array.isArray(d) && d.length) { data = d; break; }
+      if (a < 2) await new Promise(r => setTimeout(r, 4000 * (a + 1)));   // 4s, 8s
+    }
+    if (!data) return null;
     const get = (name) => data.find(d => d.metricName === name);
     const traffic = get('Traffic')?.information[0];
     const totalSessions = parseInt(traffic?.totalSessionCount || 1);
