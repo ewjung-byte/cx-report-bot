@@ -2294,7 +2294,7 @@ async function dailyReport() {
         healthSection += `\n\n💳 결제 ${tot}건 · 회원 ${pct(pm.회원)}% : 비회원 ${pct(pm.비회원)}%`;
         healthSection += `\n· ${mix.join(' · ')}`;
         const extGuest = pm.네이버_외부 + pm.카카오_외부;
-        if (pm.비회원 > 0 && extGuest > 0) healthSection += `\n· 비회원 ${extGuest}건 외부 간편결제(자사몰 귀속·회원전환 측정 불가)`;
+        if (pm.비회원 > 0 && extGuest > 0) healthSection += `\n· 비회원 ${extGuest}건 = 네이버페이 주문형 등 외부결제 (cafe24 회원 아님·전화 알림톡만 가능)`;
       }
     }
     // 진짜 막힘 페이지만 (friction 함수가 이미 DeadClick 기반 필터링하는 곳에서)
