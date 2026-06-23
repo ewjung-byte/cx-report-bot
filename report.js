@@ -1098,7 +1098,7 @@ async function getGA4Daily(dateStrYmd) {
     // 전일(D-1) 채널 — 유입 섹션 전일대비용
     const _pv = new Date(dateStrYmd + 'T00:00:00Z'); _pv.setUTCDate(_pv.getUTCDate() - 1);
     const prevYmd = _pv.toISOString().slice(0, 10);
-    const [chRes, utRes, pageRes, funnelRes, chPrevRes] = await Promise.all([
+    const [chRes, utRes, pageRes, funnelRes, chPrevRes, devRes] = await Promise.all([
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'sessionDefaultChannelGroup'}], limit: 8, orderBys:[{metric:{metricName:'sessions'},desc:true}] }),
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'newVsReturning'}] }),
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'screenPageViews'},{name:'sessions'}], dimensions:[{name:'pagePathPlusQueryString'}], limit: 40, orderBys:[{metric:{metricName:'screenPageViews'},desc:true}] }),
@@ -1106,7 +1106,15 @@ async function getGA4Daily(dateStrYmd) {
       // eventCount는 한 사람이 결제창 들락날락하면 중복 카운트(예: 5/21 begin_checkout 37건=실제 24세션).
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'}], dimensions:[{name:'eventName'}], dimensionFilter:{ filter:{ fieldName:'eventName', inListFilter:{ values:['add_to_cart','begin_checkout','purchase'] } } } }),
       ga4Fetch(token, { dateRanges:[{startDate:prevYmd,endDate:prevYmd}], metrics:[{name:'sessions'}], dimensions:[{name:'sessionDefaultChannelGroup'}], limit: 12 }),
+      // 디바이스(모바일/PC) — Clarity 한도 시 방문환경 백업용 (Clarity와 독립적으로 GA4가 항상 채움)
+      ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'}], dimensions:[{name:'deviceCategory'}] }),
     ]);
+    // 디바이스 집계
+    const devMap = {};
+    (devRes.rows||[]).forEach(r => { devMap[r.dimensionValues[0].value] = parseInt(r.metricValues[0].value); });
+    const ga4Sessions = Object.values(devMap).reduce((a,b)=>a+b,0);
+    const ga4MobilePct = ga4Sessions ? Math.round(((devMap.mobile||0)/ga4Sessions)*100) : 0;
+    const ga4PcPct = ga4Sessions ? Math.round(((devMap.desktop||0)/ga4Sessions)*100) : 0;
     const channels = (chRes.rows||[]).map(r => ({
       name: r.dimensionValues[0].value,
       sessions: parseInt(r.metricValues[0].value),
@@ -1143,7 +1151,7 @@ async function getGA4Daily(dateStrYmd) {
     checkoutFunnel.checkoutToPurchasePct = checkoutFunnel.beginCheckout > 0
       ? Math.round(checkoutFunnel.purchase / checkoutFunnel.beginCheckout * 100) : null;
 
-    return { channels, channelsPrev, userType, surlSessions, checkoutFunnel };
+    return { channels, channelsPrev, userType, surlSessions, checkoutFunnel, totalSessions: ga4Sessions, mobilePct: ga4MobilePct, pcPct: ga4PcPct };
   } catch(e) { console.error('GA4 일간 오류:', e.message); return null; }
 }
 
@@ -2273,39 +2281,43 @@ async function dailyReport() {
   // 매출·유입경로는 송마망봇이 통합 발송하므로 여기선 행동·퍼널 신호만.
   // [[clarity-noise]] 룰: ScriptError·Quickback 단독은 인앱 노이즈. 진짜 막힘은 DeadClick+RageClick 동시 발생만 surface.
   // 인스타인앱 비중과 GA4 funnel만 핵심 신호로 노출.
-  let healthSection;
+  // 블록 독립화(2026-06-23): ①방문환경=Clarity 우선/GA4 백업 ②💳결제=cafe24(Clarity 무관·항상) ③막힘페이지=Clarity 고유.
+  //   기존엔 ②③이 if(clarity) 안에 묶여 Clarity 한도 시 cafe24 결제데이터까지 통째로 사라졌음 → 출처별로 분리.
+  let healthSection = '';
+  // ① 방문환경 (디바이스) — Clarity 있으면 인앱 막힘신호(고유)까지, 없으면 GA4 세션/디바이스로 백업
   if (clarity) {
     const e = clarity.env || {};
     const inappPct = e.inAppMetaPct != null ? e.inAppMetaPct : parseFloat(clarity.instagramPct || 0);
     healthSection = `방문환경 ${clarity.totalSessions}세션 · 📱${e.mobilePct || 0}% · 💻${e.pcPct || 0}%`;
     healthSection += `\n· 인스타 인앱 ${inappPct}%${inappPct >= 50 ? ' ⚠️' : ''}${e.inapp ? ` · 인앱 데드클릭 ${e.inapp.deadPct}%·빠른뒤로 ${e.inapp.quickbackPct}%` : ''}`;
     healthSection += `\n· 정상 브라우저 ${e.normalPct || 0}%`;
-    // 💳 결제수단 분포 (cafe24 raw — GA4 funnel보다 정확. 실주문 기준)
-    if (dailyOrders?.payMethods) {
-      const pm = dailyOrders.payMethods;
-      const tot = pm.자체결제 + pm.네이버페이 + pm.카카오페이 + pm.기타간편;
-      if (tot > 0) {
-        const pct = v => Math.round(v / tot * 100);
-        const mix = [];
-        if (pm.네이버페이) mix.push(`네이버페이 ${pct(pm.네이버페이)}%`);
-        if (pm.카카오페이) mix.push(`카카오 ${pct(pm.카카오페이)}%`);
-        if (pm.자체결제) mix.push(`자체결제 ${pct(pm.자체결제)}%`);
-        if (pm.기타간편) mix.push(`기타 ${pct(pm.기타간편)}%`);
-        healthSection += `\n\n💳 결제 ${tot}건 · 회원 ${pct(pm.회원)}% : 비회원 ${pct(pm.비회원)}%`;
-        healthSection += `\n· ${mix.join(' · ')}`;
-        const extGuest = pm.네이버_외부 + pm.카카오_외부;
-        if (pm.비회원 > 0 && extGuest > 0) healthSection += `\n· 비회원 ${extGuest}건 = 네이버페이 주문형 등 외부결제 (cafe24 회원 아님·전화 알림톡만 가능)`;
-      }
-    }
-    // 진짜 막힘 페이지만 (friction 함수가 이미 DeadClick 기반 필터링하는 곳에서)
-    if (pageStats?.friction?.length) {
-      const fpLines = pageStats.friction.map(p => `${p.url} — 데드 ${(p.dead || 0).toFixed(0)}%·뒤로 ${(p.quick || 0).toFixed(0)}% (${p.sessions}세션)`);
-      healthSection += `\n🔥 막힘 페이지:\n  ${fpLines.join('\n  ')}`;
-    }
+  } else if (ga4Daily && ga4Daily.totalSessions) {
+    healthSection = `방문환경 ${ga4Daily.totalSessions}세션 (GA4) · 📱${ga4Daily.mobilePct}% · 💻${ga4Daily.pcPct}%`;
+    healthSection += `\n· 인앱 데드클릭·빠른뒤로(막힘신호)는 Clarity 고유 — 오늘 한도로 생략`;
   } else {
-    healthSection = (ga4Daily && ga4Daily.channels && ga4Daily.channels.length)
-      ? `⚠️ Clarity 한도 — 트래픽: ${ga4Daily.channels.slice(0,3).map(c=>`${c.name} ${c.sessions}`).join(' / ')}`
-      : '⚠️ 데이터 없음';
+    healthSection = '⚠️ 방문 데이터 없음';
+  }
+  // ② 💳 결제수단 분포 (cafe24 raw — Clarity와 무관, 항상 노출. 실주문 기준)
+  if (dailyOrders?.payMethods) {
+    const pm = dailyOrders.payMethods;
+    const tot = pm.자체결제 + pm.네이버페이 + pm.카카오페이 + pm.기타간편;
+    if (tot > 0) {
+      const pct = v => Math.round(v / tot * 100);
+      const mix = [];
+      if (pm.네이버페이) mix.push(`네이버페이 ${pct(pm.네이버페이)}%`);
+      if (pm.카카오페이) mix.push(`카카오 ${pct(pm.카카오페이)}%`);
+      if (pm.자체결제) mix.push(`자체결제 ${pct(pm.자체결제)}%`);
+      if (pm.기타간편) mix.push(`기타 ${pct(pm.기타간편)}%`);
+      healthSection += `\n\n💳 결제 ${tot}건 · 회원 ${pct(pm.회원)}% : 비회원 ${pct(pm.비회원)}%`;
+      healthSection += `\n· ${mix.join(' · ')}`;
+      const extGuest = pm.네이버_외부 + pm.카카오_외부;
+      if (pm.비회원 > 0 && extGuest > 0) healthSection += `\n· 비회원 ${extGuest}건 = 네이버페이 주문형 등 외부결제 (cafe24 회원 아님·전화 알림톡만 가능)`;
+    }
+  }
+  // ③ 🔥 막힘 페이지 (Clarity 고유 — DeadClick 기반)
+  if (pageStats?.friction?.length) {
+    const fpLines = pageStats.friction.map(p => `${p.url} — 데드 ${(p.dead || 0).toFixed(0)}%·뒤로 ${(p.quick || 0).toFixed(0)}% (${p.sessions}세션)`);
+    healthSection += `\n🔥 막힘 페이지:\n  ${fpLines.join('\n  ')}`;
   }
 
   // 🔁 리텐션 (Cafe24 raw — 365일 lookback 윈도우 내 식별)
