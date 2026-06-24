@@ -2931,6 +2931,26 @@ async function getUtmCampaignRows(start, end) {
   } catch (e) { console.error('[UTM 주간 rows]', e.message); return []; }
 }
 
+// 주간 버튼클릭(product_button_click) 위치×버튼별 — GA4 직접전송이라 모바일 잘 잡힘(95%). 📊 주간_버튼클릭 적재용.
+async function getButtonClickRows(start, end) {
+  try {
+    const token = await getGA4Token();
+    if (!token) return [];
+    const res = await ga4Fetch(token, {
+      dateRanges: [{ startDate: start, endDate: end }],
+      dimensions: [{ name: 'customEvent:button_zone' }, { name: 'customEvent:button_label' }],
+      metrics: [{ name: 'eventCount' }],
+      dimensionFilter: { filter: { fieldName: 'eventName', stringFilter: { value: 'product_button_click' } } },
+      orderBys: [{ metric: { metricName: 'eventCount' }, desc: true }], limit: 60,
+    });
+    const today = dateStr(0);
+    return (res.rows || []).map(r => ({
+      week: start, zone: r.dimensionValues[0].value, label: r.dimensionValues[1].value,
+      clicks: parseInt(r.metricValues[0].value) || 0, recordedAt: today,
+    }));
+  } catch (e) { console.error('[버튼클릭 주간 rows]', e.message); return []; }
+}
+
 // ── 월별 결제구분·결제수단·유입 자동 적재 (weeklyReport서 매주 호출, 현재월+지난달 upsert) ──
 async function recordMonthlyAuto() {
   const mr = (y, m) => {
@@ -3016,6 +3036,11 @@ async function weeklyReport() {
     const utmRows = await getUtmCampaignRows(thisStart, thisEnd);
     if (utmRows.length) { await postToAppsScript({ action: 'record_utm_weekly', week: thisStart, rows: utmRows }, APPS_SCRIPT_URL); console.log('[주간 UTM 적재]', utmRows.length, '캠페인'); }
   } catch (e) { console.error('[주간 UTM 적재]', e.message); }
+  // 📊 주간 버튼클릭 적재 (위치×버튼별, GA4 product_button_click)
+  try {
+    const btnRows = await getButtonClickRows(thisStart, thisEnd);
+    if (btnRows.length) { await postToAppsScript({ action: 'record_button_weekly', week: thisStart, rows: btnRows }, APPS_SCRIPT_URL); console.log('[주간 버튼클릭 적재]', btnRows.length, '행'); }
+  } catch (e) { console.error('[주간 버튼클릭 적재]', e.message); }
 
   // 📄 주간 페이지뷰 시트 적재 (PV=실측 사람트래픽, 비교 baseline 누적) — 매주 자동, 같은 주차 upsert
   try {
