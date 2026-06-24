@@ -2951,6 +2951,29 @@ async function getButtonClickRows(start, end) {
   } catch (e) { console.error('[버튼클릭 주간 rows]', e.message); return []; }
 }
 
+// 🔗 UTM watchdog — 📢공구&광고의 "예정(start≥오늘)" 캠페인 중 🔗UTM링크 시트에 없는 것 → 콕핏 후보로.
+// 완료·진행중은 제외(예정만). 이름 정규화 매칭(공구/광고/특수문자 제거). 중복은 appendCxCandidates가 막음.
+async function getMissingUtmRows() {
+  try {
+    const sched = await fetchPromoSchedule();
+    if (!sched || !sched.length) return [];
+    const token = await getGA4Token(); if (!token) return [];
+    const u = await fetchJson('https://sheets.googleapis.com/v4/spreadsheets/1nxnsbqQSxv-lRcCDsUh6r16qoyeywVRJhPScd2N21bA/values/' + encodeURIComponent('🔗 UTM 링크') + '?majorDimension=ROWS', { 'Authorization': 'Bearer ' + token });
+    const norm = s => String(s || '').replace(/공구|광고/g, '').replace(/[^가-힣A-Za-z0-9]/g, '').trim();
+    const utmNorm = norm((u.values || []).map(row => row.join(' ')).join(' '));
+    const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+    const today = dateStr(0); const out = [];
+    sched.forEach(c => {
+      const sd = new Date(c.start + 'T00:00:00');
+      if (isNaN(sd) || sd < t0) return;          // ★예정만 (시작 >= 오늘)
+      if (!c.who) return;
+      if (utmNorm.includes(norm(c.who))) return; // UTM 이미 있음
+      out.push({ date: today, area: 'UTM', action: `🔗 UTM 만들기: ${c.who} (${c.type} ${c.start})` });
+    });
+    return out;
+  } catch (e) { console.error('[UTM watchdog]', e.message); return []; }
+}
+
 // ── 월별 결제구분·결제수단·유입 자동 적재 (weeklyReport서 매주 호출, 현재월+지난달 upsert) ──
 async function recordMonthlyAuto() {
   const mr = (y, m) => {
@@ -3041,6 +3064,18 @@ async function weeklyReport() {
     const btnRows = await getButtonClickRows(thisStart, thisEnd);
     if (btnRows.length) { await postToAppsScript({ action: 'record_button_weekly', week: thisStart, rows: btnRows }, APPS_SCRIPT_URL); console.log('[주간 버튼클릭 적재]', btnRows.length, '행'); }
   } catch (e) { console.error('[주간 버튼클릭 적재]', e.message); }
+  // 🔗 UTM watchdog (주1회) — 예정 캠페인 중 UTM 없는 것 → 콕핏 후보 + 은우 개인 DM 알림
+  try {
+    const utmTodos = await getMissingUtmRows();
+    if (utmTodos.length) {
+      await postToAppsScript({ action: 'append_cx_candidates', rows: utmTodos }, APPS_SCRIPT_URL).catch(() => {});
+      const dm = '🔗 <b>UTM 만들 예정 캠페인</b> (' + utmTodos.length + '개)\n'
+        + utmTodos.map(t => '· ' + t.action.replace('🔗 UTM 만들기: ', '')).join('\n')
+        + '\n\n→ 콕핏 들어온것에도 추가됨. 만들고 /할거 or /삭제.';
+      await sendTelegram(dm, null);
+      console.log('[UTM watchdog]', utmTodos.length, '예정 캠페인 UTM 누락');
+    } else console.log('[UTM watchdog] 예정 캠페인 UTM 누락 없음');
+  } catch (e) { console.error('[UTM watchdog]', e.message); }
 
   // 📄 주간 페이지뷰 시트 적재 (PV=실측 사람트래픽, 비교 baseline 누적) — 매주 자동, 같은 주차 upsert
   try {
