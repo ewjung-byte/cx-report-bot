@@ -1711,7 +1711,8 @@ function getActivePromos(schedule) {
     const startD = new Date(p.start + 'T00:00:00');
     if (isNaN(startD)) return;
     let effEnd = new Date((p.end || p.start) + 'T00:00:00');
-    if (p.type === '광고') { effEnd = new Date(startD); effEnd.setDate(effEnd.getDate() + 2); } // PPL 효과 게시일+2일
+    // 종료일 없는 단발 PPL만 게시일+2일 효과창. 시트에 실제 기간(end≠start) 있으면 그대로 사용(2026-06-24 김두부 기간 누락 fix).
+    if (p.type === '광고' && (!p.end || p.end === p.start)) { effEnd = new Date(startD); effEnd.setDate(effEnd.getDate() + 2); }
     const dToStart = Math.ceil((startD - t0) / 86400000);
     const dToEnd = Math.ceil((effEnd - t0) / 86400000);
     if (dToEnd < 0) return; // 끝남
@@ -2454,10 +2455,11 @@ async function dailyReport() {
     const md = d => { const m = String(d || '').match(/\d{4}-(\d{2})-(\d{2})/); return m ? `${+m[1]}/${+m[2]}` : ''; };
     const fmtPromo = p => {
       const emoji = p.type === '광고' ? '🔵' : '🟠';
-      const when = p.type === '광고' ? md(p.start) : `${md(p.start)}~${md(p.end)}`;
+      const hasRange = p.end && p.end !== p.start;
+      const when = (p.type === '공구' || hasRange) ? `${md(p.start)}~${md(p.end)}` : md(p.start);
       let tag;
       if (p.dToStart > 0) tag = `D-${p.dToStart}`;
-      else if (p.active) tag = (p.type === '공구' && p.dToEnd > 0) ? `진행중 ~${md(p.end)}` : '진행중';
+      else if (p.active) tag = (hasRange && p.dToEnd > 0) ? `진행중 ~${md(p.end)}` : '진행중';
       else tag = '';
       return `${emoji} ${p.type} · ${p.title} — ${when}${tag ? ` (${tag})` : ''}`;
     };
