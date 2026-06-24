@@ -2670,6 +2670,8 @@ ${productSalesOnly}${promoScheduleSection}${analysisSection}`;
   if (groupResult.ok) {
     // 🤖 CX 판단은 단톡방 본문(analysisSection)에. DM=은우 전용 분석+액션버튼.
     if (cxManagerSection || actionSection || healthSectionDM) await sendTelegram(personalMsg, actionKeyboard);
+    // 🎨 디자인 사례집 — 매일 1개 개인 DM (미발송분부터, 채택/패스 버튼). GAS sendNextDesignCase_
+    if (!DRY_RUN) await postToAppsScript({ action: 'send_next_design_case' }, APPS_SCRIPT_URL).catch(() => {});
     console.log('일간 발송 완료 ✅');
   } else {
     console.error('발송 실패 ❌:', JSON.stringify(groupResult));
