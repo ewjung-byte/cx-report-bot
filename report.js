@@ -933,8 +933,9 @@ async function auditMetaAdUrls() {
     if (!data.data?.length) return { total: 0, broken: [], healthy: 0 };
 
     // 정상으로 인정하는 단일 클린 URL: surl 단축링크 또는 카페24 표준 상품페이지(자사몰 전체가 쓰는 형식)
-    const SURL_RE   = /^https:\/\/italy-jungmiso\.com\/surl\/p\/\d+(?:\?[^\s%]*)?$/;
-    const DETAIL_RE = /^https:\/\/italy-jungmiso\.com\/product\/detail\.html\?product_no=\d+(?:&[^\s%]*)?$/;
+    // 대소문자 무관(/surl/P/83도 서버가 정상 처리 — 2026-06-26 실측 확인, 대문자 P 헛경보 fix)
+    const SURL_RE   = /^https:\/\/italy-jungmiso\.com\/surl\/p\/\d+(?:\?[^\s%]*)?$/i;
+    const DETAIL_RE = /^https:\/\/italy-jungmiso\.com\/product\/detail\.html\?product_no=\d+(?:&[^\s%]*)?$/i;
     const broken = [];        // 진짜 깨짐(JS 에러 유발): %20·공백·여러 URL 합침
     const nonStandard = [];   // 작동은 하나 UTM 단축링크 표준(/surl/p) 아님 — 추적 누락 가능
     let healthy = 0;
@@ -3331,6 +3332,7 @@ module.exports = {
   buildWeeklySnapshot,
   saveWeeklySnapshot,
   recordMonthlyAuto,
+  getMissingUtmRows,
   backfillWeeklySnapshots,
   weekRange,
   dateStr,
