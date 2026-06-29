@@ -343,6 +343,7 @@ function postJson(hostname, path, headers, body) {
   return new Promise((resolve, reject) => {
     const bodyStr = JSON.stringify(body);
     const req = https.request({ hostname, path, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyStr), ...headers } }, (res) => {
+      res.setEncoding('utf8'); // ★한글(3바이트)이 청크 경계서 잘려 ��로 깨지는 것 방지 (2026-06-29 fix)
       let d = ''; res.on('data', c => d += c);
       res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { reject(new Error(d.slice(0,200))); } });
     });
@@ -771,6 +772,42 @@ async function fetchNegativeVOC(dateStrYmd) {
       items: negs.slice(0, 3).map(r => ({ date: r[0], cls: r[6], product: r[3], rating: r[4], excerpt: String(r[5] || '').slice(0, 80) })),
     };
   } catch (e) { console.error('VOC fetch 오류:', e.message); return null; }
+}
+
+// ── CRM 실제 운영 현황 (발송이력 + 실행기록) ───────────────────
+// 봇이 "이미 돌리는 CRM"을 알아야 죽은/중복 액션을 안 뱉음 (2026-06-29: 단톡방 헛소리 fix)
+async function fetchCrmStatus() {
+  try {
+    const token = await getGA4Token();
+    const auth = { 'Authorization': `Bearer ${token}` };
+    // 발송이력: 발송일·상품·대상수·성공·실패·메모
+    const hData = await fetchJson(`https://sheets.googleapis.com/v4/spreadsheets/${CRM_SHEET_ID}/values/${encodeURIComponent('발송이력!A2:F300')}`, auth);
+    const today = dateStr(0);
+    const cutoff = (() => { const d = new Date(today); d.setDate(d.getDate() - 35); return d.toISOString().slice(0, 10); })();
+    const sends = (hData.values || []).filter(r => r[0]).map(r => ({
+      date: String(r[0]).slice(0, 10), name: String(r[1] || ''), count: parseInt(String(r[2] || '').replace(/[^0-9]/g, '')) || 0,
+    }));
+    const recent = sends.filter(s => s.date >= cutoff);
+    const has = re => recent.some(s => re.test(s.name));
+    // 실행기록: 상태칸(C)='운영중'인 도구명(B)
+    let running = [];
+    try {
+      const eData = await fetchJson(`https://sheets.googleapis.com/v4/spreadsheets/${CRM_SHEET_ID}/values/${encodeURIComponent('📅 CRM 실행 기록!A1:F80')}`, auth);
+      (eData.values || []).forEach(r => {
+        if (String(r[2] || '').trim() === '운영중' && r[1]) running.push(String(r[1]).split('\n')[0].replace(/↳.*/, '').trim().slice(0, 30));
+      });
+      running = [...new Set(running)];
+    } catch (e) {}
+    // ★운영중 목록(실행기록)이 "지금 돌리는 것"의 권위 소스. 발송이력은 보조.
+    const runJoin = running.join(' ');
+    return {
+      recent, recentCount: recent.length, running,
+      runningRemind: /리마인더|리마인드|윈백|재구매/.test(runJoin) || has(/리마인드|윈백/),
+      runningCoupon: /등급쿠폰|쿠폰/.test(runJoin) || has(/등급쿠폰|쿠폰/),
+      runningRecipe: /레시피/.test(runJoin),
+      runningRestock: /재입고/.test(runJoin) || has(/재입고/),
+    };
+  } catch (e) { console.error('CRM 상태 fetch 오류:', e.message); return null; }
 }
 
 // ── 송마망 회의록 (RAW + 액션 + Telegram 단톡방 — Claude 프롬프트 주입용) ──
@@ -1776,7 +1813,11 @@ function pickClarityPage(byUrl, predicate) {
 
 // ── Claude 분석 ────────────────────────────────────────
 async function getClaudeAnalysis(mode, data) {
-  const { meta, cafe24, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit, baseline, baselineN, pageStats, memos, promos, salesContext } = data;
+  const { meta, cafe24, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit, baseline, baselineN, pageStats, memos, promos, salesContext, crm } = data;
+  // 운영 중 CRM — Claude가 "이미 하는 것"을 또 추천 못 하게 (2026-06-29)
+  const crmCtx = crm && crm.running && crm.running.length
+    ? `[★이미 운영 중인 CRM — 아래를 "하라"고 추천 금지, 이미 함]\n${crm.running.join(' · ')}\n(등급쿠폰 운영중·효과 낮으면 "타이밍 바꿔라" 금지 → 다른 수단 제안. 재구매 리마인더 운영중이면 "리마인드 보내라" 금지 → 도달·전환 점검)`
+    : '[운영 중 CRM 정보 없음]';
   const f = clarity?.funnel;
 
   let prompt;
@@ -1964,17 +2005,22 @@ ${songCtx}
 - 상품별 페이지 성과(top 5, GA4 product_no 기준): ${(ga4?.topProducts||[]).map(p=>`#${p.id} ${p.sessions}세션·구매 ${p.purchases}(CVR ${pct(p.purchases,p.sessions)})`).join(' / ')||'없음'}
 ${reviews ? `\n[이번 주 리뷰 ${reviews.count}건 / 평균 ${reviews.avg}점]\n${reviews.texts}` : ''}
 
-== 파트 1: 반드시 이번 주 홈페이지에 적용할 것 ==
-수치 근거 포함, 구체적인 실행 방법, 난이도 표시 (쉬움/보통/어려움), 최대 3개
+${crmCtx}
 
-== 파트 2: 고객 리뷰 인사이트 ==
-${reviews ? `이번 주 리뷰 ${reviews.count}건 기준, 반복 칭찬 키워드와 불만·개선 요청 키워드를 각각 추출하고, 즉각 대응이 필요한 리뷰가 있으면 알려줘.` : '리뷰 데이터 없음.'}
+== 파트 1: 이번 주 홈페이지/CX 액션 (최대 3개) ==
+각 액션은 정확히 3줄로, 짧게:
+  제목 (난이도: 쉬움/보통/어려움)
+  근거: 숫자 1개 + 어디서 새는지 (한 문장)
+  실행: 가장 구체적인 것 1개 (한 문장)
+긴 문단·불릿 나열 금지. ★위 "운영 중 CRM"에 이미 있는 건 추천하지 마(이미 함). 데이터가 죽었다고 말하는 레버(예: 사용률 낮은 쿠폰)를 "더 하라"고 하지 마.
 
-== 파트 3: 중장기 개선사항 ==
-데이터 기반 방향성 제안, 최대 2개
+== 파트 2: 리뷰 인사이트 (2줄) ==
+${reviews ? `반복 칭찬 키워드 1줄 + 불만/개선 키워드 1줄. 즉각대응 리뷰 있으면 1줄 추가.` : '리뷰 데이터 없음.'}
 
-답변은 한국어로, 각 항목은 번호 매겨서.
-중요: 마크다운 기호(#, *, **, ---, >) 절대 사용하지 마. 일반 텍스트로만.`;
+== 파트 3: 중장기 (최대 2개, 각 1줄) ==
+데이터 기반 방향성.
+
+한국어. 번호 매김. ★마크다운 기호(#,*,**,---,>) 금지·일반 텍스트만. 전체 짧고 스캔 가능하게.`;
   }
 
   try {
@@ -1986,7 +2032,7 @@ ${reviews ? `이번 주 리뷰 ${reviews.count}건 기준, 반복 칭찬 키워�
 // ── CX 관리자 분석 (개인 DM용) ─────────────────────────
 async function getCXManagerAnalysis(data) {
   if (!CLAUDE_API_KEY) return null;
-  const { activities, dailyMessages, clarity, ga4Daily, dailyOrders, segments, voc, restock, adAudit, cockpitText } = data;
+  const { activities, dailyMessages, clarity, ga4Daily, dailyOrders, segments, voc, restock, adAudit, cockpitText, crm } = data;
 
   const activitiesText = activities && activities.length
     ? activities.slice(-15).map(a => `[${a.id} ${a.status}] ${a.content}`).join('\n')
@@ -2007,6 +2053,7 @@ async function getCXManagerAnalysis(data) {
     `부정 VOC: ${voc?.negCount || 0}건`,
     `재입고: 누적 ${restock?.totalCount||'-'}건 / 대기 ${restock?.pendingCount||'-'}건`,
     `광고 URL 깨짐: ${adAudit?.broken?.length||0}/${adAudit?.total||0}`,
+    `운영 중 CRM(이미 함): ${crm?.running?.length ? crm.running.join(' · ') : '미수집'}`,
   ].join('\n');
 
   const facts = `[OKR] 바질 재구매자 Q2 100명/Q4 300명(현 40) · 자사몰 비중 목표 40%(현 29.6%) · ROAS Guardrail 350%+(현 375%)
@@ -2039,6 +2086,7 @@ ${chatText}
 ★ 위 3개 중 진짜 쓸 게 없으면 **정확히 "오늘 은우 전용 특이사항 없음" 한 줄만** 출력. 억지로 채우거나 매일 주제 반복하면 안 됨.
 ★절대규칙(추측 금지): 위 데이터에 찍힌 측정값만 근거로. 측정 안 된 걸 단정하거나 측정 없이 액션 정하지 마. 액션엔 근거 숫자 동반, 없으면 "측정 필요"로만.
 ★❌게스트→회원 5천원 쿠폰/회원전환 후크는 폐기 결정(2026-06: 마진+멤버십/재구매할인 이미 있음, 게스트 대부분 외부결제라 자사몰서 못 닿음). 어떤 각도로도 추천 금지. 게스트 비중·재방문률 낮은 것도 자사몰서 못 고치는 구조라 액션화 X(측정만).
+★❌"운영 중 CRM(이미 함)" 신호에 있는 것(등급쿠폰·재구매 리마인더·재입고·레시피 카카오·VOC 등)을 "하라/보내라/도입하라"고 추천 금지 — 이미 돌고 있음. 언급하려면 "도달·전환 점검" 같은 개선 각도로만.
 ★인과 추측 금지: "~때문"·"~로 보임"·"실수로"·"~수 있다"·"~인 듯" 같은 원인 추정 쓰지 마. 일어난 사실(측정·관찰된 것)만 적고, 원인 모르면 "원인 미상 — 측정 필요"로 끝내라.
 
 최대 3줄, 마크다운 X.`;
@@ -2623,8 +2671,9 @@ ${productSalesOnly}${promoScheduleSection}${analysisSection}`;
     getRecentActivities(24).catch(() => []),
     getDailyMessagesFromSheet(today).catch(() => [])
   ]);
+  const crmStatus = await fetchCrmStatus(); // 운영 중 CRM — 일간도 "이미 하는 것" 추천 방지
   const cxManagerAnalysis = await getCXManagerAnalysis({
-    activities, dailyMessages, clarity, ga4Daily, dailyOrders, segments, voc, restock, adAudit, cockpitText
+    activities, dailyMessages, clarity, ga4Daily, dailyOrders, segments, voc, restock, adAudit, cockpitText, crm: crmStatus
   });
   const cxManagerSection = cxManagerAnalysis
     ? `\n\n🎯 <b>CX 관리자 분석</b>\n${cxManagerAnalysis}`
@@ -3087,7 +3136,8 @@ async function weeklyReport() {
     console.log('[주간 PV 적재]', `${thisStart}~${thisEnd}`, _mv ? _mv[0].value : 0);
   } catch (e) { console.error('[주간 PV]', e.message); }
 
-  const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, clarity, ga4, reviews, repurchase });
+  const crm = await fetchCrmStatus(); // 운영 중 CRM — 죽은/중복 액션 차단 + Claude에 주입
+  const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, clarity, ga4, reviews, repurchase, crm });
 
   const chMap = { 'Paid Social':'유료SNS(메타·인스타)', 'Paid Search':'유료검색(구글)', 'Organic Social':'자연SNS', 'Organic Search':'자연검색', 'Organic Video':'유튜브', 'Organic Shopping':'네이버쇼핑', 'Direct':'직접유입', 'Referral':'추천유입', 'Paid Other':'기타광고', 'Unassigned':'미분류' };
   const chLines = Object.entries(ga4?.channels||{}).sort((a,b)=>b[1].cur.sessions-a[1].cur.sessions).slice(0,4).map(([ch, v]) =>
@@ -3166,22 +3216,33 @@ async function weeklyReport() {
   const weeklyActions = [];
   if (couponConv && couponConv.coupons && couponConv.coupons.length) {
     const avgRate = couponConv.coupons.reduce((s, c) => s + c.rate, 0) / couponConv.coupons.length;
-    if (avgRate < 5) weeklyActions.push(`💳 등급쿠폰 사용 ${avgRate.toFixed(0)}% → 발송 타이밍 D+21(소비주기)로 + 멤버십 혜택 노출`);
+    // ★등급쿠폰이 이미 운영 중인데 사용률 낮음 → "타이밍 바꿔라"(새 일인 척) 금지. 효과 낮음을 짚고 다른 수단으로.
+    if (avgRate < 5) {
+      weeklyActions.push(crm && crm.runningCoupon
+        ? `💳 등급쿠폰(운영 중) 사용 ${avgRate.toFixed(0)}% → 효과 약함 확인. 등급쿠폰 더 만지기보다 다른 리텐션 수단 검토`
+        : `💳 등급쿠폰 사용 ${avgRate.toFixed(0)}% → 발송 타이밍 D+21(소비주기)로 + 멤버십 혜택 노출`);
+    }
   }
   if (goldenZone && goldenZone.d21_35 > 0) {
-    weeklyActions.push(`🔁 골든타임 ${goldenZone.d21_35}명 → 이번주 레시피 리마인드 (휴면 직전 깨우기)`);
+    // ★재구매 리마인더(알파푸쉬)가 운영 중이면 "보내라" 대신 "도달·전환 점검"
+    weeklyActions.push(crm && crm.runningRemind
+      ? `🔁 골든타임 ${goldenZone.d21_35}명 — 재구매 리마인더 이미 운영 중 → 신규발송 X, 도달·전환·문구 점검`
+      : `🔁 골든타임 ${goldenZone.d21_35}명 → 이번주 레시피 리마인드 (휴면 직전 깨우기)`);
   }
   if (pvWoW) {
     const rc = pvWoW.cur.레시피, rp = pvWoW.prev.레시피;
     if (rp && rc < rp) weeklyActions.push(`📖 레시피 PV ↓${Math.round((1 - rc / rp) * 100)}% → 상세→레시피 동선 강화 (재구매 입구)`);
     else if (rc > rp) weeklyActions.push(`📖 레시피 PV ↑ 효과 나는 중 → 상세페이지 레시피 링크 더 노출`);
   }
+  // 🔔 운영 중 CRM 명시 (봇이 뭘 아는지 투명화 — "이미 하는 것" 위에서 액션)
+  const crmRunLine = (crm && crm.running && crm.running.length)
+    ? `🔔 <b>운영 중 CRM</b> (봇 인지): ${crm.running.join(' · ')}\n\n` : '';
   const weeklyActionSection = weeklyActions.length ? `📊 <b>저번주 분석 → 🎯 이번주 액션</b>\n${weeklyActions.join('\n')}\n\n` : '';
 
   const weeklyMsg = `📈 <b>이태리정미소 지난주 CX 리포트</b>
 📅 ${display}
 ━━━━━━━━━━━━━━━━━
-${weeklyActionSection}🏪 <b>매출</b> (카페24)
+${weeklyActionSection}${crmRunLine}🏪 <b>매출</b> (카페24)
 ${formatMoney(cafe24This.sales)}${diff(cafe24This.sales, cafe24Last.sales)} · ${cafe24This.count}건 · 객단가 ${formatMoney(Math.round(cafe24This.sales / Math.max(cafe24This.count, 1)))}
 
 🔁 <b>재구매·리텐션</b> (회원, 최근 90일)
@@ -3333,6 +3394,7 @@ module.exports = {
   saveWeeklySnapshot,
   recordMonthlyAuto,
   getMissingUtmRows,
+  fetchCrmStatus,
   backfillWeeklySnapshots,
   weekRange,
   dateStr,
