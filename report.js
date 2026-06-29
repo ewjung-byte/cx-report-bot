@@ -862,6 +862,41 @@ async function autoRefillDesignCases() {
   } catch (e) { console.error('[디자인 자동보충]', e.message); return 0; }
 }
 
+// ── 데일리 데이터 신호 (어제 vs 직전7일평균) — DM이 공구만/평이하지 않게 "변한 것"을 매일 ──
+// 2026-06-29: 은우 "개인DM 평이하고 공구만 옴". 담기율·채널 급변을 매일 다른 실데이터로.
+async function getDailySignals() {
+  const out = [];
+  try {
+    const token = await getGA4Token();
+    const y = dateStr(1), p0 = dateStr(8), p1 = dateStr(2); // 어제 / 직전7일(어제 제외)
+    const evRates = async (s, e) => {
+      const r = await ga4Fetch(token, { dateRanges: [{ startDate: s, endDate: e }], metrics: [{ name: 'eventCount' }], dimensions: [{ name: 'eventName' }], dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: ['view_item', 'add_to_cart'] } } } });
+      const m = {}; (r.rows || []).forEach(x => m[x.dimensionValues[0].value] = +x.metricValues[0].value); return m;
+    };
+    const yE = await evRates(y, y), pE = await evRates(p0, p1);
+    const yRate = yE.view_item ? yE.add_to_cart / yE.view_item * 100 : 0;
+    const pRate = pE.view_item ? pE.add_to_cart / pE.view_item * 100 : 0;
+    if (pRate > 0 && yRate > 0) {
+      const rel = (yRate - pRate) / pRate * 100;
+      if (rel <= -12) out.push(`📉 담기율 어제 ${yRate.toFixed(1)}% (7일평균 ${pRate.toFixed(1)}%) ↓${Math.abs(Math.round(rel))}% — 상품→장바구니 누수, 어제 유입 채널 점검`);
+      else if (rel >= 20) out.push(`📈 담기율 어제 ${yRate.toFixed(1)}% (7일평균 ${pRate.toFixed(1)}%) ↑${Math.round(rel)}% — 뭐가 통했나 확인해 복제`);
+    }
+    const chMap2 = async (s, e) => {
+      const r = await ga4Fetch(token, { dateRanges: [{ startDate: s, endDate: e }], metrics: [{ name: 'sessions' }], dimensions: [{ name: 'sessionDefaultChannelGroup' }] });
+      const m = {}; (r.rows || []).forEach(x => m[x.dimensionValues[0].value] = +x.metricValues[0].value); return m;
+    };
+    const yCh = await chMap2(y, y), pCh = await chMap2(p0, p1);
+    const grp = (m, ks) => ks.reduce((a, k) => a + (m[k] || 0), 0);
+    [['메타', ['Paid Social']], ['구글', ['Paid Search', 'Cross-network']]].forEach(([nm, ks]) => {
+      const yv = grp(yCh, ks), pAvg = grp(pCh, ks) / 7;
+      if (pAvg < 20) return;
+      const rel = (yv - pAvg) / pAvg * 100;
+      if (Math.abs(rel) >= 35) out.push(`${rel > 0 ? '📈' : '📉'} ${nm} 유입 어제 ${yv} (7일평균 ${Math.round(pAvg)}/일) ${rel > 0 ? '↑' : '↓'}${Math.abs(Math.round(rel))}% — ${rel > 0 ? '소재/타이밍 뭐가 통했나' : '소재·노출 점검(대표)'}`);
+    });
+  } catch (e) { console.error('[데일리 신호]', e.message); }
+  return out;
+}
+
 // ── 송마망 회의록 (RAW + 액션 + Telegram 단톡방 — Claude 프롬프트 주입용) ──
 const SONGMAMANS_SHEET_ID = '1pBqKnyOQHwepzo65B_TCJ0dU-yjRL1aLs-TfEfBjXJI';
 const { fetchSongmamansChat } = require('./lib/telegram_user');
@@ -2588,6 +2623,16 @@ async function dailyReport() {
   // 콕핏 진행중에 상주하므로 여기서 매일 반복하지 않음(같은 줄 ⏳N일째 나가는 노이즈 제거).
   const dailyActions = [];
 
+  // (0) ★데이터 변화 신호 — 매일 다른 실데이터(담기율·채널 급변·VOC). 공구보다 앞에 = DM이 평이/공구만 X
+  try {
+    const sigs = await getDailySignals();
+    sigs.forEach(s => dailyActions.push(s));
+  } catch (e) { console.error('[데일리 신호 호출]', e.message); }
+  if (voc && voc.negCount >= 2) {
+    const prods = [...new Set((voc.items || []).map(i => i.product).filter(Boolean))].slice(0, 2).join('·');
+    dailyActions.push(`🗣 어제 부정 VOC ${voc.negCount}건${prods ? ` (${prods})` : ''} — 반복 패턴인지 확인, 상페·CS 대응`);
+  }
+
   // (1) 공구·광고 맥락 — 오늘 매출을 어떻게 읽을지 (상태가 매일 달라 자동 변동)
   const activeGongu = promos && promos.find(p => p.active && p.type === '공구');
   const activeAd = promos && promos.find(p => p.active && p.type === '광고');
@@ -2625,7 +2670,7 @@ async function dailyReport() {
   if (soon) dailyActions.push(`🗓 ${soon.title} 시작 D-${soon.dToStart} → 발행·링크·재고 점검`);
 
   // 오늘 액션 = 은우 개인 DM에만(단톡방 중복 제거). 번호 + 3버튼(오늘/나중에/패스)으로 콕핏 연결.
-  const dmActions = dailyActions.slice(0, 3);
+  const dmActions = dailyActions.slice(0, 4);
   const actionSection = dmActions.length
     ? `\n\n🎯 <b>오늘 액션</b> (버튼으로 콕핏에)\n${dmActions.map((a, i) => `${i + 1}. ${a}`).join('\n')}\n· (게스트→회원·휴면윈백 등 구조 레버는 콕핏 진행중 참조)`
     : '';
@@ -3462,6 +3507,7 @@ module.exports = {
   getMissingUtmRows,
   fetchCrmStatus,
   autoRefillDesignCases,
+  getDailySignals,
   backfillWeeklySnapshots,
   weekRange,
   dateStr,
