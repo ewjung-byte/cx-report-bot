@@ -1110,8 +1110,9 @@ async function getCafe24Reviews(startDate, endDate) {
 // ── GA4 일간 (어제 채널·상품 페이지·짧은URL 손실 감지) ─
 // 유입 출처(채널) 기준 라벨 — 사용자 확정 매핑 (2026-05-26)
 // 같은 SKU도 어떤 채널로 들어왔는지로 분류해야 의미있음. cafe24 진열명이 아니라 트래픽 출처로.
+// ★라벨=상품 정체(채널 합계 아님). #27=채널전용 아닌 메인상품 / #83·88 등=특정채널 전용상품.
 const PRODUCT_NAME = {
-  '27': '오가닉',
+  '27': '메인 바질(직접판매)',
   '38': '생활작가 콜라보 (판매중지)',
   '40': '요진편 공구',
   '41': '쿠코 공구 (판매중지)',
@@ -1119,11 +1120,11 @@ const PRODUCT_NAME = {
   '50': '예닮 공구 (판매중지)',
   '51': '찬밥 공구',
   '52': '메가쇼 특가 (판매중지)',
-  '83': '메타광고',
-  '84': '메타광고',
+  '83': '메타광고 전용상품',
+  '84': '메타광고 전용상품',
   '85': 'LG 임직원 특가',
   '87': '꿀동이 공구',
-  '88': '구글광고 (유튜브)',
+  '88': '구글광고 전용상품(유튜브)',
 };
 // 꿀동이 = #87 only (확정). 다른 채널별 공구 SKU는 별도 카운트.
 const KKUL_PRODUCT_NO = '87';
@@ -3140,9 +3141,22 @@ async function weeklyReport() {
   const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, clarity, ga4, reviews, repurchase, crm });
 
   const chMap = { 'Paid Social':'유료SNS(메타·인스타)', 'Paid Search':'유료검색(구글)', 'Organic Social':'자연SNS', 'Organic Search':'자연검색', 'Organic Video':'유튜브', 'Organic Shopping':'네이버쇼핑', 'Direct':'직접유입', 'Referral':'추천유입', 'Paid Other':'기타광고', 'Unassigned':'미분류' };
-  const chLines = Object.entries(ga4?.channels||{}).sort((a,b)=>b[1].cur.sessions-a[1].cur.sessions).slice(0,4).map(([ch, v]) =>
-    `${chMap[ch]||ch}: ${v.cur.sessions}명${diff(v.cur.sessions, v.prev.sessions)}`
-  ).join('\n');
+  // ★전주≈0이면 %가 ∞로 폭발(Cross-network ↑82567% 등) → 급변/신규로 표기. 구글은 검색+PMax(Cross-network) 합산(분리하면 예산이동을 폭락으로 오해).
+  const chans = ga4?.channels || {};
+  const cSess = k => chans[k]?.cur?.sessions || 0, pSess = k => chans[k]?.prev?.sessions || 0;
+  const wowSafe = (c, p) => {
+    if (!p || p < 10) return c > 30 ? ' 🆕(전주≈0)' : '';
+    const d = Math.round((c - p) / p * 100);
+    return Math.abs(d) > 300 ? ` (${d > 0 ? '↑' : '↓'}급변·전주 ${p})` : diff(c, p);
+  };
+  const merged = [
+    ['유료검색+PMax(구글)', cSess('Paid Search') + cSess('Cross-network'), pSess('Paid Search') + pSess('Cross-network')],
+    ['유료SNS(메타·인스타)', cSess('Paid Social'), pSess('Paid Social')],
+  ];
+  Object.entries(chans).filter(([k]) => !['Paid Search', 'Cross-network', 'Paid Social'].includes(k))
+    .sort((a, b) => b[1].cur.sessions - a[1].cur.sessions).slice(0, 3)
+    .forEach(([k, v]) => merged.push([chMap[k] || k, v.cur.sessions, v.prev.sessions]));
+  const chLines = merged.filter(m => m[1] > 0).map(([name, c, p]) => `${name}: ${c}명${wowSafe(c, p)}`).join('\n');
 
   // 사이트 전환율 = cafe24 주문 ÷ GA4 총세션 (양끝 정확). Clarity funnel은 페이지 방문 수(순차 아님)라 비율 오해 → 카운트만 + 진짜 전환율 별도.
   const ga4TotalSess = Object.values(ga4?.channels || {}).reduce((a, v) => a + (v.cur?.sessions || 0), 0);
