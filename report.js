@@ -810,6 +810,58 @@ async function fetchCrmStatus() {
   } catch (e) { console.error('CRM 상태 fetch 오류:', e.message); return null; }
 }
 
+// ── 🎨 디자인 케이스북 자동 보충 (재고 떨어지면 Claude가 새 케이스 생성·적재) ──
+// 2026-06-29: "큐 소진형→자동 보충형". 미발송<1인 브랜드만, Claude 지식 생성(웹 X)=토큰 적음(회당 ~1.5k).
+const DESIGN_SHEET_ID = '1nxnsbqQSxv-lRcCDsUh6r16qoyeywVRJhPScd2N21bA';
+async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
+  if (!CLAUDE_API_KEY) return [];
+  const subject = brandKr === 'A 식품'
+    ? '이태리정미소(이탈리아 프리미엄 식품: 올리브유·바질페스토·파스타·빵)'
+    : '카마솥(프리미엄 주방기기: 무쇠·스테인리스·인덕션)';
+  // ★이태리정미소 디자인 가이드(ij-design-guide-cf.pages.dev)가 큐레이션한 레퍼런스 풀 — 우선 사용
+  const CURATED = 'eataly.com(이탈리아 식품), casperscaviar.com(프리미엄 식품 D2C), aesop.com(미니멀 프리미엄), muji.com(미니멀 라이프스타일), apple.com(제품 디자인), aupalevodka.com(프리미엄 주류), johnnysdirtysoda.com, elevaremarket.com';
+  const prompt = `너는 D2C 이커머스 홈페이지 디자인 분석가야. ${subject} 자사몰 홈 개편 레퍼런스로 쓸 **실존 브랜드** 케이스 ${n}개를 만들어.
+★우선 이태리정미소가 큐레이션한 레퍼런스 풀에서 (아직 안 쓴 것) 골라: ${CURATED}. 풀에 적합한 게 없으면 유사한 실존 브랜드로.
+이미 있는 제목(중복 금지): ${excludeTitles.join(', ')}
+각 케이스 = JSON 객체: {"title":"브랜드명","sub":"한 줄 전략(줄표 금지)","point":"① 히어로 선언/핵심 홈 패턴 한 문장","apply":"${brandKr === 'A 식품' ? '이태리정미소' : '카마솥'} 적용 한 문장","src":"홈 도메인(예: graza.co)"}
+출력 = JSON 배열만. 실존 브랜드만. 마크다운·설명·코드펜스 금지.`;
+  try {
+    const res = await postJson('api.anthropic.com', '/v1/messages', { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01' }, { model: CLAUDE_MODEL, max_tokens: 900, messages: [{ role: 'user', content: prompt }] });
+    const txt = res.content?.[0]?.text || '';
+    const m = txt.match(/\[[\s\S]*\]/);
+    if (!m) return [];
+    return JSON.parse(m[0]).filter(c => c && c.title && !excludeTitles.includes(c.title));
+  } catch (e) { console.error('[디자인 케이스 생성]', e.message); return []; }
+}
+async function autoRefillDesignCases() {
+  try {
+    const token = await getGA4Token();
+    const auth = { 'Authorization': `Bearer ${token}` };
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${DESIGN_SHEET_ID}/values/${encodeURIComponent('🎨 디자인_사례!A2:J100')}`;
+    const data = await fetchJson(url, auth);
+    const rows = (data.values || []).filter(r => r[0]);
+    const titles = rows.map(r => String(r[3] || ''));
+    const brands = [{ kr: 'A 식품', pre: 'A' }, { kr: 'B 주방기기', pre: 'B' }];
+    const newRows = [];
+    for (const b of brands) {
+      const unsent = rows.filter(r => String(r[2] || '').trim() === b.kr && String(r[8] || '').trim() === '미발송').length;
+      if (unsent >= 1) continue; // 재고 있으면 skip
+      const maxId = rows.filter(r => String(r[0]).charAt(0) === b.pre).reduce((mx, r) => Math.max(mx, parseInt(String(r[0]).slice(1)) || 0), 0);
+      const gen = await generateDesignCasesViaClaude(b.kr, 2, titles); // 2개 = 버퍼
+      gen.forEach((c, i) => {
+        newRows.push([b.pre + (maxId + 1 + i), dateStr(0), b.kr, c.title, c.sub || '', c.point || '', c.apply || '', c.src || '', '미발송', '']);
+        titles.push(c.title);
+      });
+    }
+    if (newRows.length) {
+      // ★getGA4Token은 읽기전용(403) → 쓰기는 GAS(시트 소유) 통해서
+      await postToAppsScript({ action: 'append_design_cases', rows: newRows }, APPS_SCRIPT_URL);
+      console.log('[디자인 케이스북 자동보충]', newRows.map(r => r[0] + ' ' + r[3]).join(' / '));
+    } else console.log('[디자인 케이스북] 재고 충분 — 보충 없음');
+    return newRows.length;
+  } catch (e) { console.error('[디자인 자동보충]', e.message); return 0; }
+}
+
 // ── 송마망 회의록 (RAW + 액션 + Telegram 단톡방 — Claude 프롬프트 주입용) ──
 const SONGMAMANS_SHEET_ID = '1pBqKnyOQHwepzo65B_TCJ0dU-yjRL1aLs-TfEfBjXJI';
 const { fetchSongmamansChat } = require('./lib/telegram_user');
@@ -2723,8 +2775,8 @@ ${productSalesOnly}${promoScheduleSection}${analysisSection}`;
   if (groupResult.ok) {
     // 🤖 CX 판단은 단톡방 본문(analysisSection)에. DM=은우 전용 분석+액션버튼.
     if (cxManagerSection || actionSection || healthSectionDM) await sendTelegram(personalMsg, actionKeyboard);
-    // 🎨 디자인 사례집 — 매일 1개 개인 DM (미발송분부터, 채택/패스 버튼). GAS sendNextDesignCase_
-    if (!DRY_RUN) await postToAppsScript({ action: 'send_next_design_case' }, APPS_SCRIPT_URL).catch(() => {});
+    // 🎨 디자인 사례집 — 발송 전 재고 자동보충(미발송<1 브랜드는 Claude 생성·적재) → 매일 1개 개인 DM
+    if (!DRY_RUN) { await autoRefillDesignCases().catch(() => {}); await postToAppsScript({ action: 'send_next_design_case' }, APPS_SCRIPT_URL).catch(() => {}); }
     console.log('일간 발송 완료 ✅');
   } else {
     console.error('발송 실패 ❌:', JSON.stringify(groupResult));
@@ -3409,6 +3461,7 @@ module.exports = {
   recordMonthlyAuto,
   getMissingUtmRows,
   fetchCrmStatus,
+  autoRefillDesignCases,
   backfillWeeklySnapshots,
   weekRange,
   dateStr,
