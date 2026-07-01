@@ -1621,7 +1621,7 @@ ${UX_CATEGORIES.map((c, i) => `${i+1}. ${c}`).join('\n')}
 3. 다른 vertical에서 *식료품에 변환* 강조: B2B SaaS(Linear·Notion·Figma) · 핀테크(토스·뱅크샐러드·Stripe Atlas) · 여행(Klook·트리플·마이리얼트립) · 교육(클래스101·코드잇·매스프레소) · 콘텐츠(왓챠·티빙·라프텔)의 UX 패턴이 식료품 D2C에 어떻게 작동하는지.
 4. 학술·권위 source 인용 우선: Baymard Institute · Nielsen Norman Group · Built for Mars · Growth.Design · CXL ConversionXL · UX Research conference (CHI·UIST). 위 [최근 권위 source 새 글] 블록이 있으면 그 글 1개를 명시적으로 인용·참조.
 5. 정량 데이터 필수: A/B test 결과·CVR·이탈률·LTV 등 숫자 동반. 출처 명시. 모르면 "검증 안 됨"으로 솔직히.
-6. 이미 다룬 기법 (위 history) 반복 X. 각 카테고리 안에서 다른 패턴.
+6. ★이미 다룬 기법 (위 history) 반복 절대 X — 제목·표현만 바꾼 같은 개념도 금지. 특히 **최근 3~4회와 같은 계열(예: 같은 UI 패턴의 변형·리네이밍)이면 완전히 다른 카테고리**를 골라라. history에 "낙관적 UI/Optimistic" 있으면 그 계열 전면 금지.
 
 분량 가이드 (엄수): 전체 본문 약 1,500자(공백 포함, 구분선 제외). 단톡방용이라 짧고 정확하게. 각 섹션 압축.
 
