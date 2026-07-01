@@ -818,10 +818,15 @@ async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
   const subject = brandKr === 'A 식품'
     ? '이태리정미소(이탈리아 프리미엄 식품: 올리브유·바질페스토·파스타·빵)'
     : '카마솥(프리미엄 주방기기: 무쇠·스테인리스·인덕션)';
-  // ★이태리정미소 디자인 가이드(ij-design-guide-cf.pages.dev)가 큐레이션한 레퍼런스 풀 — 우선 사용
-  const CURATED = 'eataly.com(이탈리아 식품), casperscaviar.com(프리미엄 식품 D2C), aesop.com(미니멀 프리미엄), muji.com(미니멀 라이프스타일), apple.com(제품 디자인), aupalevodka.com(프리미엄 주류), johnnysdirtysoda.com, elevaremarket.com';
+  // ★업종 강제 — 카테고리 안 맞는 브랜드(주방기기 칸에 화장품 등) 방지 (2026-06-30 Aesop 오분류 fix)
+  const CATEGORY = brandKr === 'A 식품'
+    ? '식품·음료·조미료·올리브유·소스 D2C (예: Graza·Fly By Jing·Omsom·Diaspora·Brightland)'
+    : '주방기기·쿡웨어·조리도구·식기·홈웨어 (냄비·팬·주방용품, 예: Made In·Caraway·Our Place·HexClad·Great Jones·Milo·Field Company·Smithey·Material Kitchen)';
+  // 디자인 가이드 큐레이션 풀 = "디자인 톤" 참고용 (업종 무관, 감각만 참고)
+  const CURATED = 'aesop.com·muji.com·apple.com(미니멀·세계관), eataly.com·casperscaviar.com(프리미엄 식품)';
   const prompt = `너는 D2C 이커머스 홈페이지 디자인 분석가야. ${subject} 자사몰 홈 개편 레퍼런스로 쓸 **실존 브랜드** 케이스 ${n}개를 만들어.
-★우선 이태리정미소가 큐레이션한 레퍼런스 풀에서 (아직 안 쓴 것) 골라: ${CURATED}. 풀에 적합한 게 없으면 유사한 실존 브랜드로.
+★반드시 "${CATEGORY}" 업종의 브랜드만 골라. ⛔다른 업종 절대 금지 (주방기기 칸에 화장품·식품, 식품 칸에 주방기기 넣지 마).
+큐레이션 톤 레퍼런스(${CURATED})는 "디자인 감각"만 참고 — 업종이 맞을 때만 브랜드로 쓰고, 안 맞으면 위 업종의 다른 실존 브랜드로.
 이미 있는 제목(중복 금지): ${excludeTitles.join(', ')}
 각 케이스 = JSON 객체: {"title":"브랜드명","sub":"한 줄 전략(줄표 금지)","point":"① 히어로 선언/핵심 홈 패턴 한 문장","apply":"${brandKr === 'A 식품' ? '이태리정미소' : '카마솥'} 적용 한 문장","src":"홈 도메인(예: graza.co)"}
 출력 = JSON 배열만. 실존 브랜드만. 마크다운·설명·코드펜스 금지.`;
