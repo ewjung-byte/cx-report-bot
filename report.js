@@ -2491,7 +2491,7 @@ async function dailyReport() {
       ? ` · CRM매칭 ${segments.crmMatchedGuests}/${segments.guestPhones.length}`
       : '';
     const lb = segments.lookbackDays || 365;
-    retentionSection = `회원 ${memberTotal}건 → 재방문 ${m.retCount}건 (${memberRetPct.toFixed(1)}%, ${lb}일 lookback)\n게스트 ${guestTotal}건 → 반복 ${g.repeatCount}건${crmMatch}`;
+    retentionSection = `회원 주문 ${memberTotal}건 중 재방문 <b>${m.retCount}건 (${memberRetPct.toFixed(0)}%)</b> · 게스트 ${guestTotal}건 중 반복 ${g.repeatCount}건${crmMatch}\n(최근 ${lb}일 구매이력 기준)`;
   } else {
     retentionSection = '⚠️ Cafe24 데이터 미수집';
   }
@@ -2584,7 +2584,7 @@ async function dailyReport() {
   try { ltvForReport = await calculateLTVMetrics(today); }
   catch (e) { console.error('[LTV daily fetch] 실패:', e.message); }
   const ltvSection = ltvForReport
-    ? `\n신규 D+30 재구매 ${ltvForReport.신규_D30_retention}% (cohort ${ltvForReport.신규_D30_cohort_size}명) · 휴면 91-180d ${ltvForReport.휴면_91_180d}명 · VIP top10% 매출 ${ltvForReport.상위10_매출점유}%`
+    ? `\n· 신규 30일내 재구매 ${ltvForReport.신규_D30_retention}% (${ltvForReport.신규_D30_cohort_size}명 기준) · 휴면(3~6개월) ${ltvForReport.휴면_91_180d}명 · VIP 상위10% = 매출 ${ltvForReport.상위10_매출점유}%`
     : '';
 
   // 🆕 세그먼트 매출 분해 — 별도 섹션 (빈 줄 분리)
