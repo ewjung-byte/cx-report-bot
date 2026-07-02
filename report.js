@@ -859,7 +859,17 @@ async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
     const txt = res.content?.[0]?.text || '';
     const m = txt.match(/\[[\s\S]*\]/);
     if (!m) return [];
-    return JSON.parse(m[0]).filter(c => c && c.title && !excludeTitles.includes(c.title));
+    const cases = JSON.parse(m[0]).filter(c => c && c.title && !excludeTitles.includes(c.title));
+    // ★생성된 src 도메인 생존 검증 — 가짜/죽은 브랜드가 DM에 나가는 것 방지 (2026-07-02)
+    const alive = await Promise.all(cases.map(c => new Promise(resolve => {
+      const dom = String(c.src || '').replace(/^https?:\/\//, '').split('/')[0];
+      if (!dom) return resolve(false);
+      const req = https.request({ hostname: dom, path: '/', method: 'GET', timeout: 7000, headers: { 'User-Agent': 'Mozilla/5.0' } }, res2 => { res2.resume(); resolve(res2.statusCode < 500); });
+      req.on('error', () => resolve(false)); req.on('timeout', () => { req.destroy(); resolve(false); }); req.end();
+    })));
+    const ok = cases.filter((c, i) => alive[i]);
+    if (ok.length < cases.length) console.log('[디자인 생성] 죽은 도메인 제외:', cases.filter((c, i) => !alive[i]).map(c => c.title + '(' + c.src + ')').join(', '));
+    return ok;
   } catch (e) { console.error('[디자인 케이스 생성]', e.message); return []; }
 }
 async function autoRefillDesignCases() {
@@ -1653,7 +1663,7 @@ ${UX_CATEGORIES.map((c, i) => `${i+1}. ${c}`).join('\n')}
 2. 한국 D2C/커머스 사례 적극 surface: 마뗑킴 · 생활공작소 · 해녀가깨 · 앤캐럿 · 이파리 · 논픽션 · 무신사 · 29CM · 마켓컬리 · 오늘의집 · 와디즈 · 윙잇 · 매스프레소 · 핏앤펑크 · 도서출판 사이드웨이 등. 한국 시장 행동 패턴(인앱 브라우저 · 카카오톡 · 토스/네이버페이) 구체 사례 우선.
 3. 다른 vertical에서 *식료품에 변환* 강조: B2B SaaS(Linear·Notion·Figma) · 핀테크(토스·뱅크샐러드·Stripe Atlas) · 여행(Klook·트리플·마이리얼트립) · 교육(클래스101·코드잇·매스프레소) · 콘텐츠(왓챠·티빙·라프텔)의 UX 패턴이 식료품 D2C에 어떻게 작동하는지.
 4. 학술·권위 source 인용 우선: Baymard Institute · Nielsen Norman Group · Built for Mars · Growth.Design · CXL ConversionXL · UX Research conference (CHI·UIST). 위 [최근 권위 source 새 글] 블록이 있으면 그 글 1개를 명시적으로 인용·참조.
-5. 정량 데이터 필수: A/B test 결과·CVR·이탈률·LTV 등 숫자 동반. 출처 명시. 모르면 "검증 안 됨"으로 솔직히.
+5. ★정량 데이터는 **확실한 실존 출처가 있을 때만** 숫자 인용(출처명 필수). 출처가 확실치 않으면 **숫자를 지어내지 말고 "정량 검증 없음"이라고 쓰거나 정성 서술로**. 단톡방에 팀 전체가 보는 보고라 틀린 숫자 1개가 신뢰 전체를 깨뜨림. 이태리정미소 실측 데이터([최신 실측 데이터] 블록)는 자유롭게 인용.
 6. ★이미 다룬 기법 (위 history) 반복 절대 X — 제목·표현만 바꾼 같은 개념도 금지. 특히 **최근 3~4회와 같은 계열(예: 같은 UI 패턴의 변형·리네이밍)이면 완전히 다른 카테고리**를 골라라. history에 "낙관적 UI/Optimistic" 있으면 그 계열 전면 금지.
 
 분량 가이드 (엄수): 전체 본문 약 1,500자(공백 포함, 구분선 제외). 단톡방용이라 짧고 정확하게. 각 섹션 압축.
