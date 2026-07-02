@@ -3251,6 +3251,20 @@ async function weeklyReport() {
     } else console.log('[UTM watchdog] 예정 캠페인 UTM 누락 없음');
   } catch (e) { console.error('[UTM watchdog]', e.message); }
 
+  // 💰 스스 귀속매출 미입력 리마인드 (주1회) — 지난달 스마트스토어 행 G(매출) 비어있으면 DM (2026-07-02)
+  try {
+    const token2 = await getGA4Token();
+    const pm = (() => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 7); })();
+    const rev = await fetchJson(`https://sheets.googleapis.com/v4/spreadsheets/1nxnsbqQSxv-lRcCDsUh6r16qoyeywVRJhPScd2N21bA/values/${encodeURIComponent('💰 은우 귀속 매출!A1:G40')}`, { 'Authorization': 'Bearer ' + token2 });
+    const rrows = rev.values || [];
+    const ssRow = rrows.find(r => String(r[1] || '').includes('스마트스토어') && String(r[0] || '').includes(pm));
+    const filled = ssRow && String(ssRow[6] || '').trim();
+    if (!filled) {
+      await sendTelegram(`💰 <b>${pm} 스마트스토어 귀속매출 미입력</b>\n💰시트 스마트스토어 행 G열에 지난달 매출 입력 → 협상카드 자동 반영. (입력 후엔 이 알림 안 옴)`, null);
+      console.log('[귀속매출 리마인드]', pm, '미입력 DM');
+    } else console.log('[귀속매출]', pm, '입력됨 — 리마인드 skip');
+  } catch (e) { console.error('[귀속매출 리마인드]', e.message); }
+
   // 📄 주간 페이지뷰 시트 적재 (PV=실측 사람트래픽, 비교 baseline 누적) — 매주 자동, 같은 주차 upsert
   try {
     const _t = await getGA4Token();
