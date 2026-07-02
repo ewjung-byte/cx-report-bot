@@ -779,6 +779,25 @@ async function fetchNegativeVOC(dateStrYmd) {
   } catch (e) { console.error('VOC fetch 오류:', e.message); return null; }
 }
 
+// ── 솔라피 잔액 (읽기전용 모니터링 — 발송 API 호출 절대 금지, 2026-07-02) ──
+// 키: env(Actions) 또는 로컬 C:/Users/user/solapi_token.json. CRM(알림톡)이 잔액 고갈로 조용히 멈추는 것 방지.
+function getSolapiBalance() {
+  return new Promise((resolve) => {
+    let key = process.env.SOLAPI_API_KEY, sec = process.env.SOLAPI_API_SECRET;
+    if (!key || !sec) {
+      try { const t = JSON.parse(fs.readFileSync('C:/Users/user/solapi_token.json', 'utf8')); key = t.apiKey; sec = t.apiSecret; } catch (e) { return resolve(null); }
+    }
+    if (!key || !sec) return resolve(null);
+    const crypto = require('crypto');
+    const date = new Date().toISOString(), salt = crypto.randomBytes(16).toString('hex');
+    const sig = crypto.createHmac('sha256', sec).update(date + salt).digest('hex');
+    https.get({ hostname: 'api.solapi.com', path: '/cash/v1/balance', headers: { Authorization: `HMAC-SHA256 apiKey=${key}, date=${date}, salt=${salt}, signature=${sig}` } }, res => {
+      let d = ''; res.setEncoding('utf8'); res.on('data', c => d += c);
+      res.on('end', () => { try { const j = JSON.parse(d); resolve(j.balance != null ? Math.round(j.balance) : null); } catch (e) { resolve(null); } });
+    }).on('error', () => resolve(null));
+  });
+}
+
 // ── CRM 실제 운영 현황 (발송이력 + 실행기록) ───────────────────
 // 봇이 "이미 돌리는 CRM"을 알아야 죽은/중복 액션을 안 뱉음 (2026-06-29: 단톡방 헛소리 fix)
 async function fetchCrmStatus() {
@@ -2823,8 +2842,14 @@ ${productSalesOnly}${promoScheduleSection}${analysisSection}`;
   }
   const withAge = (s) => { const a = alertAges[alertKey(s)]; return a >= 2 ? `${s} ⏳${a}일째` : s; };
   let msgToSend = msg;
+  // 💬 솔라피 잔액 (읽기전용) — 알림톡 CRM이 잔액 고갈로 조용히 멈추는 것 방지 (2026-07-02)
+  let solapiLine = '';
+  try {
+    const bal = await getSolapiBalance();
+    if (bal != null) solapiLine = bal < 30000 ? `\n🚨 솔라피 잔액 ${bal.toLocaleString()}원 — 3만원 미만, 충전 필요(알림톡 CRM 멈춤 위험)` : `\n💬 솔라피 잔액 ${bal.toLocaleString()}원`;
+  } catch (e) {}
   // 액션엔 ⏳에이징 미적용 — 오늘 데이터로 매일 변하는 맥락 신호라(마감 있는 할일 X). 경고만 에이징.
-  const healthSectionDM = warnings.length ? `\n\n🔧 <b>데이터 점검</b>\n${warnings.map(x => `⚠️ ${withAge(x)}`).join('\n')}` : '';
+  const healthSectionDM = (warnings.length || solapiLine) ? `\n\n🔧 <b>데이터 점검</b>\n${warnings.map(x => `⚠️ ${withAge(x)}`).join('\n')}${solapiLine}` : '';
 
   // 📍 DM 끝 콕핏 한 줄 — 아침 DM에서 바로 "오늘 뭐" (보는 1곳)
   let cockpitLine = '';
@@ -3548,6 +3573,7 @@ module.exports = {
   fetchCrmStatus,
   autoRefillDesignCases,
   getDailySignals,
+  getSolapiBalance,
   backfillWeeklySnapshots,
   weekRange,
   dateStr,
