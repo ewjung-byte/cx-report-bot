@@ -2658,23 +2658,28 @@ async function dailyReport() {
   const activeGongu = promos && promos.find(p => p.active && p.type === '공구');
   const activeAd = promos && promos.find(p => p.active && p.type === '광고');
   const nextP = promos && promos.find(p => !p.active && p.dToStart > 0);
+  // ★상태(진행중 광고·SKU집중)는 매일 반복 금지 — "변화 시점"에만 (2026-07-02 은우 "획일화" fix)
   if (activeGongu && activeGongu.dToEnd <= 2) {
     dailyActions.push(`📅 ${activeGongu.title} 공구 종료 D-${activeGongu.dToEnd} → 종료 후 매출 방어 시퀀스(구매자 정가 SKU 쿠폰) 준비`);
   } else if (activeAd) {
-    dailyActions.push(`🔵 ${activeAd.title} 광고(PPL) 효과일 — 오늘 매출엔 광고 유입 포함(순수 baseline 아님). 유입→구매 전환 점검`);
+    // 광고는 시작 첫날(오염 시작)·종료 임박(집계 예약)만 — 진행 중간엔 침묵(매일 "효과일" 반복 제거)
+    const adDays = Math.floor((Date.now() - new Date(String(activeAd.start).replace(/\./g, '-')).getTime()) / 86400000);
+    if (adDays <= 1) dailyActions.push(`🔵 ${activeAd.title} 광고 시작 — 오늘부터 매출에 광고 유입 섞임. 첫 유입·전용상품 구매 확인`);
+    else if (activeAd.dToEnd != null && activeAd.dToEnd <= 1) dailyActions.push(`🔵 ${activeAd.title} 광고 종료 D-${activeAd.dToEnd} → 종료 후 유입·전환 최종 집계`);
   } else if (!activeGongu) {
     dailyActions.push(`📉 공구·광고 공백${nextP ? ` (다음 ${nextP.type} D-${nextP.dToStart})` : ''} → 오늘=순수 평상시 baseline. 공백 메울 CRM/콘텐츠 1개`);
   }
 
-  // (2) 상품 과의존 — 톱 SKU 비중 (어느 상품·몇 %인지가 매일 달라짐)
+  // (2) 상품 과의존 — 구조 리스크라 매일 같음 → 주1회(월요일)만, 단 60%↑ 극단이면 즉시
   if (cafe24 && cafe24.byProduct) {
     const all = Object.values(cafe24.byProduct).filter(v => v.count > 0).sort((a, b) => b.amount - a.amount);
     const tot = all.reduce((s, p) => s + p.amount, 0);
     if (all.length && tot > 0) {
       const top = all[0], share = Math.round(top.amount / tot * 100);
-      if (share >= 40) {
+      const isMon = new Date().getDay() === 1;
+      if (share >= 60 || (share >= 40 && isMon)) {
         const id = String(top.productNo), nm = PRODUCT_NAME[id] || `#${id}`;
-        dailyActions.push(`🎯 매출 ${share}%가 ${nm} 하나 — 2위 상품 노출·번들로 분산 (단일 SKU 리스크)`);
+        dailyActions.push(`🎯 매출 ${share}%가 ${nm} 하나 — 2위 상품 노출·번들로 분산 (단일 SKU 리스크${share >= 60 ? '·극단' : '·주간 리마인드'})`);
       }
     }
   }
