@@ -143,11 +143,13 @@ function postToAppsScript(data, url) {
         // GAS는 doPost 실행 후 302로 응답을 전달 → GET으로 받아야 JSON 정상 수신
         res.resume();
         https.get(res.headers.location, (r) => {
+          r.setEncoding('utf8'); // 한글 청크 경계 깨짐 방지
           let d = ''; r.on('data', c => d += c);
           r.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { resolve({ ok: true }); } });
         }).on('error', reject);
         return;
       }
+      res.setEncoding('utf8');
       let d = ''; res.on('data', c => d += c);
       res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { resolve({ ok: true }); } });
     });
@@ -180,6 +182,7 @@ ${convo}
     const body = JSON.stringify({ model: CLAUDE_MODEL, max_tokens: 1000, messages: [{ role: 'user', content: prompt }] });
     const raw = await new Promise((resolve, reject) => {
       const req = https.request({ hostname: 'api.anthropic.com', path: '/v1/messages', method: 'POST', headers: { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {
+        res.setEncoding('utf8');
         let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(JSON.parse(d)));
       });
       req.on('error', reject); req.write(body); req.end();
@@ -333,6 +336,7 @@ function isMonday() { return new Date().getDay() === 1; }
 function fetchJson(url, headers = {}) {
   return new Promise((resolve, reject) => {
     const req = https.request(url, { headers }, (res) => {
+      res.setEncoding('utf8'); // ★한글 청크 경계 깨짐(유나��시피) 방지 — 공구시트 등 한글 응답 (2026-07-01 fix)
       let d = ''; res.on('data', c => d += c);
       res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { reject(new Error(d.slice(0,200))); } });
     });
@@ -361,6 +365,7 @@ function fetchCsvWithRedirects(url, hops) {
         resolve(fetchCsvWithRedirects(res.headers.location, hops - 1));
         return;
       }
+      res.setEncoding('utf8'); // 시트 CSV 한글 깨짐 방지
       let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(d));
     }).on('error', reject);
   });
@@ -1104,7 +1109,7 @@ async function getGA4Token() {
 function ga4Fetch(token, body) {
   return new Promise((resolve, reject) => {
     const s = JSON.stringify(body);
-    const req = https.request({ hostname:'analyticsdata.googleapis.com', path:`/v1beta/properties/${ga4Config.property_id}:runReport`, method:'POST', headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json','Content-Length':Buffer.byteLength(s)} }, (res)=>{ let d=''; res.on('data',c=>d+=c); res.on('end',()=>resolve(JSON.parse(d))); });
+    const req = https.request({ hostname:'analyticsdata.googleapis.com', path:`/v1beta/properties/${ga4Config.property_id}:runReport`, method:'POST', headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json','Content-Length':Buffer.byteLength(s)} }, (res)=>{ res.setEncoding('utf8'); let d=''; res.on('data',c=>d+=c); res.on('end',()=>resolve(JSON.parse(d))); });
     req.on('error', reject); req.write(s); req.end();
   });
 }
@@ -1202,9 +1207,9 @@ async function getCafe24Reviews(startDate, endDate) {
 // ── GA4 일간 (어제 채널·상품 페이지·짧은URL 손실 감지) ─
 // 유입 출처(채널) 기준 라벨 — 사용자 확정 매핑 (2026-05-26)
 // 같은 SKU도 어떤 채널로 들어왔는지로 분류해야 의미있음. cafe24 진열명이 아니라 트래픽 출처로.
-// ★라벨=상품 정체(채널 합계 아님). #27=채널전용 아닌 메인상품 / #83·88 등=특정채널 전용상품.
+// ★라벨=유입 출처 기준(은우 확정 매핑). #27=오가닉(직접) / #83·88=광고 전용 / #96~=인플루언서 전용.
 const PRODUCT_NAME = {
-  '27': '메인 바질(직접판매)',
+  '27': '오가닉',
   '38': '생활작가 콜라보 (판매중지)',
   '40': '요진편 공구',
   '41': '쿠코 공구 (판매중지)',
@@ -1217,6 +1222,14 @@ const PRODUCT_NAME = {
   '85': 'LG 임직원 특가',
   '87': '꿀동이 공구',
   '88': '구글광고 전용상품(유튜브)',
+  '89': '키토바삭 광고',
+  '90': '레이지홈 광고',
+  '96': '김두부 광고',
+  '97': '식탁위 희연 광고',
+  '99': '최지원 야미홈 광고',
+  '100': '김하정 광고',
+  '101': '슬기언니 광고',
+  '102': '유나레시피 공구',
 };
 // 꿀동이 = #87 only (확정). 다른 채널별 공구 SKU는 별도 카운트.
 const KKUL_PRODUCT_NO = '87';
@@ -2451,10 +2464,10 @@ async function dailyReport() {
       if (pm.카카오페이) mix.push(`카카오 ${pct(pm.카카오페이)}%`);
       if (pm.자체결제) mix.push(`자체결제 ${pct(pm.자체결제)}%`);
       if (pm.기타간편) mix.push(`기타 ${pct(pm.기타간편)}%`);
-      healthSection += `\n\n💳 결제 ${tot}건 · 회원 ${pct(pm.회원)}% : 비회원 ${pct(pm.비회원)}%`;
+      healthSection += `\n\n💳 결제 <b>${tot}건</b> · 회원 ${pct(pm.회원)}% : 비회원 ${pct(pm.비회원)}%`;
       healthSection += `\n· ${mix.join(' · ')}`;
       const extGuest = pm.네이버_외부 + pm.카카오_외부;
-      if (pm.비회원 > 0 && extGuest > 0) healthSection += `\n· 비회원 ${extGuest}건 = 네이버페이 주문형 등 외부결제 (cafe24 회원 아님·전화 알림톡만 가능)`;
+      if (pm.비회원 > 0 && extGuest > 0) healthSection += `\n· 비회원 ${extGuest}건 = 외부결제(네이버페이 주문형 등, 알림톡만 가능)`;
     }
   }
   // ③ 🔥 막힘 페이지 (Clarity 고유 — DeadClick 기반)
@@ -2581,7 +2594,9 @@ async function dailyReport() {
     const totalRev = (m?.newAmt || 0) + (m?.retAmt || 0) + (g?.newAmt || 0) + (g?.repeatAmt || 0);
     if (totalRev > 0) {
       const pct = (v) => (v / totalRev * 100).toFixed(0);
-      segmentSalesSection = `\n\n📊 <b>세그먼트 매출 분해</b> (실결제 기준)\n신규 회원: ${formatMoney(m.newAmt)} (${pct(m.newAmt)}%)\n재방문 회원: ${formatMoney(m.retAmt)} (${pct(m.retAmt)}%)\n게스트 신규: ${formatMoney(g.newAmt)} (${pct(g.newAmt)}%)\n게스트 반복: ${formatMoney(g.repeatAmt)} (${pct(g.repeatAmt)}%)`;
+      const firstPct = pct(m.newAmt + g.newAmt), repPct = pct(m.retAmt + g.repeatAmt);
+      segmentSalesSection = `\n\n📊 <b>세그먼트 매출</b> (실결제) — 첫구매 <b>${firstPct}%</b> : 재구매 <b>${repPct}%</b>`
+        + `\n· 신규회원 ${pct(m.newAmt)}% · 게스트신규 ${pct(g.newAmt)}% / 재방문회원 ${pct(m.retAmt)}% · 게스트반복 ${pct(g.repeatAmt)}%`;
     }
   }
 
@@ -2618,9 +2633,10 @@ async function dailyReport() {
         const id = String(p.productNo);
         const customNm = PRODUCT_NAME[id];
         const label = customNm ? `${customNm} (#${id})` : `${(p.name || '제품').replace(/^\[.*?\]\s*/, '')} (#${id})`;
-        return `${label}: ${formatMoney(p.amount)}·${p.count}건`;
+        const share = topAmt > 0 ? Math.round(p.amount / topAmt * 100) : 0;
+        return `· ${label}: ${formatMoney(p.amount)} · ${p.count}건 (${share}%)`;
       });
-      productSalesOnly = `합계 ${formatMoney(topAmt)}\n${lines.join('\n')}`;
+      productSalesOnly = `합계 <b>${formatMoney(topAmt)}</b>\n${lines.join('\n')}`;
     }
   }
 
@@ -2708,9 +2724,9 @@ async function dailyReport() {
       // 유입→전환 2단계 미니펀널 (2026-06-22): 유입=GA4세션·주문=cafe24 validCount(취소제외)=둘 다 정확.
       // 장바구니 중간단계는 GA4가 인앱/외부결제 못 잡아 제외(주간 UTM서도 뺀 이유).
       const ord = (dailyOrders && (dailyOrders.validCount != null ? dailyOrders.validCount : dailyOrders.totalCount));
-      const cvrLine = (ord != null && tot > 0) ? ` → 주문 ${ord}건 · 전환율 ${(ord / tot * 100).toFixed(1)}%` : '';
+      const cvrLine = (ord != null && tot > 0) ? ` → 주문 ${ord}건 · 전환율 <b>${(ord / tot * 100).toFixed(1)}%</b>` : '';
       inflowSection = `\n\n🔽 <b>유입→전환</b> (어제)`
-        + `\n유입 ${tot}세션${totArrow}${cvrLine}`
+        + `\n유입 <b>${tot}세션</b>${totArrow}${cvrLine}`
         + `\n· 구글 광고 ${p(g)}% · 메타·인스타 ${p(m)}% · 직접·자연 ${p(d)}% (집계분)`
         + lagNote;
     }
