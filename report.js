@@ -2619,12 +2619,14 @@ async function dailyReport() {
 
   // 🆕 세그먼트 매출 분해 — 별도 섹션 (빈 줄 분리)
   let segmentSalesSection = '';
+  let sumSeg = null, sumTop = null, sumFlow = null; // 🧭 "오늘의 결론" 요약용 캡처 (2026-07-03)
   if (segments && dailyOrders?.revenue > 0) {
     const m = segments.member, g = segments.guest;
     const totalRev = (m?.newAmt || 0) + (m?.retAmt || 0) + (g?.newAmt || 0) + (g?.repeatAmt || 0);
     if (totalRev > 0) {
       const pct = (v) => (v / totalRev * 100).toFixed(0);
       const firstPct = pct(m.newAmt + g.newAmt), repPct = pct(m.retAmt + g.repeatAmt);
+      sumSeg = { first: firstPct, rep: repPct };
       segmentSalesSection = `\n\n📊 <b>세그먼트 매출</b> (실결제) — 첫구매 <b>${firstPct}%</b> : 재구매 <b>${repPct}%</b>`
         + `\n· 신규회원 ${pct(m.newAmt)}% · 게스트신규 ${pct(g.newAmt)}% / 재방문회원 ${pct(m.retAmt)}% · 게스트반복 ${pct(g.repeatAmt)}%`;
     }
@@ -2666,6 +2668,8 @@ async function dailyReport() {
         const share = topAmt > 0 ? Math.round(p.amount / topAmt * 100) : 0;
         return `· ${label}: ${formatMoney(p.amount)} · ${p.count}건 (${share}%)`;
       });
+      const t0 = topN[0], t0id = String(t0.productNo);
+      sumTop = { nm: PRODUCT_NAME[t0id] || `#${t0id}`, share: topAmt > 0 ? Math.round(t0.amount / topAmt * 100) : 0 };
       productSalesOnly = `합계 <b>${formatMoney(topAmt)}</b>\n${lines.join('\n')}`;
     }
   }
@@ -2760,6 +2764,7 @@ async function dailyReport() {
       // 장바구니 중간단계는 GA4가 인앱/외부결제 못 잡아 제외(주간 UTM서도 뺀 이유).
       const ord = (dailyOrders && (dailyOrders.validCount != null ? dailyOrders.validCount : dailyOrders.totalCount));
       const cvrLine = (ord != null && tot > 0) ? ` → 주문 ${ord}건 · 전환율 <b>${(ord / tot * 100).toFixed(1)}%</b>` : '';
+      sumFlow = { tot, arrow: totArrow, ord, cvr: ord != null ? (ord / tot * 100).toFixed(1) : null };
       inflowSection = `\n\n🔽 <b>유입→전환</b> (어제)`
         + `\n유입 <b>${tot}세션</b>${totArrow}${cvrLine}`
         + `\n· 구글 광고 ${p(g)}% · 메타·인스타 ${p(m)}% · 직접·자연 ${p(d)}% (집계분)`
@@ -2767,10 +2772,21 @@ async function dailyReport() {
     }
   }
 
+  // 🧭 오늘의 결론 — 바쁠 땐 이 3~4줄만 (2026-07-03 은우 요청, 이모지 가독)
+  const concl = [];
+  if (dailyOrders?.revenue > 0) {
+    const ordN = dailyOrders.validCount != null ? dailyOrders.validCount : dailyOrders.totalCount;
+    concl.push(`💰 매출 <b>${formatMoney(dailyOrders.revenue)}</b> · 🛒 ${ordN}건${sumFlow?.cvr ? ` · ⚡ 전환 <b>${sumFlow.cvr}%</b>` : ''}`);
+  }
+  if (sumFlow) concl.push(`🚪 유입 <b>${sumFlow.tot.toLocaleString()}세션</b>${sumFlow.arrow}`);
+  if (sumTop) concl.push(`${sumTop.share >= 60 ? '🚨' : '🎯'} 톱 SKU ${sumTop.nm} <b>${sumTop.share}%</b>${sumTop.share >= 60 ? ' ← 집중 극단' : ''}`);
+  if (sumSeg) concl.push(`🔁 첫구매 <b>${sumSeg.first}%</b> : 재구매 <b>${sumSeg.rep}%</b>`);
+  const conclusionBlock = concl.length ? `\n🧭 <b>오늘의 결론</b>\n${concl.join('\n')}\n━━━━━━━━━━━━━━━━━` : '';
+
   // 단톡방 메시지 — 송마망봇과 중복되는 섹션(매출·유입경로·VOC·재입고·광고URL)은 제거.
   // 송마망봇이 매일 통합 발송하므로 은우봇은 CX 고유 차원(사이트행동·결제흐름·상품페이지·리텐션·상품믹스·CX판단)만.
   const msg = `🔎 <b>CX 일간</b> · ${display}
-━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━${conclusionBlock}
 🚦 <b>사이트</b>
 ${healthSection}${inappNotice}${checkoutSection}${productPageSection}${inflowSection}
 
