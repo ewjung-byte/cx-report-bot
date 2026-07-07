@@ -861,12 +861,16 @@ async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
     if (!m) return [];
     const cases = JSON.parse(m[0]).filter(c => c && c.title && !excludeTitles.includes(c.title));
     // ★생성된 src 도메인 생존 검증 — 가짜/죽은 브랜드가 DM에 나가는 것 방지 (2026-07-02)
-    const alive = await Promise.all(cases.map(c => new Promise(resolve => {
-      const dom = String(c.src || '').replace(/^https?:\/\//, '').split('/')[0];
-      if (!dom) return resolve(false);
-      const req = https.request({ hostname: dom, path: '/', method: 'GET', timeout: 7000, headers: { 'User-Agent': 'Mozilla/5.0' } }, res2 => { res2.resume(); resolve(res2.statusCode < 500); });
+    // www 폴백 추가(2026-07-07): naked 도메인 DNS 없는 실존 브랜드가 억울하게 탈락해 A 재고 0 사고
+    const ping = (host) => new Promise(resolve => {
+      const req = https.request({ hostname: host, path: '/', method: 'GET', timeout: 7000, headers: { 'User-Agent': 'Mozilla/5.0' } }, res2 => { res2.resume(); resolve(res2.statusCode < 500); });
       req.on('error', () => resolve(false)); req.on('timeout', () => { req.destroy(); resolve(false); }); req.end();
-    })));
+    });
+    const alive = await Promise.all(cases.map(async c => {
+      const dom = String(c.src || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+      if (!dom) return false;
+      return (await ping(dom)) || (await ping('www.' + dom));
+    }));
     const ok = cases.filter((c, i) => alive[i]);
     if (ok.length < cases.length) console.log('[디자인 생성] 죽은 도메인 제외:', cases.filter((c, i) => !alive[i]).map(c => c.title + '(' + c.src + ')').join(', '));
     return ok;
@@ -886,7 +890,7 @@ async function autoRefillDesignCases() {
       const unsent = rows.filter(r => String(r[2] || '').trim() === b.kr && String(r[8] || '').trim() === '미발송').length;
       if (unsent >= 1) continue; // 재고 있으면 skip
       const maxId = rows.filter(r => String(r[0]).charAt(0) === b.pre).reduce((mx, r) => Math.max(mx, parseInt(String(r[0]).slice(1)) || 0), 0);
-      const gen = await generateDesignCasesViaClaude(b.kr, 2, titles); // 2개 = 버퍼
+      const gen = await generateDesignCasesViaClaude(b.kr, 3, titles); // 3개 = 버퍼 (검증 탈락 감안, 2026-07-07)
       gen.forEach((c, i) => {
         newRows.push([b.pre + (maxId + 1 + i), dateStr(0), b.kr, c.title, c.sub || '', c.point || '', c.apply || '', c.src || '', '미발송', '']);
         titles.push(c.title);
