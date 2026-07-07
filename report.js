@@ -901,6 +901,29 @@ async function autoRefillDesignCases() {
   } catch (e) { console.error('[디자인 자동보충]', e.message); return 0; }
 }
 
+// ── 🏁 캠페인 종료 정산 — 어제 종료된 공구/광고의 최종 성적 자동 집계 (2026-07-07 은우 요청) ──
+// 공구&광고 시트의 상품번호(S열) 기반. cafe24 전용상품 실매출 = 진실. 늦은 결제 감안 D+2가 최종.
+async function getPromoWrapups(promoSchedule) {
+  try {
+    const yday = dateStr(1);
+    const ended = (promoSchedule || []).filter(p => p.end === yday);
+    if (!ended.length) return '';
+    const lines = [];
+    for (const p of ended) {
+      let line = `${p.type === '공구' ? '🟠' : '🔵'} <b>${p.who}</b> ${p.type} 종료 (${p.start.slice(5)}~${p.end.slice(5)})`;
+      if (p.productNo) {
+        const s = await getCafe24SalesByProduct(p.start, p.end);
+        const pd = s.byProduct[p.productNo] || { count: 0, amount: 0 };
+        line += `\n· 💰 전용상품 #${p.productNo}: <b>${pd.count}건 · ${formatMoney(Math.round(pd.amount))}</b>`;
+      } else {
+        line += `\n· ⚠️ 상품번호 미기입(공구&광고 시트 상품번호 열) — 매출 자동집계 불가`;
+      }
+      lines.push(line);
+    }
+    return `\n\n🏁 <b>캠페인 종료 정산</b> (cafe24 실매출·기간 내)\n${lines.join('\n')}\n※ 늦은 결제 반영 위해 D+2 숫자가 최종`;
+  } catch (e) { console.error('[종료 정산]', e.message); return ''; }
+}
+
 // ── 데일리 데이터 신호 (어제 vs 직전7일평균) — DM이 공구만/평이하지 않게 "변한 것"을 매일 ──
 // 2026-06-29: 은우 "개인DM 평이하고 공구만 옴". 담기율·채널 급변을 매일 다른 실데이터로.
 async function getDailySignals() {
@@ -2783,6 +2806,9 @@ async function dailyReport() {
   if (sumSeg) concl.push(`🔁 첫구매 <b>${sumSeg.first}%</b> : 재구매 <b>${sumSeg.rep}%</b>`);
   const conclusionBlock = concl.length ? `\n🧭 <b>오늘의 결론</b>\n${concl.join('\n')}\n━━━━━━━━━━━━━━━━━` : '';
 
+  // 🏁 어제 종료된 캠페인 자동 정산
+  const wrapupSection = await getPromoWrapups(promoSchedule);
+
   // 단톡방 메시지 — 송마망봇과 중복되는 섹션(매출·유입경로·VOC·재입고·광고URL)은 제거.
   // 송마망봇이 매일 통합 발송하므로 은우봇은 CX 고유 차원(사이트행동·결제흐름·상품페이지·리텐션·상품믹스·CX판단)만.
   const msg = `🔎 <b>CX 일간</b> · ${display}
@@ -2794,7 +2820,7 @@ ${healthSection}${inappNotice}${checkoutSection}${productPageSection}${inflowSec
 ${retentionSection}${ltvSection}${segmentSalesSection}
 
 🛍️ <b>상품 별 매출</b> (상품금액·배송비 제외)
-${productSalesOnly}${promoScheduleSection}${analysisSection}`;
+${productSalesOnly}${promoScheduleSection}${wrapupSection}${analysisSection}`;
 
   const analysisMsg = analysis ? `🤖 <b>CX 판단</b>\n${analysis}` : null;
 
