@@ -886,21 +886,29 @@ async function autoRefillDesignCases() {
     const titles = rows.map(r => String(r[3] || ''));
     const brands = [{ kr: 'A 식품', pre: 'A' }, { kr: 'B 주방기기', pre: 'B' }];
     const newRows = [];
+    const starved = []; // 재고 0인데 생성분이 전멸(도메인검증)한 브랜드 — DM 못 나감, 경고 대상
     for (const b of brands) {
       const unsent = rows.filter(r => String(r[2] || '').trim() === b.kr && String(r[8] || '').trim() === '미발송').length;
       if (unsent >= 1) continue; // 재고 있으면 skip
       const maxId = rows.filter(r => String(r[0]).charAt(0) === b.pre).reduce((mx, r) => Math.max(mx, parseInt(String(r[0]).slice(1)) || 0), 0);
-      const gen = await generateDesignCasesViaClaude(b.kr, 3, titles); // 3개 = 버퍼 (검증 탈락 감안, 2026-07-07)
-      gen.forEach((c, i) => {
-        newRows.push([b.pre + (maxId + 1 + i), dateStr(0), b.kr, c.title, c.sub || '', c.point || '', c.apply || '', c.src || '', '미발송', '']);
-        titles.push(c.title);
-      });
+      // 재고 0 → 최대 2회 재시도로 검증 통과분 확보 (2026-07-08: 생성분 전멸 시 B DM 끊기던 버그)
+      let got = 0;
+      for (let attempt = 0; attempt < 2 && got === 0; attempt++) {
+        const gen = await generateDesignCasesViaClaude(b.kr, 3, titles);
+        gen.forEach((c, i) => {
+          newRows.push([b.pre + (maxId + 1 + got + i), dateStr(0), b.kr, c.title, c.sub || '', c.point || '', c.apply || '', c.src || '', '미발송', '']);
+          titles.push(c.title);
+        });
+        got += gen.length;
+      }
+      if (got === 0) starved.push(b.kr);
     }
     if (newRows.length) {
       // ★getGA4Token은 읽기전용(403) → 쓰기는 GAS(시트 소유) 통해서
       await postToAppsScript({ action: 'append_design_cases', rows: newRows }, APPS_SCRIPT_URL);
       console.log('[디자인 케이스북 자동보충]', newRows.map(r => r[0] + ' ' + r[3]).join(' / '));
     } else console.log('[디자인 케이스북] 재고 충분 — 보충 없음');
+    if (starved.length) console.warn('[디자인 재고 고갈]', starved.join('·'), '— 미발송 0 + 생성 전멸, DM 안 나감(수동 보충 필요)');
     return newRows.length;
   } catch (e) { console.error('[디자인 자동보충]', e.message); return 0; }
 }
