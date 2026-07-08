@@ -952,7 +952,27 @@ async function getDailySignals() {
     const pRate = pE.view_item ? pE.add_to_cart / pE.view_item * 100 : 0;
     if (pRate > 0 && yRate > 0) {
       const rel = (yRate - pRate) / pRate * 100;
-      if (rel <= -12) out.push(`📉 담기율 어제 ${yRate.toFixed(1)}% (7일평균 ${pRate.toFixed(1)}%) ↓${Math.abs(Math.round(rel))}% — 상품→장바구니 누수, 어제 유입 채널 점검`);
+      if (rel <= -12) {
+        // ★신호 조합 = 판단 (2026-07-08 은우 "유의미해?"): 담기율↓면 그 자리에서 오가닉/광고 분리해 원인까지.
+        //   6/26 수동으로 하던 _addcart_split 자동화 — 오가닉도↓=사이트 회귀 / 오가닉 정상=광고 트래픽 희석(대표 영역).
+        let cause = '';
+        try {
+          const splitRates = async (s, e) => {
+            const r = await ga4Fetch(token, { dateRanges: [{ startDate: s, endDate: e }], metrics: [{ name: 'eventCount' }], dimensions: [{ name: 'eventName' }, { name: 'sessionDefaultChannelGroup' }], dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: ['view_item', 'add_to_cart'] } } } });
+            const ad = { v: 0, a: 0 }, og = { v: 0, a: 0 };
+            (r.rows || []).forEach(x => {
+              const ev = x.dimensionValues[0].value, ch = x.dimensionValues[1].value, n = +x.metricValues[0].value;
+              const t = /Paid|Cross-network|Display/i.test(ch) ? ad : og;
+              if (ev === 'view_item') t.v += n; else t.a += n;
+            });
+            return { ad: ad.v ? ad.a / ad.v * 100 : 0, og: og.v ? og.a / og.v * 100 : 0 };
+          };
+          const yS = await splitRates(y, y), pS = await splitRates(p0, p1);
+          const ogDown = pS.og > 0 && (yS.og - pS.og) / pS.og * 100 <= -12;
+          cause = `\n   ↳ 원인분리: 오가닉 ${yS.og.toFixed(1)}%(평균 ${pS.og.toFixed(1)}) · 광고 ${yS.ad.toFixed(1)}%(평균 ${pS.ad.toFixed(1)}) → ${ogDown ? '오가닉도 하락 = 사이트 쪽 점검(은우)' : '오가닉 정상 = 광고 유입 희석(사이트 무죄, 대표·미주 영역)'}`;
+        } catch (e2) { }
+        out.push(`📉 담기율 어제 ${yRate.toFixed(1)}% (7일평균 ${pRate.toFixed(1)}%) ↓${Math.abs(Math.round(rel))}%${cause}`);
+      }
       else if (rel >= 20) out.push(`📈 담기율 어제 ${yRate.toFixed(1)}% (7일평균 ${pRate.toFixed(1)}%) ↑${Math.round(rel)}% — 뭐가 통했나 확인해 복제`);
     }
     const chMap2 = async (s, e) => {
@@ -2556,7 +2576,7 @@ async function dailyReport() {
       ? ` · CRM매칭 ${segments.crmMatchedGuests}/${segments.guestPhones.length}`
       : '';
     const lb = segments.lookbackDays || 365;
-    retentionSection = `회원 주문 ${memberTotal}건 중 재방문 <b>${m.retCount}건 (${memberRetPct.toFixed(0)}%)</b> · 게스트 ${guestTotal}건 중 반복 ${g.repeatCount}건${crmMatch}\n(최근 ${lb}일 구매이력 기준)`;
+    retentionSection = `회원 주문 ${memberTotal}건 중 재방문 <b>${m.retCount}건 (${memberRetPct.toFixed(0)}%)</b> · 게스트 ${guestTotal}건 중 반복 ${g.repeatCount}건${crmMatch}\n(하루 표본이라 %는 출렁임 — 추세 판단은 월요일 주간 리포트로)`;
   } else {
     retentionSection = '⚠️ Cafe24 데이터 미수집';
   }
