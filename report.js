@@ -915,6 +915,60 @@ async function autoRefillDesignCases() {
 
 // ── 🏁 캠페인 종료 정산 — 어제 종료된 공구/광고의 최종 성적 자동 집계 (2026-07-07 은우 요청) ──
 // 공구&광고 시트의 상품번호(S열) 기반. cafe24 전용상품 실매출 = 진실. 늦은 결제 감안 D+2가 최종.
+// ── 📣 진행중 캠페인 유입→전환 (2026-07-09 은우 요청) — 활성 공구/광고의 누적 3축을 단톡방 일간에 ──
+// 유입=go.italy 실클릭(인앱 포함)+GA4 세션, 구매=cafe24 전용상품(진실). UTM시트에서 슬러그·캠페인명 자동 매칭.
+const CLICKLOG_BOT_UA = /axios|curl|python|node-fetch|bot|spider|crawl|Headless|monitor|uptime|Go-http|facebookexternalhit|meta-externalagent/i;
+async function getActivePromoFunnel(promos) {
+  try {
+    const actives = (promos || []).filter(p => p.active && p.productNo);
+    if (!actives.length) return '';
+    const token = await getGA4Token();
+    if (!token) return '';
+    const auth = { 'Authorization': 'Bearer ' + token };
+    const normN = s => String(s || '').toLowerCase().replace(/공구|광고|바질페스토/g, '').replace(/[^가-힣a-z0-9]/g, '');
+    // UTM 시트에서 캠페인명(E)·슬러그(H) 매칭
+    const utm = await fetchJson(`https://sheets.googleapis.com/v4/spreadsheets/1nxnsbqQSxv-lRcCDsUh6r16qoyeywVRJhPScd2N21bA/values/${encodeURIComponent('🔗 UTM 링크!A1:J200')}`, auth);
+    const urows = utm.values || [];
+    actives.forEach(p => {
+      p._camps = []; p._slugs = [];
+      const key = normN(p.who);
+      if (!key) return;
+      urows.forEach(r => {
+        if (!normN(r[0]).includes(key) && !normN(r[1]).includes(key)) return;
+        if (r[4] && !p._camps.includes(r[4])) p._camps.push(String(r[4]));
+        const m = String(r[7] || '').match(/go\.italy-jungmiso\.com\/([\w-]+)/);
+        if (m && !p._slugs.includes(m[1])) p._slugs.push(m[1]);
+      });
+    });
+    // 클릭로그 1회 로드 → 캠페인별 집계
+    let clicks = [];
+    try {
+      const cl = await fetchJson(`https://sheets.googleapis.com/v4/spreadsheets/1nxnsbqQSxv-lRcCDsUh6r16qoyeywVRJhPScd2N21bA/values/${encodeURIComponent('📊 단축링크_클릭!A2:D9000')}`, auth);
+      clicks = (cl.values || []).filter(c => !CLICKLOG_BOT_UA.test(String(c[3] || '')));
+    } catch (e) { }
+    const kd = ts => { const m = String(ts).match(/(\d{4})[.\-]\s*(\d{1,2})[.\-]\s*(\d{1,2})/); return m ? `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}` : ''; };
+    // GA4 세션 (모든 활성 캠페인 한 번에)
+    const allCamps = actives.flatMap(p => p._camps).filter(Boolean);
+    const gaMap = {};
+    if (allCamps.length) {
+      const g = await ga4Fetch(token, { dateRanges: [{ startDate: actives.reduce((a, p) => a < p.start ? a : p.start, dateStr(0)), endDate: dateStr(0) }], metrics: [{ name: 'sessions' }], dimensions: [{ name: 'sessionCampaignName' }], dimensionFilter: { filter: { fieldName: 'sessionCampaignName', inListFilter: { values: allCamps } } } });
+      (g.rows || []).forEach(x => gaMap[x.dimensionValues[0].value] = +x.metricValues[0].value);
+    }
+    const lines = [];
+    for (const p of actives) {
+      const myClicks = clicks.filter(c => p._slugs.includes(String(c[1] || '')) && kd(c[0]) >= p.start);
+      const inapp = myClicks.filter(c => /Instagram|FBAN|FBAV|Threads/i.test(String(c[3] || ''))).length;
+      const gaS = p._camps.reduce((a, c) => a + (gaMap[c] || 0), 0);
+      const sales = await getCafe24SalesByProduct(p.start, dateStr(0));
+      const pd = sales.byProduct[String(p.productNo)] || { count: 0, amount: 0 };
+      lines.push(`${p.type === '공구' ? '🟠' : '🔵'} <b>${p.who}</b> (${p.start.slice(5).replace('-', '/')}~ 누적)`
+        + `\n· 유입: 실클릭 ${myClicks.length}${inapp ? ` (인앱 ${inapp})` : ''}${gaS ? ` · GA4 ${gaS}세션` : ''}`
+        + `\n· 구매: #${p.productNo} <b>${pd.count}건 · ${formatMoney(Math.round(pd.amount))}</b>`);
+    }
+    return lines.length ? `\n\n📣 <b>진행중 캠페인</b> (시작~지금 · 구매=cafe24 진실)\n${lines.join('\n')}` : '';
+  } catch (e) { console.error('[진행중 캠페인 퍼널]', e.message); return ''; }
+}
+
 async function getPromoWrapups(promoSchedule) {
   try {
     const yday = dateStr(1);
@@ -2838,8 +2892,9 @@ async function dailyReport() {
   if (sumSeg) concl.push(`🔁 첫구매 <b>${sumSeg.first}%</b> : 재구매 <b>${sumSeg.rep}%</b>`);
   const conclusionBlock = concl.length ? `\n🧭 <b>오늘의 결론</b>\n${concl.join('\n')}\n━━━━━━━━━━━━━━━━━` : '';
 
-  // 🏁 어제 종료된 캠페인 자동 정산
+  // 🏁 어제 종료된 캠페인 자동 정산 + 📣 진행중 캠페인 유입→전환
   const wrapupSection = await getPromoWrapups(promoSchedule);
+  const activeFunnelSection = await getActivePromoFunnel(promos).catch(() => '');
 
   // 단톡방 메시지 — 송마망봇과 중복되는 섹션(매출·유입경로·VOC·재입고·광고URL)은 제거.
   // 송마망봇이 매일 통합 발송하므로 은우봇은 CX 고유 차원(사이트행동·결제흐름·상품페이지·리텐션·상품믹스·CX판단)만.
@@ -2852,7 +2907,7 @@ ${healthSection}${inappNotice}${checkoutSection}${productPageSection}${inflowSec
 ${retentionSection}${ltvSection}${segmentSalesSection}
 
 🛍️ <b>상품 별 매출</b> (상품금액·배송비 제외)
-${productSalesOnly}${promoScheduleSection}${wrapupSection}${analysisSection}`;
+${productSalesOnly}${activeFunnelSection}${promoScheduleSection}${wrapupSection}${analysisSection}`;
 
   const analysisMsg = analysis ? `🤖 <b>CX 판단</b>\n${analysis}` : null;
 
