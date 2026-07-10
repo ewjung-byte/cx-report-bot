@@ -848,15 +848,23 @@ async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
     : '주방기기·쿡웨어·조리도구·식기·홈웨어 (냄비·팬·주방용품, 예: Made In·Caraway·Our Place·HexClad·Great Jones·Milo·Field Company·Smithey·Material Kitchen)';
   // 디자인 가이드 큐레이션 풀 = "디자인 톤" 참고용 (업종 무관, 감각만 참고)
   const CURATED = 'aesop.com·muji.com·apple.com(미니멀·세계관), eataly.com·casperscaviar.com(프리미엄 식품)';
-  const prompt = `너는 D2C 이커머스 홈페이지 디자인 분석가야. ${subject} 자사몰 홈 개편 레퍼런스로 쓸 **실존 브랜드** 케이스 ${n}개를 만들어.
-★반드시 "${CATEGORY}" 업종의 브랜드만 골라. ⛔다른 업종 절대 금지 (주방기기 칸에 화장품·식품, 식품 칸에 주방기기 넣지 마).
-큐레이션 톤 레퍼런스(${CURATED})는 "디자인 감각"만 참고 — 업종이 맞을 때만 브랜드로 쓰고, 안 맞으면 위 업종의 다른 실존 브랜드로.
+  const prompt = `너는 D2C 이커머스 홈페이지 디자인 분석가야. ${subject} 자사몰 홈 개편 레퍼런스로 쓸 브랜드 케이스 ${n}개를 찾아.
+★★반드시 web_search로 실제 검색해서 **현재 운영 중인 진짜 브랜드**만 골라 — 기억으로 지어내지 마(죽은 도메인 방지). 검색어 예: "best ${brandKr === 'A 식품' ? 'premium D2C food olive oil pasta brand' : 'premium cookware kitchenware D2C brand'} website design".
+★반드시 "${CATEGORY}" 업종만. ⛔다른 업종 절대 금지 (주방기기 칸에 화장품·식품, 식품 칸에 주방기기 넣지 마).
+큐레이션 톤 레퍼런스(${CURATED})는 "디자인 감각"만 참고 — 업종 맞을 때만 브랜드로.
 이미 있는 제목(중복 금지): ${excludeTitles.join(', ')}
-각 케이스 = JSON 객체: {"title":"브랜드명","sub":"한 줄 전략(줄표 금지)","point":"① 히어로 선언/핵심 홈 패턴 한 문장","apply":"${brandKr === 'A 식품' ? '이태리정미소' : '카마솥'} 적용 한 문장","src":"홈 도메인(예: graza.co)"}
-출력 = JSON 배열만. 실존 브랜드만. 마크다운·설명·코드펜스 금지.`;
+각 케이스 = JSON 객체: {"title":"브랜드명","sub":"한 줄 전략(줄표 금지)","point":"① 히어로 선언/핵심 홈 패턴 한 문장","apply":"${brandKr === 'A 식품' ? '이태리정미소' : '카마솥'} 적용 한 문장","src":"검색으로 확인한 실제 홈 도메인(예: graza.co)"}
+검색 후, 마지막 답변은 JSON 배열만 출력(마크다운·설명·코드펜스 금지). src는 검색 결과에서 확인한 실제 도메인만.`;
   try {
-    const res = await postJson('api.anthropic.com', '/v1/messages', { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01' }, { model: CLAUDE_MODEL, max_tokens: 900, messages: [{ role: 'user', content: prompt }] });
-    const txt = res.content?.[0]?.text || '';
+    let body = { model: CLAUDE_MODEL, max_tokens: 3000, tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 5 }], messages: [{ role: 'user', content: prompt }] };
+    let res = await postJson('api.anthropic.com', '/v1/messages', { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01' }, body);
+    // 서버사이드 웹서치 루프가 10회 초과 시 pause_turn — 어시스턴트 응답 붙여 한 번 재개
+    if (res.stop_reason === 'pause_turn' && res.content) {
+      body.messages.push({ role: 'assistant', content: res.content });
+      res = await postJson('api.anthropic.com', '/v1/messages', { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01' }, body);
+    }
+    // 웹서치는 content에 server_tool_use·web_search_tool_result·text 섞임 → text 블록 전부 이어붙여 JSON 추출
+    const txt = (res.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
     const m = txt.match(/\[[\s\S]*\]/);
     if (!m) return [];
     const cases = JSON.parse(m[0]).filter(c => c && c.title && !excludeTitles.includes(c.title));
