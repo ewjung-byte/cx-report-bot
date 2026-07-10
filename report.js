@@ -856,12 +856,15 @@ async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
 각 케이스 = JSON 객체: {"title":"브랜드명","sub":"한 줄 전략(줄표 금지)","point":"① 히어로 선언/핵심 홈 패턴 한 문장","apply":"${brandKr === 'A 식품' ? '이태리정미소' : '카마솥'} 적용 한 문장","src":"검색으로 확인한 실제 홈 도메인(예: graza.co)"}
 검색 후, 마지막 답변은 JSON 배열만 출력(마크다운·설명·코드펜스 금지). src는 검색 결과에서 확인한 실제 도메인만.`;
   try {
-    let body = { model: CLAUDE_MODEL, max_tokens: 3000, tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 5 }], messages: [{ role: 'user', content: prompt }] };
-    let res = await postJson('api.anthropic.com', '/v1/messages', { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01' }, body);
+    // ★웹서치는 postJson에 timeout 없어 무한대기 위험 → 전체 90초 캡(초과 시 [] 반환, 봇 안 멈춤) 2026-07-09
+    const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('웹서치 timeout')), ms))]);
+    const call = (b) => postJson('api.anthropic.com', '/v1/messages', { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01' }, b);
+    let body = { model: CLAUDE_MODEL, max_tokens: 3000, tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 4 }], messages: [{ role: 'user', content: prompt }] };
+    let res = await withTimeout(call(body), 75000);
     // 서버사이드 웹서치 루프가 10회 초과 시 pause_turn — 어시스턴트 응답 붙여 한 번 재개
     if (res.stop_reason === 'pause_turn' && res.content) {
       body.messages.push({ role: 'assistant', content: res.content });
-      res = await postJson('api.anthropic.com', '/v1/messages', { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01' }, body);
+      res = await withTimeout(call(body), 60000);
     }
     // 웹서치는 content에 server_tool_use·web_search_tool_result·text 섞임 → text 블록 전부 이어붙여 JSON 추출
     const txt = (res.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
