@@ -837,6 +837,56 @@ async function fetchCrmStatus() {
 // ── 🎨 디자인 케이스북 자동 보충 (재고 떨어지면 Claude가 새 케이스 생성·적재) ──
 // 2026-06-29: "큐 소진형→자동 보충형". 미발송<1인 브랜드만, Claude 지식 생성(웹 X)=토큰 적음(회당 ~1.5k).
 const DESIGN_SHEET_ID = '1nxnsbqQSxv-lRcCDsUh6r16qoyeywVRJhPScd2N21bA';
+// Claude Messages 스트리밍 호출 — SSE 이벤트를 논스트리밍과 같은 {content, stop_reason} 모양으로 재조립.
+// (웹서치 등 긴 요청이 Actions에서 논스트리밍으로는 응답을 못 받는 문제의 근본 해결)
+function claudeStreamMessage(body, totalMs) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({ ...body, stream: true });
+    let done = false;
+    const fail = (msg) => { if (!done) { done = true; try { req.destroy(); } catch (e) {} reject(new Error(msg)); } };
+    const totalTimer = setTimeout(() => fail('웹서치 stream 전체 240s 초과'), totalMs);
+    let idleTimer = null;
+    const kick = () => { clearTimeout(idleTimer); idleTimer = setTimeout(() => fail('웹서치 stream 45s 무소식(연결 사망)'), 45000); };
+    const req = https.request({
+      hostname: 'api.anthropic.com', path: '/v1/messages', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'accept': 'text/event-stream' }
+    }, (res) => {
+      res.setEncoding('utf8');
+      if (res.statusCode >= 400) { let d = ''; res.on('data', c => d += c); res.on('end', () => fail('HTTP ' + res.statusCode + ' ' + d.slice(0, 300))); return; }
+      kick();
+      let buf = ''; const blocks = []; let stop = null;
+      res.on('data', chunk => {
+        kick(); buf += chunk;
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const evt = buf.slice(0, i); buf = buf.slice(i + 2);
+          const dl = evt.split('\n').find(l => l.startsWith('data:'));
+          if (!dl) continue;
+          let j; try { j = JSON.parse(dl.slice(5)); } catch (e) { continue; }
+          if (j.type === 'content_block_start') blocks[j.index] = j.content_block;
+          else if (j.type === 'content_block_delta' && blocks[j.index]) {
+            const b = blocks[j.index];
+            if (j.delta.type === 'text_delta') b.text = (b.text || '') + j.delta.text;
+            else if (j.delta.type === 'input_json_delta') b.__pj = (b.__pj || '') + j.delta.partial_json;
+            else if (j.delta.type === 'citations_delta') (b.citations = b.citations || []).push(j.delta.citation);
+          }
+          else if (j.type === 'message_delta' && j.delta) stop = j.delta.stop_reason || stop;
+          else if (j.type === 'error') fail('stream error: ' + JSON.stringify(j.error || j).slice(0, 200));
+        }
+      });
+      res.on('end', () => {
+        clearTimeout(totalTimer); clearTimeout(idleTimer);
+        if (done) return; done = true;
+        // server_tool_use 블록의 input은 partial_json 조각 합쳐 복원 (pause_turn 재개 시 필요)
+        blocks.forEach(b => { if (b && b.__pj !== undefined) { try { b.input = JSON.parse(b.__pj || '{}'); } catch (e) {} delete b.__pj; } });
+        resolve({ content: blocks.filter(Boolean), stop_reason: stop });
+      });
+      res.on('error', e => { clearTimeout(totalTimer); clearTimeout(idleTimer); fail('stream res error: ' + e.message); });
+    });
+    req.on('error', e => { clearTimeout(totalTimer); clearTimeout(idleTimer); fail('stream req error: ' + e.message); });
+    req.write(payload); req.end();
+  });
+}
 async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
   if (!CLAUDE_API_KEY) return [];
   const subject = brandKr === 'A 식품'
@@ -856,15 +906,15 @@ async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
 각 케이스 = JSON 객체: {"title":"브랜드명","sub":"한 줄 전략(줄표 금지)","point":"① 히어로 선언/핵심 홈 패턴 한 문장","apply":"${brandKr === 'A 식품' ? '이태리정미소' : '카마솥'} 적용 한 문장","src":"검색으로 확인한 실제 홈 도메인(예: graza.co)"}
 검색 후, 마지막 답변은 JSON 배열만 출력(마크다운·설명·코드펜스 금지). src는 검색 결과에서 확인한 실제 도메인만.`;
   try {
-    // ★웹서치는 postJson에 timeout 없어 무한대기 위험 → 전체 90초 캡(초과 시 [] 반환, 봇 안 멈춤) 2026-07-09
-    const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('웹서치 timeout')), ms))]);
-    const call = (b) => postJson('api.anthropic.com', '/v1/messages', { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01' }, b);
+    // ★스트리밍 필수 (2026-07-13): 논스트리밍 웹서치는 GitHub Actions에서 응답 대기 중 연결이 조용히 죽어
+    // 8/8회 전부 75s timeout(7/11·7/12 디자인 DM 미발송). 스트리밍은 바이트가 계속 흘러 중간 차단 안 당함.
+    // 가드 2중: 이벤트 45초 무소식(죽은 연결) + 전체 240초 캡.
     let body = { model: CLAUDE_MODEL, max_tokens: 3000, tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 4 }], messages: [{ role: 'user', content: prompt }] };
-    let res = await withTimeout(call(body), 75000);
+    let res = await claudeStreamMessage(body, 240000);
     // 서버사이드 웹서치 루프가 10회 초과 시 pause_turn — 어시스턴트 응답 붙여 한 번 재개
     if (res.stop_reason === 'pause_turn' && res.content) {
       body.messages.push({ role: 'assistant', content: res.content });
-      res = await withTimeout(call(body), 60000);
+      res = await claudeStreamMessage(body, 240000);
     }
     // 웹서치는 content에 server_tool_use·web_search_tool_result·text 섞임 → text 블록 전부 이어붙여 JSON 추출
     const txt = (res.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
@@ -918,7 +968,7 @@ async function autoRefillDesignCases() {
       // ★getGA4Token은 읽기전용(403) → 쓰기는 GAS(시트 소유) 통해서
       await postToAppsScript({ action: 'append_design_cases', rows: newRows }, APPS_SCRIPT_URL);
       console.log('[디자인 케이스북 자동보충]', newRows.map(r => r[0] + ' ' + r[3]).join(' / '));
-    } else console.log('[디자인 케이스북] 재고 충분 — 보충 없음');
+    } else if (!starved.length) console.log('[디자인 케이스북] 재고 충분 — 보충 없음');
     if (starved.length) console.warn('[디자인 재고 고갈]', starved.join('·'), '— 미발송 0 + 생성 전멸, DM 안 나감(수동 보충 필요)');
     return newRows.length;
   } catch (e) { console.error('[디자인 자동보충]', e.message); return 0; }
@@ -3668,15 +3718,34 @@ async function main() {
   if (!tokenOk && DRY_RUN) console.warn('[DRY_RUN] 토큰 갱신 실패 — 진행 (메시지 미리보기 목적)');
   const mode = process.argv[2] || (isMonday() ? 'weekly' : 'daily');
   console.log(`모드: ${mode}`);
-  if (mode === 'weekly') await weeklyReport();
+  if (mode === 'weekly') {
+    await weeklyReport();
+    // ★디자인 사례집은 일간 경로에만 있어서 월요일(주간 모드)마다 빠지던 것 — 주간에도 발송 (2026-07-13)
+    if (!DRY_RUN) {
+      await autoRefillDesignCases().catch(() => {});
+      await postToAppsScript({ action: 'send_next_design_case' }, APPS_SCRIPT_URL).catch(() => {});
+      console.log('[디자인 사례집] 주간모드에서도 발송 트리거 완료');
+    }
+  }
   else if (mode === 'ux_draft') await uxDraftFlow();
   else if (mode === 'ux_send') await uxSendFlow();
+  else if (mode === 'design_refill') {
+    // 디자인 사례집만 보충+발송 (미발송 사고 수동 복구용 — 리포트 중복 발송 없음)
+    const added = await autoRefillDesignCases();
+    await postToAppsScript({ action: 'send_next_design_case' }, APPS_SCRIPT_URL);
+    console.log(`[디자인 사례집] 수동 보충 ${added}건 + 발송 트리거 완료`);
+  }
   else await dailyReport();
 }
 
 // 모듈로 require될 때(personal-metrics 등)는 main 자동실행 금지
 if (require.main === module) {
-  main().catch(e => { console.error('에러:', e.message); process.exit(1); });
+  main()
+    .then(() => {
+      // ★gramjs(텔레그램 유저클라) update loop가 안 죽어 job이 6h 공회전한 사고(2026-07-12) 방지 — 5초 유예 후 강제 종료
+      setTimeout(() => process.exit(0), 5000);
+    })
+    .catch(e => { console.error('에러:', e.message); process.exit(1); });
 }
 
 // personal-metrics 등 외부 스크립트에서 데이터 수집 함수 재사용
