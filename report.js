@@ -3367,6 +3367,9 @@ async function getMissingUtmRows() {
       const sd = new Date(c.start + 'T00:00:00');
       if (isNaN(sd) || sd < t0) return;          // ★예정만 (시작 >= 오늘)
       if (!c.who) return;
+      // ★공구가 전용상품번호를 이미 가지면 UTM 불필요 — 공구 매출은 전용상품 실매출로 추적(=진실). (2026-07-13 꿀동이 2·3차 오탐 fix)
+      // 광고(인플루언서 PPL)는 링크 없으면 유입추적 0 → 전용상품 있어도 UTM 필요, 여기서 안 뺌.
+      if (c.type === '공구' && c.productNo) return;
       if (utmNorm.includes(norm(c.who))) return; // UTM 이미 있음
       out.push({ date: today, area: 'UTM', action: `🔗 UTM 만들기: ${c.who} (${c.type} ${c.start})` });
     });
