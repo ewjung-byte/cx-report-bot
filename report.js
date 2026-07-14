@@ -844,7 +844,7 @@ function claudeStreamMessage(body, totalMs) {
     const payload = JSON.stringify({ ...body, stream: true });
     let done = false;
     const fail = (msg) => { if (!done) { done = true; try { req.destroy(); } catch (e) {} reject(new Error(msg)); } };
-    const totalTimer = setTimeout(() => fail('웹서치 stream 전체 240s 초과'), totalMs);
+    const totalTimer = setTimeout(() => fail('웹서치 stream 전체 ' + Math.round(totalMs/1000) + 's 초과'), totalMs);
     let idleTimer = null;
     const kick = () => { clearTimeout(idleTimer); idleTimer = setTimeout(() => fail('웹서치 stream 45s 무소식(연결 사망)'), 45000); };
     const req = https.request({
@@ -911,11 +911,11 @@ ${brandKr === 'A 식품' ? '' : '★주방 카테고리는 쿡웨어뿐 아니�
     // 8/8회 전부 75s timeout(7/11·7/12 디자인 DM 미발송). 스트리밍은 바이트가 계속 흘러 중간 차단 안 당함.
     // 가드 2중: 이벤트 45초 무소식(죽은 연결) + 전체 240초 캡.
     let body = { model: CLAUDE_MODEL, max_tokens: 3000, tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 4 }], messages: [{ role: 'user', content: prompt }] };
-    let res = await claudeStreamMessage(body, 240000);
+    let res = await claudeStreamMessage(body, 330000); // 240s→330s (동아시아 헤리티지 검색이 길어 4회 연속 타임아웃, B 재고 전멸 2026-07-14)
     // 서버사이드 웹서치 루프가 10회 초과 시 pause_turn — 어시스턴트 응답 붙여 한 번 재개
     if (res.stop_reason === 'pause_turn' && res.content) {
       body.messages.push({ role: 'assistant', content: res.content });
-      res = await claudeStreamMessage(body, 240000);
+      res = await claudeStreamMessage(body, 330000);
     }
     // 웹서치는 content에 server_tool_use·web_search_tool_result·text 섞임 → text 블록 전부 이어붙여 JSON 추출
     const txt = (res.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
@@ -993,7 +993,7 @@ async function autoRefillDesignCases() {
       // 재고 0 → 최대 2회 재시도로 검증 통과분 확보 (2026-07-08: 생성분 전멸 시 B DM 끊기던 버그)
       let got = 0;
       for (let attempt = 0; attempt < 3 && got === 0; attempt++) {
-        const gen = await generateDesignCasesViaClaude(b.kr, 4, titles); // 검증 강화로 탈락률↑ → 후보 넉넉히
+        const gen = await generateDesignCasesViaClaude(b.kr, 3, titles); // 3개(4개는 검색 길어져 타임아웃) × 3회 재시도
         gen.forEach((c, i) => {
           newRows.push([b.pre + (maxId + 1 + got + i), dateStr(0), b.kr, c.title, c.sub || '', c.point || '', c.apply || '', c.src || '', '미발송', '']);
           titles.push(c.title);
