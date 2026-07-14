@@ -895,12 +895,13 @@ async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
   // ★업종 강제 — 카테고리 안 맞는 브랜드(주방기기 칸에 화장품 등) 방지 (2026-06-30 Aesop 오분류 fix)
   const CATEGORY = brandKr === 'A 식품'
     ? '식품·음료·조미료·올리브유·소스 D2C (예: Graza·Fly By Jing·Omsom·Diaspora·Brightland)'
-    : '주방기기·쿡웨어·조리도구·식기·홈웨어 (냄비·팬·주방용품, 예: Made In·Caraway·Our Place·HexClad·Great Jones·Milo·Field Company·Smithey·Material Kitchen)';
+    : '주방기기·쿡웨어·조리도구 + 도자기·자기·테이블웨어·식기 (냄비·팬·그릇·도예, 예: Made In·Caraway·HexClad·Smithey / 도자기: Hasami Porcelain·Kinto·Jicon·Kohyo·광주요·이도·Loveramics·Shang Xia)';
   // 디자인 가이드 큐레이션 풀 = "디자인 톤" 참고용 (업종 무관, 감각만 참고)
   const CURATED = 'aesop.com·muji.com·apple.com(미니멀·세계관), eataly.com·casperscaviar.com(프리미엄 식품)';
   const prompt = `너는 D2C 이커머스 홈페이지 디자인 분석가야. ${subject} 자사몰 홈 개편 레퍼런스로 쓸 브랜드 케이스 ${n}개를 찾아.
 ★★반드시 web_search로 실제 검색해서 **현재 운영 중인 진짜 브랜드**만 골라 — 기억으로 지어내지 마(죽은 도메인 방지). 검색어 예: "best ${brandKr === 'A 식품' ? 'premium D2C food olive oil pasta brand' : 'premium cookware kitchenware D2C brand'} website design".
 ★반드시 "${CATEGORY}" 업종만. ⛔다른 업종 절대 금지 (주방기기 칸에 화장품·식품, 식품 칸에 주방기기 넣지 마).
+${brandKr === 'A 식품' ? '' : '★주방 카테고리는 쿡웨어뿐 아니라 **도자기·자기·테이블웨어(그릇·도예)** 브랜드도 적극 포함해.\n★★가장 중요: **각 나라 고유의 멋을 담은 브랜드**를 우선 골라 — 일본(하사미·기요미즈·아리타·민게이), 중국(청화·자사호·송대 미감), 한국(백자·분청·달항아리·옹기)의 전통미를 현대적으로 풀어낸 브랜드. 서양 D2C 일변도 말고 동아시아 헤리티지 브랜드를 절반 이상.'}
 큐레이션 톤 레퍼런스(${CURATED})는 "디자인 감각"만 참고 — 업종 맞을 때만 브랜드로.
 이미 있는 제목(중복 금지): ${excludeTitles.join(', ')}
 각 케이스 = JSON 객체: {"title":"브랜드명","sub":"한 줄 전략(줄표 금지)","point":"① 히어로 선언/핵심 홈 패턴 한 문장","apply":"${brandKr === 'A 식품' ? '이태리정미소' : '카마솥'} 적용 한 문장","src":"검색으로 확인한 실제 홈 도메인(예: graza.co)"}
@@ -921,22 +922,59 @@ async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
     const m = txt.match(/\[[\s\S]*\]/);
     if (!m) return [];
     const cases = JSON.parse(m[0]).filter(c => c && c.title && !excludeTitles.includes(c.title));
-    // ★생성된 src 도메인 생존 검증 — 가짜/죽은 브랜드가 DM에 나가는 것 방지 (2026-07-02)
-    // www 폴백 추가(2026-07-07): naked 도메인 DNS 없는 실존 브랜드가 억울하게 탈락해 A 재고 0 사고
-    const ping = (host) => new Promise(resolve => {
-      const req = https.request({ hostname: host, path: '/', method: 'GET', timeout: 7000, headers: { 'User-Agent': 'Mozilla/5.0' } }, res2 => { res2.resume(); resolve(res2.statusCode < 500); });
-      req.on('error', () => resolve(false)); req.on('timeout', () => { req.destroy(); resolve(false); }); req.end();
-    });
-    const alive = await Promise.all(cases.map(async c => {
-      const dom = String(c.src || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
-      if (!dom) return false;
-      return (await ping(dom)) || (await ping('www.' + dom));
-    }));
+    // ★생성된 src 도메인 생존 검증 (2026-07-02 도입 / 2026-07-14 강화)
+    // 옛 버전은 statusCode<500만 봐서 404·403·"도메인 매물" 리다이렉트까지 통과 → 죽은 링크가 DM에 나감
+    //   (실사고: kanalifestyle.com=404, equalparts.com=302→atom.com 도메인 판매페이지)
+    // 지금은 리다이렉트 따라가서 최종 200 + 같은 도메인 유지 + 파킹/매물 페이지 아님 + 실제 본문 있음 까지 확인.
+    const alive = await Promise.all(cases.map(c => isLiveBrandSite(c.src)));
     const ok = cases.filter((c, i) => alive[i]);
     if (ok.length < cases.length) console.log('[디자인 생성] 죽은 도메인 제외:', cases.filter((c, i) => !alive[i]).map(c => c.title + '(' + c.src + ')').join(', '));
     return ok;
   } catch (e) { console.error('[디자인 케이스 생성]', e.message); return []; }
 }
+// ── 브랜드 사이트 생존 검증 (죽은 링크 DM 발송 방지) ──
+const PARK_HOSTS = /(atom\.com|hugedomains|sedo\.|afternic|dan\.com|bodis|parkingcrew|sav\.com|undeveloped|namecheap|godaddy)/i;
+const PARK_TEXT = /(domain (is )?for sale|buy this domain|this domain is|domain marketplace|parked domain|inquire about this domain|make an offer)/i;
+function fetchHead(u, hops = 0) {
+  return new Promise(resolve => {
+    let uo; try { uo = new URL(u); } catch (e) { return resolve(null); }
+    const req = https.request({
+      hostname: uo.hostname, path: (uo.pathname || '/') + (uo.search || ''), method: 'GET', timeout: 8000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36', 'Accept': 'text/html' }
+    }, r => {
+      const loc = r.headers.location;
+      if ([301, 302, 303, 307, 308].includes(r.statusCode) && loc && hops < 3) {
+        r.resume();
+        const next = /^https?:/i.test(loc) ? loc : 'https://' + uo.hostname + (loc.startsWith('/') ? '' : '/') + loc;
+        return resolve(fetchHead(next, hops + 1));
+      }
+      let body = '';
+      r.on('data', d => { if (body.length < 5000) body += d; });
+      r.on('end', () => resolve({ status: r.statusCode, host: uo.hostname, body }));
+      r.on('error', () => resolve({ status: r.statusCode, host: uo.hostname, body: '' }));
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+const regDom = h => String(h || '').replace(/^www\./, '').split('.').slice(-2).join('.');
+async function isLiveBrandSite(src) {
+  const dom = String(src || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+  if (!dom) return false;
+  let r = await fetchHead('https://' + dom + '/');
+  if (!r || r.status !== 200) { const w = await fetchHead('https://www.' + dom + '/'); if (w) r = w; }
+  if (!r) return false;                                                  // 연결 자체가 안 됨 = 없는 도메인
+  if (r.status === 404 || r.status === 410 || r.status >= 500) return false; // 페이지 없음·서버 죽음 (kanalifestyle=404)
+  // ★핵심 판정: 최종 도착지가 다른 도메인이면 = 브랜드 사라짐(매각·리브랜딩·도메인 매물)
+  //   equalparts.com → atom.com(도메인 판매), greatjones.co → mynd.co(리브랜딩) 둘 다 여기서 걸림
+  if (PARK_HOSTS.test(r.host) || regDom(r.host) !== regDom(dom)) return false;
+  if (PARK_TEXT.test(r.body)) return false;                             // 도메인 판매 문구
+  // ⚠️본문 길이는 보지 않음 — JS로 그리는 사이트(wmf.co.kr 등)는 초기 HTML이 0자라 멀쩡한 브랜드가 오탐됨
+  // ⚠️403/401/429는 통과 — Cloudflare 봇차단이지 죽은 게 아님 (억울한 탈락 → 재고 0 사고 방지)
+  return true;
+}
+
 async function autoRefillDesignCases() {
   try {
     const token = await getGA4Token();
@@ -954,8 +992,8 @@ async function autoRefillDesignCases() {
       const maxId = rows.filter(r => String(r[0]).charAt(0) === b.pre).reduce((mx, r) => Math.max(mx, parseInt(String(r[0]).slice(1)) || 0), 0);
       // 재고 0 → 최대 2회 재시도로 검증 통과분 확보 (2026-07-08: 생성분 전멸 시 B DM 끊기던 버그)
       let got = 0;
-      for (let attempt = 0; attempt < 2 && got === 0; attempt++) {
-        const gen = await generateDesignCasesViaClaude(b.kr, 3, titles);
+      for (let attempt = 0; attempt < 3 && got === 0; attempt++) {
+        const gen = await generateDesignCasesViaClaude(b.kr, 4, titles); // 검증 강화로 탈락률↑ → 후보 넉넉히
         gen.forEach((c, i) => {
           newRows.push([b.pre + (maxId + 1 + got + i), dateStr(0), b.kr, c.title, c.sub || '', c.point || '', c.apply || '', c.src || '', '미발송', '']);
           titles.push(c.title);
