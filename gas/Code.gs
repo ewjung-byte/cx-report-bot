@@ -41,6 +41,13 @@ function doGet(e) {
       .setTitle('이태리정미소 UI/UX 케이스북')
       .addMetaTag('viewport', 'width=device-width, initial-scale=1');
   }
+  // 디자인 사례 채택상태 JSON (design-casebook.vercel.app 정적페이지가 JSONP로 읽음)
+  if (page === 'designjson') {
+    var out = JSON.stringify({ ok: true, cases: getDesignCasesForWeb_() });
+    var cb = e && e.parameter && e.parameter.callback;
+    if (cb) return ContentService.createTextOutput(cb + '(' + out + ')').setMimeType(ContentService.MimeType.JAVASCRIPT);
+    return ContentService.createTextOutput(out).setMimeType(ContentService.MimeType.JSON);
+  }
   return ContentService.createTextOutput('CX Bot OK');
 }
 
@@ -60,6 +67,8 @@ function buildUXCasesHtml_() {
   var json = JSON.stringify(cases).replace(/</g, '\\u003c'); // </script>·< 깨짐 방지
   var todos = getUXTodos_();
   var tjson = JSON.stringify(todos).replace(/</g, '\\u003c');
+  var designs = getDesignCasesForWeb_();
+  var djson = JSON.stringify(designs).replace(/</g, '\\u003c');
 
   var css =
     ':root{--cream:#f8f7f5;--gold:#D9BC82;--navy:#0d1f3c;--warm:#f0ede8;--st-pass:#9e9e9e;--border:rgba(0,0,0,.08);--shadow:0 2px 8px rgba(0,0,0,.06)}' +
@@ -109,7 +118,8 @@ function buildUXCasesHtml_() {
     '<div class="stat-item"><div class="v" id="s-adopt">0</div><div class="l">채택</div></div>' +
     '<div class="stat-item"><div class="v" id="s-pass">0</div><div class="l">패스</div></div></div></div></header>' +
     '<nav class="tabnav"><div class="tabnav-inner">' +
-    '<button class="tab active" data-tab="cases">📚 케이스북</button>' +
+    '<button class="tab active" data-tab="cases">📚 UX 케이스북</button>' +
+    '<button class="tab" data-tab="designs">🎨 디자인 사례 <span class="cnt" id="design-cnt">0</span></button>' +
     '<button class="tab" data-tab="todos">📋 내 할일 <span class="cnt" id="todo-cnt">0</span></button>' +
     '</div></nav>' +
     '<div class="wrap">' +
@@ -118,10 +128,15 @@ function buildUXCasesHtml_() {
     '<span style="flex:1"></span><input id="search" placeholder="검색…"></div>' +
     '<div class="filter-row"><span class="label">카테고리</span><div id="f-cat"></div></div></div>' +
     '<div class="cards" id="cards"></div></div>' +
+    '<div class="pane" id="pane-designs"><div class="filters">' +
+    '<div class="filter-row"><span class="label">상태</span><div id="d-status"></div>' +
+    '<span style="flex:1"></span><input id="dsearch" placeholder="검색…"></div>' +
+    '<div class="filter-row"><span class="label">브랜드</span><div id="d-brand"></div></div></div>' +
+    '<div class="cards" id="dcards"></div></div>' +
     '<div class="pane" id="pane-todos"><div class="todos" id="todos"></div></div>' +
     '</div>' +
     '<div class="modal" id="modal"><div class="modal-inner"><button class="modal-close" id="mclose">&times;</button><div id="mwrap"></div></div></div>' +
-    '<script>var CASES=' + json + ';var TODOS=' + tjson + ';</script>' +
+    '<script>var CASES=' + json + ';var TODOS=' + tjson + ';var DESIGNS=' + djson + ';</script>' +
     '<script>' + UX_CASES_CLIENT_JS_ + '</script></body></html>';
   return html;
 }
@@ -211,23 +226,79 @@ var UX_CASES_CLIENT_JS_ = [
   ' var rn=google.script.run.withSuccessHandler(function(res){if(res&&res.ok){refreshTodos(d,action,res);}else{alert("실패: "+((res&&res.error)||"알수없음"));for(var i=0;i<bs.length;i++)bs[i].disabled=false;}})',
   '  .withFailureHandler(function(e){alert("오류: "+((e&&e.message)||e));for(var i=0;i<bs.length;i++)bs[i].disabled=false;});',
   ' if(action==="add")rn.addUXTodo(d);else if(action==="remove")rn.removeUXTodo(d);else rn.setUXTodoStatus(d,action);}',
+  // ===== 🎨 디자인 사례 탭 =====
+  'var dstate={status:"채택",brand:"all",q:""};',
+  'function dadopted(s){return s==="채택";}function dpassed(s){return s==="패스";}',
+  'function findDesign(id){for(var i=0;i<DESIGNS.length;i++)if(DESIGNS[i].id===id)return DESIGNS[i];return null;}',
+  'function dchips(){',
+  ' var st=[["all","전체"],["채택","⭐채택"],["패스","패스"]];',
+  ' document.getElementById("d-status").innerHTML=st.map(function(o){return "<button class=\\"chip"+(dstate.status===o[0]?" active":"")+"\\" data-ds=\\""+o[0]+"\\">"+o[1]+"</button>";}).join("");',
+  ' var bs={};DESIGNS.forEach(function(c){if(c.brand)bs[c.brand]=1;});var bl=["all"].concat(Object.keys(bs).sort());',
+  ' document.getElementById("d-brand").innerHTML=bl.map(function(b){return "<button class=\\"chip"+(dstate.brand===b?" active":"")+"\\" data-db=\\""+b+"\\">"+(b==="all"?"전체":esc(b))+"</button>";}).join("");',
+  '}',
+  'function renderDesigns(){',
+  ' document.getElementById("design-cnt").textContent=DESIGNS.filter(function(c){return dadopted(c.status);}).length;',
+  ' dchips();var q=dstate.q.toLowerCase();',
+  ' var list=DESIGNS.filter(function(c){',
+  '   if(dstate.status==="채택"&&!dadopted(c.status))return false;',
+  '   if(dstate.status==="패스"&&!dpassed(c.status))return false;',
+  '   if(dstate.brand!=="all"&&c.brand!==dstate.brand)return false;',
+  '   if(q&&(c.title+" "+c.sub+" "+c.point+" "+c.apply).toLowerCase().indexOf(q)<0)return false;return true;});',
+  ' list.sort(function(a,b){var ra=dadopted(a.status)?0:1,rb=dadopted(b.status)?0:1;if(ra!==rb)return ra-rb;return String(b.id).localeCompare(String(a.id));});',
+  ' var box=document.getElementById("dcards");',
+  ' if(!list.length){box.innerHTML="<div class=\\"empty\\">조건에 맞는 디자인 사례가 없어요.<br>개인 DM으로 온 사례를 \\u2b50채택하면 여기 모여요.</div>";return;}',
+  ' box.innerHTML=list.map(function(c){',
+  '   var ad=dadopted(c.status),ps=dpassed(c.status);',
+  '   var badge=ad?"<span class=\\"badge adopt\\">\\u2b50채택</span>":(ps?"<span class=\\"badge pass\\">패스</span>":"<span class=\\"badge\\" style=\\"background:#e3f2fd;color:#1565c0\\">발송</span>");',
+  '   var meta="<span>"+esc(c.id)+"</span>"+(c.brand?"<span>"+esc(c.brand)+"</span>":"")+badge;',
+  '   var qa;',
+  '   if(ps)qa="<button class=\\"qa-btn restore\\" data-dact=\\"발송\\">\\u21a9 되돌리기</button>";',
+  '   else if(ad)qa="<button class=\\"qa-btn on\\" data-dact=\\"발송\\">\\u2713 채택됨</button><button class=\\"qa-btn\\" data-dact=\\"패스\\">패스</button>";',
+  '   else qa="<button class=\\"qa-btn adopt\\" data-dact=\\"채택\\">\\u2b50 채택</button><button class=\\"qa-btn\\" data-dact=\\"패스\\">패스</button>";',
+  '   return "<div class=\\"card dcard"+(ps?" passed":"")+"\\" data-did=\\""+esc(c.id)+"\\">"+',
+  '     "<div class=\\"stripe\\" style=\\"background:"+(c.brand&&c.brand.charAt(0)==="A"?"#2e7d32":"#e65100")+"\\"></div>"+',
+  '     "<div class=\\"c-meta\\">"+meta+"</div><div class=\\"name\\">"+esc(c.title)+"</div>"+',
+  '     "<div class=\\"summary\\">"+esc(c.sub||c.point)+"</div>"+',
+  '     "<div class=\\"qa\\" data-did=\\""+esc(c.id)+"\\">"+qa+"</div></div>";',
+  ' }).join("");}',
+  'function openDModal(id){var c=findDesign(id);if(!c)return;var ad=dadopted(c.status),ps=dpassed(c.status);',
+  ' var qa=ps?"<button class=\\"qa-btn restore\\" data-dact=\\"발송\\">\\u21a9 되돌리기</button>":',
+  '  (ad?"<button class=\\"qa-btn on\\" data-dact=\\"발송\\">\\u2713 채택됨 (해제)</button><button class=\\"qa-btn\\" data-dact=\\"패스\\">패스</button>":',
+  '   "<button class=\\"qa-btn adopt\\" data-dact=\\"채택\\">\\u2b50 채택</button><button class=\\"qa-btn\\" data-dact=\\"패스\\">패스</button>");',
+  ' var parts=[];if(c.sub)parts.push(c.sub);if(c.point)parts.push("\\ud83d\\udca1 "+c.point);if(c.apply)parts.push("\\ud83c\\udfaf 우리 적용: "+c.apply);var body=parts.join("\\n\\n");',
+  ' var srcLine=c.src?"<div style=\\"margin-top:16px\\"><a href=\\""+esc(c.src)+"\\" target=\\"_blank\\" style=\\"color:#1565c0;font-size:13px\\">\\ud83d\\udd17 "+esc(c.src)+"</a></div>":"";',
+  ' document.getElementById("mwrap").innerHTML="<div class=\\"m-head\\"><h2>"+esc(c.title)+"</h2><div class=\\"m-meta\\"><span>"+esc(c.id)+"</span>"+(c.brand?"<span>"+esc(c.brand)+"</span>":"")+"</div></div>"+',
+  '  "<div class=\\"m-body\\">"+esc(body)+"</div>"+srcLine+"<div class=\\"m-qa qa\\" data-did=\\""+esc(c.id)+"\\">"+qa+"</div>";',
+  ' document.getElementById("modal").classList.add("open");}',
+  'function setDesignStatus(id,status,btn){var grp=btn.parentNode;var bs=grp.querySelectorAll("button");for(var i=0;i<bs.length;i++)bs[i].disabled=true;btn.textContent="처리중…";',
+  ' google.script.run.withSuccessHandler(function(res){if(res&&res.ok){var c=findDesign(id);if(c)c.status=status;closeModal();renderDesigns();}else{alert("실패: "+((res&&res.error)||"알수없음"));renderDesigns();}})',
+  ' .withFailureHandler(function(e){alert("오류: "+((e&&e.message)||e));for(var i=0;i<bs.length;i++)bs[i].disabled=false;}).setDesignStatusWeb(id,status);}',
   // 탭 전환
   'function activate(name){var tabs=document.querySelectorAll(".tab");for(var i=0;i<tabs.length;i++)tabs[i].classList.toggle("active",tabs[i].getAttribute("data-tab")===name);',
-  ' document.getElementById("pane-cases").classList.toggle("active",name==="cases");document.getElementById("pane-todos").classList.toggle("active",name==="todos");}',
+  ' document.getElementById("pane-cases").classList.toggle("active",name==="cases");',
+  ' document.getElementById("pane-designs").classList.toggle("active",name==="designs");',
+  ' document.getElementById("pane-todos").classList.toggle("active",name==="todos");',
+  ' if(name==="designs")renderDesigns();}',
   'document.querySelector(".tabnav").addEventListener("click",function(e){var b=e.target.closest(".tab");if(b)activate(b.getAttribute("data-tab"));});',
   // 이벤트 위임 (data-todo 우선, 없으면 data-act)
   'document.addEventListener("click",function(ev){var t=ev.target;',
+  ' var dbn=t.closest?t.closest("[data-dact]"):null;',
+  ' if(dbn){ev.stopPropagation();var dg=dbn.closest("[data-did]");setDesignStatus(dg?dg.getAttribute("data-did"):null,dbn.getAttribute("data-dact"),dbn);return;}',
   ' var b=t.closest?t.closest("[data-todo],[data-act]"):null;',
   ' if(b){ev.stopPropagation();var grp=b.closest("[data-date]");var d=grp?grp.getAttribute("data-date"):null;',
   '   var td=b.getAttribute("data-todo");if(td){todoAction(d,td,b);}else{setStatus(d,b.getAttribute("data-act"),b);}return;}',
   ' if(t.closest&&t.closest(".modal-close")){closeModal();return;}',
   ' if(t.id==="modal"){closeModal();return;}',
+  ' var dcard=t.closest?t.closest(".dcard"):null;if(dcard){openDModal(dcard.getAttribute("data-did"));return;}',
   ' var card=t.closest?t.closest(".card"):null;if(card){openModal(card.getAttribute("data-date"));}});',
   'document.getElementById("f-status").addEventListener("click",function(e){var b=e.target.closest(".chip");if(b){state.status=b.getAttribute("data-fs");render();}});',
   'document.getElementById("f-cat").addEventListener("click",function(e){var b=e.target.closest(".chip");if(b){state.cat=b.getAttribute("data-fc");render();}});',
   'document.getElementById("search").addEventListener("input",function(e){state.q=e.target.value;render();});',
+  'document.getElementById("d-status").addEventListener("click",function(e){var b=e.target.closest(".chip");if(b){dstate.status=b.getAttribute("data-ds");renderDesigns();}});',
+  'document.getElementById("d-brand").addEventListener("click",function(e){var b=e.target.closest(".chip");if(b){dstate.brand=b.getAttribute("data-db");renderDesigns();}});',
+  'document.getElementById("dsearch").addEventListener("input",function(e){dstate.q=e.target.value;renderDesigns();});',
   'document.addEventListener("keydown",function(e){if(e.key==="Escape")closeModal();});',
-  'render();renderTodos();'
+  'render();renderTodos();renderDesigns();'
 ].join('\n');
 
 // ===== Telegram Polling (1분 트리거로 호출) =====
@@ -441,6 +512,12 @@ function doPost(e) {
     if (action === 'append_clarity_daily') { // 클러리티 숫자 추세 날짜별 upsert (협상카드용)
       return jsonOut(appendClarityDaily_(contents));
     }
+    if (action === 'delete_postcard_utm') { // 엽서 QR 행 삭제 (대표가 엽서 QR 제거 → 측정 무의미)
+      var _us = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID).getSheetByName('🔗 UTM 링크');
+      var _d = _us.getDataRange().getValues(); var _n = 0;
+      for (var i = _d.length - 1; i >= 1; i--) { var ln = (_d[i] || []).join(' '); if (/엽서|pc-v1/.test(ln) && /qr/i.test(ln)) { _us.deleteRow(i + 1); _n++; } }
+      return jsonOut({ ok: true, deleted: _n });
+    }
     if (action === 'backfill_cx_after') { // 완료인데 Before만 있고 After 빈 항목 → 현재 전환율로 채움(협상카드 빈칸 메움)
       var _bs = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
       var _af = currentConvLabel_('(완료시점·자동backfill)');
@@ -453,6 +530,16 @@ function doPost(e) {
         }
       });
       return jsonOut({ ok: true, filled: _n, after: _af });
+    }
+    if (action === 'test_ux_dates') { // UX_사례 최근행 날짜 정규화 확인용
+      var _us = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID).getSheetByName('UX_사례');
+      var _d = _us.getDataRange().getValues().slice(1).slice(-6).map(function (r) { return { ymd: _uxYmd_(r[0]), status: String(r[5]), title: String(r[2]).slice(0, 25) }; });
+      return jsonOut({ ok: true, rows: _d });
+    }
+    if (action === 'setup_notset_reminder') { // 6/20 10시 은우 텔레로 GA4 (not set) 검증 리마인더(일회성)
+      ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'remindNotSetCheck') ScriptApp.deleteTrigger(t); });
+      ScriptApp.newTrigger('remindNotSetCheck').timeBased().at(new Date(2026, 5, 20, 10, 0, 0)).create();
+      return jsonOut({ ok: true, at: '2026-06-20 10:00' });
     }
     if (action === 'run_heartbeat') { return jsonOut(cxHeartbeat(true)); } // 수동 테스트(OK여도 발송)
     if (action === 'setup_heartbeat') { // 매일 10:30 헬스체크 트리거 등록 (중복 제거 후)
@@ -481,6 +568,10 @@ function doPost(e) {
       ]; }) };
       sendTGMessage(EUNWOO_CHAT_ID, txt, kb);
       return jsonOut({ ok: true, sent: acts.length });
+    }
+    if (action === 'dm') { // 은우 개인 DM 임의 발송 (공지·안내용, 2026-07-14)
+      sendTGMessage(EUNWOO_CHAT_ID, String(contents.text || '(내용 없음)'));
+      return jsonOut({ ok: true });
     }
     if (action === 'get_eunwoo_row') {
       return jsonOut(getEunwooCompassRow_());
@@ -518,6 +609,42 @@ function doPost(e) {
     if (action === 'record_traffic_monthly') {
       return jsonOut(recordTrafficMonthly_(contents));
     }
+    if (action === 'record_utm_weekly') {
+      return jsonOut(recordUtmWeekly_(contents));
+    }
+    if (action === 'record_button_weekly') {
+      return jsonOut(recordButtonWeekly_(contents));
+    }
+    if (action === 'log_tweak') { // 🎛 트윅 패널 "클로드에게 보내기" — 변경내역 시트 적재 (2026-07-10 v3)
+      // 브라우저에서 text/plain no-cors로 옴(CORS 회피) — contents 파싱은 동일. 은우가 "트윅 반영해줘" 하면 클로드가 이 탭 읽어 소스 반영.
+      var _tss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+      var _tt = ensureSheetWithHeaders_(_tss, '🎛 트윅_수신', ['시각', '페이지', '셀렉터', '속성', 'before', 'after', '상태']);
+      var _tc = contents.changes || [];
+      _tc.forEach(function (c) { _tt.appendRow([new Date(), String(contents.url || ''), String(c.sel || ''), String(c.prop || ''), String(c.from || ''), String(c.to || ''), '대기']); });
+      return jsonOut({ ok: true, added: _tc.length });
+    }
+    if (action === 'set_cx_after') { // /실측의 doPost판 — 완료 포함 After 갱신 (개입기록+아카이브)
+      return jsonOut(setCxAfterAnywhere_(String(contents.keyword || ''), String(contents.after || '')));
+    }
+    if (action === 'set_done_since') { // ★"한 일" 정리 — 은우가 "지워" 할 때만. date 주면 그 시점부터, 없으면 오늘(=목록 비움)
+      var _ds = String(contents.date || Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd'));
+      PropertiesService.getScriptProperties().setProperty('DONE_SINCE', _ds);
+      refreshCockpit_();
+      return jsonOut({ ok: true, since: _ds });
+    }
+    if (action === 'dismiss_cx') { // 키워드 매칭 행 삭제+거부기억(원자적, 완료 보호) — /삭제의 doPost판
+      var _kw = String(contents.keyword || '');
+      var _ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID).getSheetByName('🛠 개입기록');
+      if (!_ss || !_kw) return jsonOut({ ok: false, error: 'keyword 필요' });
+      var _dd = _ss.getDataRange().getValues(); var _hits = [];
+      for (var _i = _dd.length - 1; _i >= 1; _i--) {
+        if (/완료/.test(String(_dd[_i][7]))) continue;
+        if (String(_dd[_i][2]).toLowerCase().indexOf(_kw.toLowerCase()) >= 0) { _hits.push(String(_dd[_i][2])); _ss.deleteRow(_i + 1); }
+      }
+      _hits.forEach(function (c) { addCxDismissed_(c); });
+      if (_hits.length) refreshCockpit_();
+      return jsonOut({ ok: true, deleted: _hits.length, items: _hits });
+    }
     if (action === 'append_cx_candidates') {
       return jsonOut(appendCxCandidates_(contents));
     }
@@ -527,11 +654,38 @@ function doPost(e) {
     if (action === 'refresh_cockpit') {
       return jsonOut(refreshCockpit_());
     }
+    if (action === 'set_one_thing') { // ONE THING 설정(빈값이면 클리어)
+      var ot = String(contents.text || '').trim();
+      setOneThing_(ot || '');
+      if (ot) PropertiesService.getScriptProperties().setProperty('EUNWOO_ONE_THING', ot);
+      else PropertiesService.getScriptProperties().deleteProperty('EUNWOO_ONE_THING');
+      refreshCockpit_();
+      return jsonOut({ ok: true, oneThing: ot });
+    }
+    if (action === 'clear_memo') { // 콕핏 메모 전체 비우기
+      PropertiesService.getScriptProperties().deleteProperty('EUNWOO_MEMO');
+      refreshCockpit_();
+      return jsonOut({ ok: true });
+    }
+    if (action === 'send_next_design_case') { // 디자인 사례집 — 다음 미발송 1개 개인DM 발송 (report.js 데일리가 호출)
+      return jsonOut(sendNextDesignCase_());
+    }
+    if (action === 'append_design_cases') { // 디자인 케이스북 자동보충 — report.js가 Claude로 생성한 행 적재(시트 쓰기는 GAS만)
+      return jsonOut(appendDesignCases_(contents.rows || []));
+    }
+    if (action === 'log_click') { // 단축링크(go.italy) 클릭 기록 — CF Pages Function이 클릭마다 호출 (GA4 인앱 누락 우회·실유입)
+      return jsonOut(logShortlinkClick_(contents));
+    }
     if (action === 'build_monthly_summary') {
       return jsonOut(buildEunwooMonthlySummary_(contents.month || ''));
     }
     if (action === 'archive_cx') {
       return jsonOut(archiveCx_());
+    }
+    if (action === 'set_cx_verdict') { // 개입기록 판정 변경(키워드 부분매칭). 폐기/보류/효과없음 등. After 선택.
+      var _svr = setCxVerdictByKeyword_(contents.keyword || '', contents.verdict || '보류', contents.after || '');
+      if (_svr.ok) refreshCockpit_();
+      return jsonOut(_svr);
     }
     if (action === 'prune_cx') {
       return jsonOut(pruneCx_(contents.weekLabel || ''));
@@ -979,11 +1133,26 @@ function handleEunwooDM(msg) {
     return;
   }
   if ((m = text.match(/^\/원씽\s+([\s\S]+)/))) {
-    PropertiesService.getScriptProperties().setProperty('EUNWOO_ONE_THING', m[1].trim()); refreshCockpit_();
+    setOneThing_(m[1].trim()); PropertiesService.getScriptProperties().setProperty('EUNWOO_ONE_THING', m[1].trim()); refreshCockpit_();
     sendTGMessage(chatId, '🥇 ONE THING 설정 — 콕핏 맨 위에 고정.\n· ' + m[1].trim());
     return;
   }
   if ((m = text.match(/^\/끝\s+([\s\S]+)/))) { handleCxDone_(chatId, m[1].trim()); return; }
+  if ((m = text.match(/^\/삭제\s+([\s\S]+)/))) { handleCxDelete_(chatId, m[1].trim()); return; }
+  if ((m = text.match(/^\/실측\s+([\s\S]+?)\s*=\s*(.+)$/))) { // 완료 포함 아무 항목의 After(실측값) 갱신 — 협상카드 프록시→진짜 숫자 (2026-07-02)
+    var xr = setCxAfterAnywhere_(m[1].trim(), m[2].trim());
+    if (xr.ok) { sendTGMessage(chatId, '📐 실측 기록 — 협상카드에 반영됨.\n· ' + xr.content + '\n· After: ' + m[2].trim()); }
+    else if (xr.multi) sendTGMessage(chatId, '⚠️ 여러 개 매칭 — 더 구체적으로:\n' + xr.matches.map(function (x) { return '· ' + x; }).join('\n'));
+    else sendTGMessage(chatId, '⚠️ ' + xr.error);
+    return;
+  }
+  if ((m = text.match(/^\/진행\s+([\s\S]+)/))) { // 나중에/후보 → 진행중(착수)로 이동 (키워드 부분매칭, /보류 대칭)
+    var pr = setCxVerdictByKeyword_(m[1].trim(), '착수');
+    if (pr.ok) { refreshCockpit_(); sendTGMessage(chatId, '▶️ 진행중으로 — 📌진행중 이동·콕핏 갱신.\n· ' + pr.content); }
+    else if (pr.multi) sendTGMessage(chatId, '⚠️ "' + m[1].trim() + '" 여러 개 매칭 — 더 구체적 키워드로:\n' + pr.matches.map(function (x) { return '· ' + x.content; }).join('\n'));
+    else sendTGMessage(chatId, '⚠️ ' + pr.error);
+    return;
+  }
   if ((m = text.match(/^\/보류\s+([\s\S]+)/))) {
     var hr = setCxVerdictByKeyword_(m[1].trim(), '보류');
     if (hr.ok) { refreshCockpit_(); sendTGMessage(chatId, '⏸ 보류 — 📋나중에로 이동·콕핏 갱신.\n· ' + hr.content); }
@@ -995,6 +1164,12 @@ function handleEunwooDM(msg) {
     }
     else sendTGMessage(chatId, '⚠️ ' + hr.error);
     return;
+  }
+  if (text === '/디자인 발송' || text === '/디자인발송') {
+    var dr = sendNextDesignCase_();
+    if (dr.done) sendTGMessage(chatId, '🎨 디자인 사례 — 미발송 없음 (다 발송됨)');
+    else if (!dr.ok) sendTGMessage(chatId, '⚠️ ' + dr.error);
+    return; // 발송 성공 시 sendNextDesignCase_가 이미 카드 보냄
   }
   if (text === '/UX 발송' || text === '/UX발송') { handleUXSend(chatId); return; }
   if (text === '/UX 보류' || text === '/UX보류') { handleUXSkip(chatId, date); return; }
@@ -1023,7 +1198,7 @@ function handleEunwooDM(msg) {
     return;
   }
   if (text === '/도움' || text === '/help') {
-    sendTGMessage(chatId, '<b>은우봇 명령어</b>\n<b>· 콕핏 (내 액션 1곳)</b>\n/원씽 [내용] — 이번주 ONE THING\n/할거 [내용] — 자사몰·CX 시작\n/적용 [내용] — D2C·마케팅 시작\n/백로그 [내용] — 나중에 추가\n/끝 [키워드] — 완료 / /보류 [키워드] — 나중에로\n/콕핏 — 현황 / /성과 — 협상카드 / /정리 — 완료 비우기\n💡 출처 직접: /할거 @대표 레시피수정 → [대표] 태그\n\n<b>· 개인</b>\n/작업 [내용] · /작업목록 · /메모 [내용] · /메모목록\n\n<b>· UX 사례 (월·목)</b>\n/UX 발송 · /UX 보류 · /UX 수정 [요청]\n\n<b>· 미주 송마망 시트 조회 (read-only)</b>\n/내것 (또는 /조회 내것) — 은우 언급 통합 (액션·결정·공유·리마인드·멘션)\n/조회 액션 [담당자=은우] — 미완료 액션\n/완료 [번호] — 직전 /조회 액션의 N번 시트에 완료 마킹 (예: /완료 1 3)\n/조회 결정 — 최근 결정사항\n/조회 공유 — 최근 공유링크\n/조회 리마인드 — 오늘 도래\n/조회 멘션 — 단톡방에서 은우 멘션');
+    sendTGMessage(chatId, '📌 <b>은우봇 명령어 (콕핏)</b>\n\n🥇 <b>이번주 정하기</b>\n/원씽 [내용]   → ONE THING (완료시 자동 사라짐)\n\n▶️ <b>시작</b>\n/할거 [내용]   → 자사몰·CX\n/적용 [내용]   → D2C·마케팅\n/백로그 [내용] → 나중에\n/진행 [키워드] → 나중에→진행중으로\n\n✅ <b>끝내기</b> (키워드 일부만)\n/끝 [키워드]          → 완료\n/끝 [키워드] = 3.2%   → 완료 + 수치 협상카드에\n/실측 [키워드] = 값   → 완료된 것도 실측 After 갱신(⭐)\n/보류 [키워드]        → 나중에로\n/삭제 [키워드]        → 필요없는 항목 삭제 (완료는 보호)\n\n📝 <b>메모</b>\n/메모 [내용]   → 콕핏 📝메모에 쌓임\n/메모목록 · /메모비우기\n\n👀 <b>보기</b>\n/콕핏  → 현황 전체 (메모 포함)\n/성과  → 월간 협상카드\n/정리  → 회의 후 완료 비우기\n\n🏷 <b>출처 직접</b> (@ 맨앞)\n/할거 @대표 상세 수정 → [대표]\n여러 줄 붙여넣기도 됨\n\n🔧 <b>그 외</b>\n/작업 · /작업목록 (개인) · /UX 발송|보류|수정 · /조회 내것|액션|결정|공유 (미주 시트)\n\nℹ️ 완료는 /완료 아님 → /끝\nℹ️ 콕핏 = COMPASS 은우 행 E열');
     return;
   }
 }
@@ -1370,17 +1545,27 @@ function handleCallbackQuery(query) {
     else return;
   } else if (parts[0] === 'cxa') {
     // 일간 DM 액션 3버튼: T=오늘 액션(착수→진행중) · L=나중에(백로그) · P=패스(무시)
+    // ★메시지/키보드 절대 건드리지 않음 — 한 메시지에 액션 3개 버튼이라 키보드 지우면 나머지 버튼도 사라짐("패스 누르니 꺼짐" 버그).
+    //   더블탭 중복은 addCxStart_ 활성중복skip이 막아줌(dup이면 "이미 담김" 안내).
     var mode = parts[1], idx = parseInt(parts[2]);
-    if (mode === 'P') { label = '패스 ✕'; sendTGMessage(chatId, '✕ 패스'); }
+    if (mode === 'P') {
+      // ★토스트(answerCallbackQuery)는 1분 폴링 지연으로 텔레그램이 무시(안 뜸) → 확인 메시지로 (2026-07-01 "패스 눌러도 안 뜸" fix)
+      label = '패스 ✕';
+      var parr = [];
+      try { parr = JSON.parse(PropertiesService.getScriptProperties().getProperty('CX_TODAY_ACTIONS') || '[]'); } catch (e) {}
+      var pact = parr[idx] ? String(parr[idx]).replace(/^[^\w가-힣]+/, '').trim().slice(0, 40) : (idx + 1) + '번';
+      sendTGMessage(chatId, '✕ 패스 — ' + pact);
+    }
     else {
       var arr = [];
       try { arr = JSON.parse(PropertiesService.getScriptProperties().getProperty('CX_TODAY_ACTIONS') || '[]'); } catch (e) {}
       var act = arr[idx];
       if (act) {
         var clean = String(act).replace(/^[^\w가-힣]+/, '').trim(); // 앞 이모지 제거
-        addCxStart_(clean, 'CX', mode === 'T' ? '착수' : '백로그'); refreshCockpit_();
+        var ar = addCxStart_(clean, 'CX', mode === 'T' ? '착수' : '백로그'); refreshCockpit_();
         label = mode === 'T' ? '오늘 착수 ✅' : '나중에 📋';
-        sendTGMessage(chatId, (mode === 'T' ? '✅ 콕핏 <b>진행중</b>에 담음' : '📋 콕핏 <b>나중에</b>에 담음') + '\n· ' + clean);
+        var where = mode === 'T' ? '진행중' : '나중에';
+        sendTGMessage(chatId, (ar && ar.dup ? '☑️ 이미 콕핏 ' + where + '에 있음' : (mode === 'T' ? '✅ 콕핏 진행중에 담음' : '📋 콕핏 나중에에 담음')) + '\n· ' + clean);
       } else { label = '항목 만료 — 새 리포트에서 다시'; sendTGMessage(chatId, '⚠️ 항목 만료 — 새 리포트에서 다시 눌러줘'); }
     }
   } else if (parts[0] === 'uxc') {
@@ -1391,15 +1576,23 @@ function handleCallbackQuery(query) {
       label = uact === 'add' ? '케이스북+콕핏 ✓' : '패스 ✕';
       sendTGMessage(chatId, uact === 'add' ? '✓ 케이스북 채택 + 콕핏 나중에로 보냄' : '✕ 패스');
     } else { label = '처리 실패'; sendTGMessage(chatId, '⚠️ UX 큐레이션 실패: ' + ((ur && ur.error) || '')); }
+  } else if (parts[0] === 'dzc') {
+    // 디자인 사례 개인DM 버튼: add=채택(케이스북 표시만) / pass=패스. 콕핏 안 들어감.
+    var dr = setDesignCaseStatus_(parts[2], parts[1] === 'add' ? '채택' : '패스');
+    label = parts[1] === 'add' ? '채택 ⭐' : '패스 ✕';
+    sendTGMessage(chatId, (parts[1] === 'add' ? '⭐ 채택 — 케이스북에 표시됨' : '✕ 패스') + (dr && dr.title ? '\n· ' + dr.title : ''));
   } else {
     return;
   }
-  // answerCallbackQuery: spinner 끔
-  UrlFetchApp.fetch('https://api.telegram.org/bot' + _botToken() + '/answerCallbackQuery', {
-    method: 'post', contentType: 'application/json',
-    payload: JSON.stringify({ callback_query_id: query.id, text: label }),
-    muteHttpExceptions: true
-  });
+  // answerCallbackQuery: spinner 끔 (순수 장식 — 실제 처리는 위에서 이미 끝남)
+  // try/catch 필수: 오래된 버튼/일시 네트워크오류로 터져도 "처리 오류" 안 뜨게
+  try {
+    UrlFetchApp.fetch('https://api.telegram.org/bot' + _botToken() + '/answerCallbackQuery', {
+      method: 'post', contentType: 'application/json',
+      payload: JSON.stringify({ callback_query_id: query.id, text: label }),
+      muteHttpExceptions: true
+    });
+  } catch (e) { /* spinner 끄기 실패는 무시 — 본처리는 완료됨 */ }
 }
 
 function generateWorkId() {
@@ -1785,6 +1978,65 @@ function getEunwooCompassRow_() {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 // 은우 COMPASS 비고(E열)에 봇 측정 할일 갱신(replace). 매주 데이터→액션을 "월요일 첫 화면"에 일원화.
+// ── ONE THING = COMPASS 은우 행 B열 (미주·경태와 같은 칸). B열이 원본 (2026-07-14) ──
+function getOneThing_() {
+  try {
+    var sh = SpreadsheetApp.openById(STRATEGY_SHEET_ID).getSheetByName('🧭 COMPASS');
+    if (!sh) return '';
+    var aCol = sh.getRange('A49:A60').getValues();
+    for (var i = 0; i < aCol.length; i++) {
+      if (String(aCol[i][0]).trim() === '은우') {
+        return String(sh.getRange(49 + i, 2).getValue() || '').replace(/^[·\s]+/, '').trim();
+      }
+    }
+  } catch (e) {}
+  return '';
+}
+function setOneThing_(v) {
+  try {
+    var sh = SpreadsheetApp.openById(STRATEGY_SHEET_ID).getSheetByName('🧭 COMPASS');
+    if (!sh) return { ok: false, error: 'COMPASS 없음' };
+    var aCol = sh.getRange('A49:A60').getValues();
+    for (var i = 0; i < aCol.length; i++) {
+      if (String(aCol[i][0]).trim() === '은우') {
+        sh.getRange(49 + i, 2).setValue(v ? '· ' + v : '').setWrap(true).setVerticalAlignment('top');
+        SpreadsheetApp.flush();
+        return { ok: true, row: 49 + i };
+      }
+    }
+    return { ok: false, error: '은우 행 못 찾음' };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+// ── 메모 = COMPASS 은우 행 E열(비고). 업무는 D열, 메모는 E열로 분리 (2026-07-14) ──
+function renderMemoCell_() {
+  try {
+    var sh = SpreadsheetApp.openById(STRATEGY_SHEET_ID).getSheetByName('🧭 COMPASS');
+    if (!sh) return { ok: false };
+    var aCol = sh.getRange('A49:A60').getValues();
+    for (var i = 0; i < aCol.length; i++) {
+      if (String(aCol[i][0]).trim() === '은우') {
+        var memo = PropertiesService.getScriptProperties().getProperty('EUNWOO_MEMO') || '';
+        var lines = memo.split('\n').filter(function (s) { return s.trim(); });
+        var txt = '📝 메모 (' + lines.length + ')\n\n' + (lines.length ? lines.join('\n') : '· (비어있음 — 봇에 /메모 [내용])');
+        var cell = sh.getRange(49 + i, 5); // E열=비고
+        cell.setValue(txt);
+        cell.setWrap(true).setVerticalAlignment('top').setFontSize(11);
+        SpreadsheetApp.flush();
+        try {
+          var b = SpreadsheetApp.newRichTextValue().setText(txt);
+          b.setTextStyle(0, txt.indexOf('\n') > 0 ? txt.indexOf('\n') : txt.length,
+            SpreadsheetApp.newTextStyle().setBold(true).setFontSize(13).setForegroundColor('#cc0000').build());
+          cell.setRichTextValue(b.build());
+          SpreadsheetApp.flush();
+        } catch (e) {}
+        return { ok: true, row: 49 + i, count: lines.length };
+      }
+    }
+  } catch (e) { return { ok: false, error: e.message }; }
+  return { ok: false };
+}
+
 function setEunwooCompassRemarks_(text) {
   try {
     var sh = SpreadsheetApp.openById(STRATEGY_SHEET_ID).getSheetByName('🧭 COMPASS');
@@ -1792,18 +2044,43 @@ function setEunwooCompassRemarks_(text) {
     var aCol = sh.getRange('A49:A60').getValues();
     for (var i = 0; i < aCol.length; i++) {
       if (String(aCol[i][0]).trim() === '은우') {
-        var cell = sh.getRange(49 + i, 5); // E열=비고
-        // 가독성: 섹션 헤더(📍🎯📌🥇) 줄 굵게 RichText + 줄바꿈 + 상단정렬
-        var b = SpreadsheetApp.newRichTextValue().setText(text);
-        var headStyle = SpreadsheetApp.newTextStyle().setBold(true).setItalic(true).setFontSize(11).setForegroundColor('#cc0000').build(); // 헤더 굵게+기울임+빨강+11pt(본문 10pt)
-        var lines = text.split('\n'), pos = 0;
-        for (var L = 0; L < lines.length; L++) {
-          var ln = lines[L];
-          if (ln.length > 0 && /^(📍|🎯|📌|📋|✅|🥇|📥|📝)/.test(ln)) b.setTextStyle(pos, pos + ln.length, headStyle);
-          pos += ln.length + 1;
+        var cell = sh.getRange(49 + i, 4); // ★D열=서브(잊지 말 것) — 다른 직원(미주·경태)과 통일 (2026-07-14, 이전 E열)
+        // ★2026-06-23 신뢰성 재설계: RichText 단독 쓰기가 간헐적 미커밋(ok뜨는데 셀 안바뀜) →
+        //   ① 평문 setValue로 내용 먼저 확실히 박고 ② 굵게는 best-effort ③ 읽기검증 안되면 재시도.
+        cell.setValue(text);
+        cell.setWrap(true).setVerticalAlignment('top').setFontSize(11); // 회의 보고용 — 가독성 (2026-07-14)
+        SpreadsheetApp.flush();
+        try { // 섹션 헤더 굵게 (실패해도 내용은 이미 박힘)
+          var b = SpreadsheetApp.newRichTextValue().setText(text);
+          var headStyle = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(13).setForegroundColor('#1155cc').build();
+          var strikeStyle = SpreadsheetApp.newTextStyle().setStrikethrough(true).setForegroundColor('#888888').build();
+          // 오프셋 = UTF-16 (setTextStyle 기준). ↳ 현재상황 빨강 (은우 2026-07-16). ★이모지 오프셋 이슈 겪었으나 setTextStyle=UTF-16 확인, .length 그대로가 맞음
+          var lines = text.split('\n'), pos = 0, inDone = false;
+          for (var L = 0; L < lines.length; L++) {
+            var ln = lines[L];
+            if (ln.length > 0 && /^(📍|🎯|📌|📋|✅|🥇|📥|📝)/.test(ln)) {
+              b.setTextStyle(pos, pos + ln.length, headStyle);
+              inDone = ln.indexOf('이번주 한 일') >= 0; // 이 섹션 안의 항목만 취소선
+            }
+            // 이번주 한 일 = 취소선 (월요일 보고 후 눈으로 바로 구분)
+            else if (/^▸/.test(ln)) b.setTextStyle(pos, pos + ln.length, SpreadsheetApp.newTextStyle().setBold(true).setItalic(true).setFontSize(12).setForegroundColor('#1155cc').build()); // 영역 헤더 = 파랑·기울임 (은우 요청 2026-07-16, 빨강→파랑 가독성)
+            else if (inDone && ln.length > 0 && ln.indexOf('· ') >= 0) b.setTextStyle(pos, pos + ln.length, strikeStyle);
+            else if (ln.indexOf('↳') >= 0) { // 진행 상황(↳)의 현재값 = 빨강 강조: "A → B → C"면 마지막 C만, 화살표 없으면 ↳ 이후 전체
+              var _ai = ln.lastIndexOf('→');
+              var _st = _ai >= 0 ? _ai + 1 : ln.indexOf('↳') + 1;
+              while (_st < ln.length && ln.charAt(_st) === ' ') _st++;
+              if (_st < ln.length) b.setTextStyle(pos + _st, pos + ln.length, SpreadsheetApp.newTextStyle().setForegroundColor('#1155cc').setBold(true).build());
+            }
+            pos += ln.length + 1;
+          }
+          cell.setRichTextValue(b.build());
+          SpreadsheetApp.flush();
+        } catch (e) {}
+        // 검증: 셀 내용이 새 텍스트로 안 바뀌었으면 평문으로 한 번 더 강제
+        if (String(sh.getRange(49 + i, 4).getValue()).indexOf(text.slice(0, 18)) < 0) {
+          sh.getRange(49 + i, 4).setValue(text);
+          SpreadsheetApp.flush();
         }
-        cell.setRichTextValue(b.build());
-        cell.setWrap(true).setVerticalAlignment('top');
         return { ok: true, row: 49 + i };
       }
     }
@@ -1813,48 +2090,94 @@ function setEunwooCompassRemarks_(text) {
 
 // 📍 콕핏 = COMPASS E55 = 개입기록 라이브 뷰. 🥇ONE THING(이번주 1개)+📌진행중+📥들어온것(CX후보·UX채택 카운트, D2C는 /적용)+📋나중에+✅완료수. 명령/주간마다 갱신 → "보는 1곳".
 function refreshCockpit_() {
+  // 직전 setValue(판정 변경 등)가 시트에 확정된 뒤 읽도록 강제 flush.
+  // (2026-06-23 버그: /끝→완료 표시 직후 콕핏이 옛 데이터 읽어 완료항목이 안 사라짐)
+  try { SpreadsheetApp.flush(); } catch (e) {}
   var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
   var iv = ss.getSheetByName('🛠 개입기록');
   var month = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyyMM');
-  var cand = [], wip = [], backlog = [], doneN = 0;
+  var cand = [], wip = [], backlog = [], doneWeek = [], doneN = 0;
+  // ★"한 일" 기준 = 마지막 정리시점(DONE_SINCE, 은우가 "지워" 할 때만 갱신). 2026-07-20 변경:
+  //   기존 "이번 주 월요일" 자동기준은 월요일 아침(보고 직전)에 지난주 완료가 통째로 사라져 보고자료 유실 → 수동 정리로 전환.
+  var weekMon = 0;
+  var _sinceProp = PropertiesService.getScriptProperties().getProperty('DONE_SINCE');
+  if (_sinceProp) {
+    var _sd = new Date(String(_sinceProp).replace(/[-.]/g, '/') + ' 00:00:00');
+    if (!isNaN(_sd.getTime())) weekMon = _sd.getTime();
+  }
+  if (!weekMon) { // 미설정 시에만 이번 주 월요일로 폴백
+    var _mo = new Date(Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy/MM/dd'));
+    _mo.setDate(_mo.getDate() - ((_mo.getDay() + 6) % 7)); // 월요일로 되감기 (일요일=0 보정)
+    weekMon = _mo.getTime();
+  }
+  var doneThisWeek = function (d) {
+    var x = (Object.prototype.toString.call(d) === '[object Date]') ? d : new Date(String(d).replace(/[.]/g, '/'));
+    return !isNaN(x.getTime()) && x.getTime() >= weekMon;
+  };
   var inM = function (dt) { if (Object.prototype.toString.call(dt) === '[object Date]') dt = Utilities.formatDate(dt, 'Asia/Seoul', 'yyyy-MM-dd'); return String(dt).replace(/[-.]/g, '').indexOf(month) >= 0; };
   if (iv && iv.getLastRow() > 1) {
     var ageD = function (d) { var t = (Object.prototype.toString.call(d) === '[object Date]') ? d : new Date(String(d)); return isNaN(t.getTime()) ? 0 : Math.floor((Date.now() - t.getTime()) / 86400000); };
     var stale = function (r, s) { var a = ageD(r[0]); return '· [' + cxSourceTag_(r[1]) + '] ' + String(r[2]) + (a >= 14 ? ' ⏳' + a + '일(묵음)' : ''); };
     iv.getDataRange().getValues().slice(1).forEach(function (r) {
       var v = String(r[7]);
-      if (v === '착수' || v === '진행중') wip.push('· [' + cxSourceTag_(r[1]) + '] ' + String(r[2]));
+      // 진행중 = 영역별 그룹 + 맥락 하위줄 (2026-07-14: 회의 보고용이 되어 가독성 개선. D55 이중관리 폐지)
+      if (v === '착수' || v === '진행중') wip.push({ tag: cxSourceTag_(r[1]), name: String(r[2]), ctx: String(r[3] || '').trim() });
       else if (v === '후보') cand.push(stale(r));
       else if (v === '백로그' || v === '보류') backlog.push(stale(r));
+      // ✅ 이번주 한 일 = 최근 7일 완료분. 월요일 보고용으로 취소선 표시 후, 7일 지나면 자동으로 빠짐 (2026-07-14)
+      else if (v === '완료' && doneThisWeek(r[0])) doneWeek.push({ tag: cxSourceTag_(r[1]), name: String(r[2]) });
     });
   }
   // UX 케이스북 채택(UX_할일 '할일'=아직 손 안 댄 것) 개수 — 같은 시트라 직접 카운트
   var uxN = 0;
   var ut = ss.getSheetByName('UX_할일');
   if (ut && ut.getLastRow() > 1) ut.getDataRange().getValues().slice(1).forEach(function (r) { if (String(r[4]) === '할일') uxN++; });
-  var seenD = {};
+  var seenD = {}, seenP = {}, donePrev = 0;
+  // 지난달 키 (월초 "완료 0건"으로 성과가 증발해 보이는 것 방지 — 2026-07-01)
+  var pd = new Date(); pd.setMonth(pd.getMonth() - 1);
+  var prevMonth = Utilities.formatDate(pd, 'Asia/Seoul', 'yyyyMM');
+  var inPrev = function (dt) { if (Object.prototype.toString.call(dt) === '[object Date]') dt = Utilities.formatDate(dt, 'Asia/Seoul', 'yyyy-MM-dd'); return String(dt).replace(/[-.]/g, '').indexOf(prevMonth) >= 0; };
   [iv, ss.getSheetByName('✅ 완료_아카이브')].forEach(function (sh) {
     if (!sh || sh.getLastRow() < 2) return;
     sh.getDataRange().getValues().slice(1).forEach(function (r) {
-      if (!inM(r[0]) || String(r[7]) !== '완료') return;
-      var k = String(r[2]); if (seenD[k]) return; seenD[k] = true; doneN++; // 개입기록+아카이브 중복 제거
+      if (String(r[7]) !== '완료') return;
+      var k = String(r[2]);
+      if (inM(r[0])) { if (!seenD[k]) { seenD[k] = true; doneN++; } }
+      else if (inPrev(r[0])) { if (!seenP[k]) { seenP[k] = true; donePrev++; } }
     });
   });
   var props0 = PropertiesService.getScriptProperties();
-  var oneThing = props0.getProperty('EUNWOO_ONE_THING') || '';
+  var oneThing = getOneThing_() || props0.getProperty('EUNWOO_ONE_THING') || ''; // ★B열(다른 직원과 동일 칸)이 원본
   var memoStr = props0.getProperty('EUNWOO_MEMO') || '';
   var memoLines = memoStr ? memoStr.split('\n').filter(function (s) { return s.trim(); }) : [];
   // 표시: lim까지 보여주고 넘치면 "…외 N건" (count와 보이는 줄 불일치 방지)
   var fmt = function (arr, lim) { if (!arr.length) return '· 없음'; var s = arr.slice(0, lim).join('\n'); return arr.length > lim ? s + '\n· …외 ' + (arr.length - lim) + '건' : s; };
-  var inbox = '· CX후보 ' + cand.length + ' · D2C는 케이스북→/적용 · UX채택은 콕핏 나중에로 자동';
+  // 진행중 = 영역별 묶어서 출력 (회의 보고 가독성). 회의 흐름 순서: 인쇄 → 플랫폼 → 자사몰 → 디자인 → CX
+  var AREA_ORDER = ['인쇄', '플랫폼', '디자인', 'CX 관리자', 'CX', 'CX주간', 'UX', 'UTM']; // 창 번호 분류 폐지 — 은우 업무 축(인쇄/플랫폼)으로 (2026-07-14)
+  var groupTxt = function (arr, striked) {
+    var g = {};
+    arr.forEach(function (w) { (g[w.tag] = g[w.tag] || []).push(w); });
+    return Object.keys(g).sort(function (a, b) {
+      var ia = AREA_ORDER.indexOf(a), ib = AREA_ORDER.indexOf(b);
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+    }).map(function (k) {
+      return '▸ ' + k + ' (' + g[k].length + ')\n' + g[k].map(function (w) {
+        return '   · ' + w.name + (!striked && w.ctx ? '\n      ↳ ' + w.ctx : '');
+      }).join('\n');
+    }).join('\n\n');
+  };
+  var wipTxt = wip.length ? groupTxt(wip, false) : '· 없음';
+  var doneWeekTxt = doneWeek.length ? '✅ 이번주 한 일 (' + doneWeek.length + ' · 월요일 보고용)\n\n' + groupTxt(doneWeek, true) + '\n\n' : '';
   var txt = '📍 이번주 콕핏 (' + Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd') + ')\n\n'
     + '🥇 CX 관리자 ONE THING\n' + (oneThing ? '· ' + oneThing : '· (미설정 — /원씽 [내용])') + '\n\n'
-    + '📌 진행중 (' + wip.length + ')\n' + fmt(wip, 10) + '\n\n'
-    + '📥 들어온 것 (확인→/할거·/적용)\n' + inbox + (cand.length ? '\n' + cand.slice(0, 2).join('\n') : '') + '\n\n'
-    + '📋 나중에 (' + backlog.length + ')\n' + fmt(backlog, 10) + '\n\n'
-    + (memoLines.length ? '📝 메모 (' + memoLines.length + ')\n' + memoLines.join('\n') + '\n\n' : '')
-    + '✅ 이번달 완료 ' + doneN + '건';
+    + '📌 진행중 (' + wip.length + ')\n\n' + wipTxt + '\n\n'
+    + '📥 들어온 것 (' + cand.length + ' · 확인→/할거)\n' + fmt(cand, 100) + '\n\n'
+    + doneWeekTxt
+    + '📋 나중에 (' + backlog.length + ')\n' + fmt(backlog, 100) + '\n\n'
+    // 📝 메모는 E열(비고)로 분리 — 콕핏(D열)은 업무만 (2026-07-14)
+    + '✅ 이번달 완료 ' + doneN + '건' + (donePrev > 0 ? ' (지난달 ' + donePrev + '건)' : '');
   var res = setEunwooCompassRemarks_(txt);
+  renderMemoCell_(); // 비고(E열) = 메모창
   return { ok: res.ok, row: res.row, error: res.error, text: txt }; // text=콕핏 내용(텔레그램 표시용)
 }
 
@@ -1867,7 +2190,14 @@ function buildEunwooMonthlySummary_(month) {
     if (Object.prototype.toString.call(s) === '[object Date]') s = Utilities.formatDate(s, 'Asia/Seoul', 'yyyy-MM-dd');
     return String(s).replace(/[-.]/g, '').indexOf(mKey) >= 0;
   };
-  var done = [], wip = [], seenDone = {};
+  // 완료/착수 날짜 → "M/d" (Date·일련번호·"2026. 6. 8"·"2026-06-19" 다 처리)
+  var mdDate = function (v) {
+    if (Object.prototype.toString.call(v) === '[object Date]') return Utilities.formatDate(v, 'Asia/Seoul', 'M/d');
+    if (typeof v === 'number') { var d = new Date(Math.round((v - 25569) * 86400 * 1000)); return isNaN(d.getTime()) ? '' : Utilities.formatDate(d, 'Asia/Seoul', 'M/d'); }
+    var m = String(v).match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/);
+    return m ? (Number(m[2]) + '/' + Number(m[3])) : '';
+  };
+  var done = [], wip = [], seenDone = {}, doneReal = 0;
   var iv = ss.getSheetByName('🛠 개입기록');
   // 진행/착수 = 개입기록(working)에서
   if (iv && iv.getLastRow() > 1) {
@@ -1884,7 +2214,11 @@ function buildEunwooMonthlySummary_(month) {
       if (!inMonth(r[0]) || String(r[7]) !== '완료') return;
       var k = String(r[2]); if (seenDone[k]) return; seenDone[k] = true;
       var ba = (r[4] ? 'Before ' + r[4] : '') + (r[5] ? ' → After ' + r[5] : '');
-      done.push('- ' + k + (ba ? ' (' + ba + ')' : ''));
+      var dt = mdDate(r[0]);
+      // ⭐=진짜 실측 After(자동 프록시 아님) — 협상 때 바로 보이게 (2026-07-02). /실측으로 채움.
+      var isReal = String(r[5] || '').trim() && !/자동|착수시점|backfill|정확지표|권장/.test(String(r[5]));
+      done.push('- ' + (isReal ? '⭐' : '') + (dt ? '[' + dt + '] ' : '') + k + (ba ? ' (' + ba + ')' : ''));
+      if (isReal) doneReal++;
     });
   });
   var convLine = '';
@@ -1899,22 +2233,51 @@ function buildEunwooMonthlySummary_(month) {
       if (si >= 0 && f[si] && l[si]) convLine += ' · 매출 ' + Math.round(f[si] / 10000) + '만→' + Math.round(l[si] / 10000) + '만(주)';
     }
   }
+  // 💰 은우 귀속매출 = 스마트스토어 월매출(은우 직접운영·수동입력). G열 매출 합산. 다른 채널(UTM/공구=영업아님)은 귀속 X.
   var attrLine = '';
   var am = ss.getSheetByName('💰 은우 귀속 매출');
-  if (am && am.getLastRow() > 1) attrLine = '💰 귀속매출 시트 ' + (am.getLastRow() - 1) + '행 (상세 참조)';
+  if (am && am.getLastRow() > 1) {
+    var amData = am.getDataRange().getValues();
+    var ymM = function (v) { if (typeof v === 'number') { var d = new Date(Math.round((v - 25569) * 86400 * 1000)); return isNaN(d.getTime()) ? '' : Utilities.formatDate(d, 'Asia/Seoul', 'yyyy-MM'); } if (Object.prototype.toString.call(v) === '[object Date]') return Utilities.formatDate(v, 'Asia/Seoul', 'yyyy-MM'); return String(v).slice(0, 7); };
+    var ssRev = 0, hit = false;
+    for (var ai = 1; ai < amData.length; ai++) {
+      if (String(amData[ai][1] || '').indexOf('스마트스토어') < 0) continue;
+      if (ymM(amData[ai][0]) !== month) continue;
+      hit = true;
+      ssRev += Number(String(amData[ai][6]).replace(/[^\d.-]/g, '')) || 0;
+    }
+    attrLine = ssRev > 0 ? '💰 은우 귀속매출(스마트스토어): ' + ssRev.toLocaleString() + '원'
+      : '💰 은우 귀속매출(스마트스토어): 미입력' + (hit ? ' (💰시트 G열에 월매출 숫자 입력)' : '');
+  }
   var txt = '📊 은우 월간 성과 — ' + month + '\n━━━━━━━━━━\n'
-    + '📈 수치개선(완료):\n' + (done.length ? done.join('\n') : '- (완료 개입 없음)') + '\n\n'
+    + '📈 수치개선(완료 ' + done.length + '건 · 실측 ⭐' + doneReal + '건):\n' + (done.length ? done.join('\n') : '- (완료 개입 없음)') + '\n\n'
     + '🔧 진행/착수:\n' + (wip.length ? wip.join('\n') : '- 없음') + '\n\n'
     + '📊 지표변화:\n' + (convLine || '- 데이터 부족') + '\n'
     + (attrLine ? '\n' + attrLine + '\n' : '')
     + '\n※협상 초안 — 맥락(공구·휴무·광고) 감안해 다듬어 사용. 실무완료=COMPASS D열 참조';
   var sh = ensureSheetWithHeaders_(ss, '📊 월간_성과요약', ['월', '요약', '생성일시']);
   var data = sh.getDataRange().getValues();
-  for (var i = data.length - 1; i >= 1; i--) { if (String(data[i][0]) === month) sh.deleteRow(i + 1); }
-  sh.appendRow([month, txt, new Date()]);
+  // ★월=텍스트 저장 안 하면 "2026-06"이 날짜 일련번호(46174)로 자동변환돼 upsert 비교 깨짐(15중복 원인, 2026-06-24 fix).
+  var ym = function (v) {
+    if (typeof v === 'number') { var d = new Date(Math.round((v - 25569) * 86400 * 1000)); return isNaN(d.getTime()) ? String(v) : Utilities.formatDate(d, 'Asia/Seoul', 'yyyy-MM'); }
+    if (Object.prototype.toString.call(v) === '[object Date]') return Utilities.formatDate(v, 'Asia/Seoul', 'yyyy-MM');
+    return String(v).slice(0, 7);
+  };
+  for (var i = data.length - 1; i >= 1; i--) { if (ym(data[i][0]) === month) sh.deleteRow(i + 1); }   // serial/Date/문자 다 매칭
+  sh.appendRow(["'" + month, txt, new Date()]);   // 월=텍스트(앞 따옴표)로 저장 → 날짜변환 방지
   return { ok: true, month: month, text: txt, done: done.length, wip: wip.length };
 }
 
+// 내용 키워드로 창 자동 분류 (1창 두뇌·전략 / 2창 자사몰 메인 / 3창 데이터·측정 / 4창 상세·이미지). 못 정하면 CX.
+// ★규칙 기반이라 완벽치 않음 — 답장에 [N창] 표시되니 틀리면 /삭제 후 재등록하거나 영역 직접수정.
+function cxAutoArea_(s) {
+  var t = String(s).toLowerCase();
+  if (/측정|추적|전환율|리포트|ga4|클러리티|clarity|데이터|효과\s*측정|광고.*효과|퍼널|지표|\butm\b/.test(t)) return '3창';
+  if (/디자인|썸네일|이미지|사진|상페|상세\s*페이지|상세페이지|카마솥|가마솥|홀더|목업|단박스|인스타|영상|쿠팡|스마트?\s*스토어|스마스토어|레퍼런스|포토|패키지|엽서|인쇄|비주얼|로고/.test(t)) return '4창';
+  if (/클릭|버튼|바텀시트|결제|푸터|연결.*안|안됨|발행|재고|레시피.*(순서|업데이트|업뎃)|구매영역|네이버페이|카카오페이|스크롤|깨짐|옵션|\bui\b|화면|팝업|배너/.test(t)) return '2창';
+  if (/전략|기획|벤치마킹|브랜딩|나무위키|매출|\bsku\b|번들|회고|목표|컨셉|방향|앵커링|듀오링고/.test(t)) return '1창';
+  return 'CX';
+}
 // 텔레그램 한 줄로 개입기록에 추가 (Before=최신 주간_요약 전환율 자동). /적용·/개입·/백로그 공용. verdict 기본 착수.
 function addCxStart_(content, area, verdict) {
   var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
@@ -1923,6 +2286,16 @@ function addCxStart_(content, area, verdict) {
   var sm = String(content).match(/^@(\S+)\s+([\s\S]+)/);
   var finalArea = sm ? sm[1] : (area || 'CX');
   var finalContent = sm ? sm[2].trim() : String(content).trim();
+  // 영역 자동분류: @출처 없고 기본값(CX)일 때만 내용 보고 창 태그 부여 (D2C/UX 등 명시영역은 유지)
+  if (!sm && (!area || area === 'CX')) finalArea = cxAutoArea_(finalContent);
+  // 중복 방지(2026-06-23): 같은 개입내용이 이미 활성(완료/폐기/종료/효과없음 아님)이면 새 줄 안 만들고 dup 반환.
+  // 버튼 더블탭·폴링 재처리로 같은 항목 2줄 들어가던 문제.
+  var ex = t.getDataRange().getValues();
+  for (var ri = 1; ri < ex.length; ri++) {
+    if (String(ex[ri][2]).trim() !== finalContent) continue;
+    if (/완료|폐기|종료|효과없음/.test(String(ex[ri][7]))) continue;
+    return { ok: true, dup: true, content: finalContent, area: String(ex[ri][1]) };
+  }
   var before = '';
   var ws = ss.getSheetByName('주간_요약');
   if (ws && ws.getLastRow() > 1) {
@@ -1932,6 +2305,7 @@ function addCxStart_(content, area, verdict) {
   }
   var d = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
   t.appendRow([d, finalArea, finalContent, '', before, '', '-', verdict || '착수']);
+  SpreadsheetApp.flush(); // 추가 직후 refreshCockpit이 이 줄을 바로 읽도록 커밋 (안 하면 옛 목록으로 콕핏 그림)
   return { ok: true, content: finalContent, area: finalArea };
 }
 
@@ -1967,6 +2341,7 @@ function cxSourceTag_(area) {
   if (a.indexOf('D2C') >= 0) return 'D2C';      // /적용 = D2C 케이스북(미주봇) 인풋
   if (a.indexOf('UX') >= 0) return 'UX';        // UX 사례 채택
   if (a.indexOf('CX주간') >= 0) return 'CX주간'; // 주간 리포트 자동 후보
+  if (a.indexOf('CX 관리자') >= 0) return 'CX 관리자'; // 은우 본업(측정·UTM 등) — 창번호 대신
   if (a.indexOf('CX') >= 0) return 'CX';        // /할거 = 자사몰·CX 직접
   return a || '직접';
 }
@@ -1984,12 +2359,16 @@ function currentConvLabel_(suffix) {
   var last = ws.getRange(ws.getLastRow(), 1, 1, ws.getLastColumn()).getValues()[0];
   return '전환율 ' + last[ci] + '% ' + (suffix || '');
 }
+// 콕핏 줄 복붙 대응: 앞 불릿(·)·[창태그]·⏳묵음 떼고 매칭. ("[1창] 매출 41%" → "매출 41%")
+function cxKwNorm_(s) {
+  return String(s).replace(/^[·•\s]+/, '').replace(/\[[^\]]*\]/g, '').replace(/⏳\s*\d+일\(묵음\)/g, '').trim();
+}
 function setCxVerdictByKeyword_(keyword, verdict, after) {
   var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
   var iv = ss.getSheetByName('🛠 개입기록');
   if (!iv || iv.getLastRow() < 2) return { ok: false, error: '개입기록이 비어있음' };
   var data = iv.getDataRange().getValues();
-  var kw = String(keyword).toLowerCase().trim();
+  var kw = cxKwNorm_(keyword).toLowerCase();
   var matches = [];
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][7]) === '완료') continue; // 이미 완료는 스킵
@@ -1998,6 +2377,8 @@ function setCxVerdictByKeyword_(keyword, verdict, after) {
   if (matches.length === 0) return { ok: false, error: '"' + keyword + '" 매칭 없음 — /콕핏 으로 항목 확인' };
   if (matches.length > 1) return { ok: false, multi: true, matches: matches };
   iv.getRange(matches[0].row, 8).setValue(verdict);
+  // ★완료 시 A열에 완료일 스탬프 (2026-07-14) — 이전엔 '등록일'만 있어 "이번주 한 일" 판정이 틀렸음
+  if (String(verdict) === '완료') iv.getRange(matches[0].row, 1).setValue(Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd'));
   var af = after;
   if (verdict === '완료') {
     // After 미입력 → 완료시점 전환율 자동(Before와 동일 지표로 쌍 완성, 협상카드 빈칸 방지)
@@ -2023,6 +2404,64 @@ function handleCxDone_(chatId, arg) {
     sendTGMessage(chatId, '✅ 완료 — 콕핏 갱신.\n· ' + er.content + (er.after ? '\n· After: ' + er.after + (er.autoAfter ? '\n💡 자동(전환율 proxy) — 정확한 지표 있으면 「/끝 ' + kw + ' = 값」으로 다시' : ' (협상카드 반영)') : ''));
   } else if (er.multi) sendTGMessage(chatId, '⚠️ 여러 개 매칭 — 더 구체적으로:\n' + er.matches.map(function (x) { return '· ' + x.content; }).join('\n'));
   else sendTGMessage(chatId, '⚠️ ' + er.error);
+}
+
+// /삭제 — 필요없어진 항목을 개입기록에서 행 삭제. /끝과 같은 키워드 매칭(1개=삭제, 여러개=후보 나열).
+// ★완료(협상카드 증거)는 삭제 대상서 제외 — 실수로 성과기록 날리는 것 방지.
+function handleCxDelete_(chatId, kw) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var iv = ss.getSheetByName('🛠 개입기록');
+  if (!iv || iv.getLastRow() < 2) { sendTGMessage(chatId, '⚠️ 개입기록이 비어있음'); return; }
+  var data = iv.getDataRange().getValues();
+  var k = cxKwNorm_(kw).toLowerCase();
+  var matches = [];
+  for (var i = 1; i < data.length; i++) {
+    if (/완료/.test(String(data[i][7]))) continue; // 완료=협상카드 증거, 삭제 제외
+    if (String(data[i][2]).toLowerCase().indexOf(k) >= 0) matches.push({ row: i + 1, content: String(data[i][2]) });
+  }
+  if (matches.length === 0) { sendTGMessage(chatId, '⚠️ "' + kw + '" 매칭 없음 (완료된 건 /삭제 대상 아님) — /콕핏 확인'); return; }
+  if (matches.length > 1) { sendTGMessage(chatId, '⚠️ 여러 개 매칭 — 더 구체적으로:\n' + matches.map(function (x) { return '· ' + x.content; }).join('\n')); return; }
+  var deleted = matches[0].content;
+  iv.deleteRow(matches[0].row);
+  addCxDismissed_(deleted); // ★거부 기억 — 주간 후보가 같은 걸 재등록 못 하게 (2026-07-01 좀비 fix)
+  refreshCockpit_();
+  sendTGMessage(chatId, '🗑️ 삭제 — 콕핏 갱신 (재추천 안 함).\n· ' + deleted);
+}
+
+// ── /실측: 완료 포함 아무 항목의 After 갱신 (개입기록+아카이브 양쪽) — setCxVerdictByKeyword_는 완료를 skip해서 별도 ──
+function setCxAfterAnywhere_(keyword, after) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var kw = cxKwNorm_(keyword).toLowerCase();
+  var hits = [];
+  ['🛠 개입기록', '✅ 완료_아카이브'].forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh || sh.getLastRow() < 2) return;
+    var d = sh.getDataRange().getValues();
+    for (var i = 1; i < d.length; i++) {
+      if (String(d[i][2]).toLowerCase().indexOf(kw) >= 0) hits.push({ sh: sh, row: i + 1, content: String(d[i][2]), tab: name });
+    }
+  });
+  // 같은 내용이 개입기록+아카이브 양쪽에 있으면 둘 다 갱신(중복 아님) — 내용 기준 유니크로 multi 판단
+  var uniq = {}; hits.forEach(function (h) { uniq[h.content] = true; });
+  if (hits.length === 0) return { ok: false, error: '"' + keyword + '" 매칭 없음' };
+  if (Object.keys(uniq).length > 1) return { ok: false, multi: true, matches: Object.keys(uniq) };
+  hits.forEach(function (h) { h.sh.getRange(h.row, 6).setValue(after); });
+  SpreadsheetApp.flush();
+  return { ok: true, content: hits[0].content, updated: hits.length };
+}
+
+// ── 거부(삭제) 이력 tombstone — /삭제한 항목을 주간 후보가 부활시키던 좀비 방지 ──
+// 키 = appendCxCandidates_와 같은 정규화(숫자/화살표 제거) → "골든타임 370명"과 "521명"도 같은 거부로 침.
+function cxDismissNorm_(s) { return String(s).replace(/[\d,]+\s*(명|%|건|원)?/g, '').replace(/[↑↓]/g, '').replace(/\s+/g, ' ').trim(); }
+function addCxDismissed_(content) {
+  var props = PropertiesService.getScriptProperties();
+  var list = [];
+  try { list = JSON.parse(props.getProperty('CX_DISMISSED') || '[]'); } catch (e) { list = []; }
+  var k = cxDismissNorm_(content);
+  if (k && list.indexOf(k) < 0) { list.push(k); if (list.length > 80) list = list.slice(-80); props.setProperty('CX_DISMISSED', JSON.stringify(list)); }
+}
+function getCxDismissed_() {
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('CX_DISMISSED') || '[]'); } catch (e) { return []; }
 }
 
 // ① 백업(비파괴, 회의 전 9시): 개입기록 완료 → ✅완료_아카이브 복사. 중복(날짜+내용)은 skip. 삭제 안 함.
@@ -2478,8 +2917,9 @@ function getUXHistory_() {
   var sh = getUXTab_();
   if (sh.getLastRow() < 2) return { ok: true, history: [] };
   var rows = sh.getDataRange().getValues().slice(1);
-  var history = rows.filter(function (r) { return String(r[5]) === 'sent'; }).map(function (r) {
-    return { 일자: String(r[0]), 기법명: String(r[2]), 카테고리: String(r[3]) };
+  // ★sent만이 아니라 생성된 건 다(sent·채택·패스·draft) — 패스한 것도 반복 안 하게 (2026-06-30 낙관적UI 3연속 fix)
+  var history = rows.filter(function (r) { return String(r[2]).trim(); }).map(function (r) {
+    return { 일자: String(r[0]), 기법명: String(r[2]), 카테고리: String(r[3]), 상태: String(r[5]) };
   });
   return { ok: true, history: history };
 }
@@ -2520,16 +2960,123 @@ function markUXSkip_(date) {
   return { ok: false, error: 'no draft for date' };
 }
 
+// ===== 🎨 디자인 사례집 (매일 1개 개인 DM, 채택=시트표시만) =====
+// 시트 🎨디자인_사례 [ID,추가일,브랜드,제목,부제,핵심,적용,출처,상태,발송일시]. 상태=미발송→발송→채택/패스.
+function getDesignTab_() { return SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID).getSheetByName('🎨 디자인_사례'); }
+// 자동보충 적재 — report.js가 Claude로 생성한 행([ID..발송일시] 10칸) append, 제목 중복 skip
+function appendDesignCases_(rows) {
+  try {
+    var sh = getDesignTab_();
+    if (!sh) return { ok: false, error: '시트 없음' };
+    var data = sh.getDataRange().getValues();
+    var titles = {}; for (var i = 1; i < data.length; i++) titles[String(data[i][3] || '').trim()] = true;
+    var added = [];
+    (rows || []).forEach(function (r) {
+      var t = String(r[3] || '').trim();
+      if (!t || titles[t]) return;
+      sh.appendRow(r); titles[t] = true; added.push(r[0] + ' ' + t);
+    });
+    SpreadsheetApp.flush();
+    return { ok: true, added: added.length, items: added };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+// 브랜드 prefix('A'/'B')의 다음 미발송 1개 발송. 발송하면 {id,title}, 없으면 null.
+function sendOneDesignByBrand_(sh, data, prefix) {
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]).charAt(0) === prefix && String(data[i][8]).trim() === '미발송') {
+      var r = data[i];
+      var msg = '🎨 <b>디자인 사례</b> [' + r[0] + '] · ' + r[2]
+        + '\n\n<b>' + r[3] + '</b>' + (r[4] ? '\n<i>' + r[4] + '</i>' : '')
+        + (r[5] ? '\n\n💡 ' + r[5] : '')
+        + (r[6] ? '\n\n🎯 <b>우리 적용:</b> ' + r[6] : '')
+        + (r[7] ? '\n\n🔗 ' + r[7] : '');
+      var kb = { inline_keyboard: [[
+        { text: '⭐ 채택', callback_data: 'dzc:add:' + r[0] },
+        { text: '✕ 패스', callback_data: 'dzc:pass:' + r[0] }
+      ]] };
+      sendTGMessage(EUNWOO_CHAT_ID, msg, kb);
+      sh.getRange(i + 1, 9).setValue('발송');
+      sh.getRange(i + 1, 10).setValue(new Date());
+      return { id: r[0], title: r[3] };
+    }
+  }
+  return null;
+}
+// 매일 A(식품) 1개 + B(주방기기) 1개 = 2개 발송 (각 브랜드 미발송분부터). 은우 2026-06-24.
+function sendNextDesignCase_() {
+  var sh = getDesignTab_();
+  if (!sh || sh.getLastRow() < 2) return { ok: false, error: '디자인_사례 시트 없음/빔' };
+  var data = sh.getDataRange().getValues();
+  var a = sendOneDesignByBrand_(sh, data, 'A');
+  var b = sendOneDesignByBrand_(sh, data, 'B');
+  SpreadsheetApp.flush();
+  if (!a && !b) return { ok: true, done: true }; // 양쪽 다 미발송 없음
+  return { ok: true, sent: [a, b].filter(Boolean) };
+}
+function setDesignCaseStatus_(id, status) {
+  var sh = getDesignTab_();
+  if (!sh) return { ok: false, error: '시트 없음' };
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(id)) { sh.getRange(i + 1, 9).setValue(status); SpreadsheetApp.flush(); return { ok: true, title: String(data[i][3]) }; }
+  }
+  return { ok: false, error: 'ID 없음: ' + id };
+}
+// 케이스북 웹용: 발송된(발송/채택/패스) 디자인 사례 목록. 미발송은 제외.
+function getDesignCasesForWeb_() {
+  var sh = getDesignTab_();
+  if (!sh || sh.getLastRow() < 2) return [];
+  var data = sh.getDataRange().getValues().slice(1);
+  return data.filter(function (r) {
+    var st = String(r[8]).trim();
+    return (st === '발송' || st === '채택' || st === '패스') && String(r[3]).trim();
+  }).map(function (r) {
+    return {
+      id: String(r[0]), brand: String(r[2]), title: String(r[3]), sub: String(r[4]),
+      point: String(r[5]), apply: String(r[6]), src: String(r[7]), status: String(r[8]).trim(),
+      date: (Object.prototype.toString.call(r[9]) === '[object Date]') ? Utilities.formatDate(r[9], 'Asia/Seoul', 'yyyy-MM-dd') : String(r[9]).slice(0, 10)
+    };
+  });
+}
+// 케이스북 카드에서 디자인 사례 채택/패스 토글 (google.script.run 호출용 — 언더스코어 없는 공개함수)
+function setDesignStatusWeb(id, status) { return setDesignCaseStatus_(id, status); }
+
+// ===== 단축링크 클릭 기록 (go.italy CF Function이 클릭마다 호출) =====
+// GA4가 인스타 인앱 유입을 놓치는 걸 우회 — 리다이렉트 서버에서 클릭 자체를 셈 = 실유입.
+function getClickLogTab_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ss.getSheetByName('📊 단축링크_클릭');
+  if (!sh) { sh = ss.insertSheet('📊 단축링크_클릭'); sh.appendRow(['시각', '슬러그', 'referer', 'ua']); sh.setFrozenRows(1); }
+  return sh;
+}
+function logShortlinkClick_(c) {
+  try {
+    var slug = String((c && c.slug) || '').replace(/^\/+/, '').slice(0, 60);
+    if (!slug) return { ok: false, error: 'no slug' };
+    getClickLogTab_().appendRow([new Date(), slug, String((c && c.ref) || '').slice(0, 200), String((c && c.ua) || '').slice(0, 200)]);
+    return { ok: true, slug: slug };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
 // 케이스북 페이지 ⭐채택/패스/되돌리기 버튼 콜백 (google.script.run 호출 — 언더바 X 필수)
 // 일자(A열)로 노출 사례 1건 찾아 상태칸(F)만 갱신. draft/skipped는 안 건드림.
+// UX 날짜 정규화 — 시트는 날짜를 직렬번호/Date로 저장, 텔레그램 콜백은 "yyyy-MM-dd" 문자열 → 매칭 깨짐 방지(양쪽 yyyy-MM-dd로)
+function _uxYmd_(v) {
+  if (Object.prototype.toString.call(v) === '[object Date]') return Utilities.formatDate(v, 'Asia/Seoul', 'yyyy-MM-dd');
+  var s = String(v == null ? '' : v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  if (/^\d+(\.\d+)?$/.test(s)) { var d = new Date(Math.round((parseFloat(s) - 25569) * 86400 * 1000)); return isNaN(d.getTime()) ? s : Utilities.formatDate(d, 'Asia/Seoul', 'yyyy-MM-dd'); }
+  var dd = new Date(s); return isNaN(dd.getTime()) ? s : Utilities.formatDate(dd, 'Asia/Seoul', 'yyyy-MM-dd');
+}
 function setUXCaseStatus(date, status) {
   if (['채택', '패스', 'sent'].indexOf(status) < 0) return { ok: false, error: 'bad status' };
   var sh = getUXTab_();
   var data = sh.getDataRange().getValues();
+  var dkey = _uxYmd_(date);
   for (var i = 1; i < data.length; i++) {
     var st = String(data[i][5]);
     var shown = (st === 'sent' || st === '케이스북' || st === '채택' || st === '패스');
-    if (String(data[i][0]) === String(date) && shown) {
+    if (_uxYmd_(data[i][0]) === dkey && shown) {
       sh.getRange(i + 1, 6).setValue(status);
       var todoObj = null;
       if (status === '채택') {
@@ -2574,14 +3121,15 @@ function getUXTodos_() {
 function addUXTodo(date) {
   var ux = getUXTab_();
   var data = ux.getDataRange().getValues();
+  var dkey = _uxYmd_(date);
   var c = null;
-  for (var i = 1; i < data.length; i++) { if (String(data[i][0]) === String(date)) { c = data[i]; break; } }
+  for (var i = 1; i < data.length; i++) { if (_uxYmd_(data[i][0]) === dkey) { c = data[i]; break; } }
   if (!c) return { ok: false, error: 'no case' };
   var td = getUXTodoTab_();
   var rows = td.getDataRange().getValues();
-  for (var j = 1; j < rows.length; j++) { if (String(rows[j][0]) === String(date)) return { ok: true, exists: true }; }
+  for (var j = 1; j < rows.length; j++) { if (_uxYmd_(rows[j][0]) === dkey) return { ok: true, exists: true }; }
   var action = extractUXAction_(c[4]);
-  td.appendRow([String(date), String(c[2]), String(c[3]), action, '할일', '', new Date()]);
+  td.appendRow([dkey, String(c[2]), String(c[3]), action, '할일', '', new Date()]);
   return { ok: true, todo: { date: String(date), title: String(c[2]), cat: String(c[3]), action: action, status: '할일', memo: '' } };
 }
 function setUXTodoStatus(date, status) {
@@ -2694,19 +3242,57 @@ function recordTrafficMonthly_(payload) {
   return { ok: true, added: (payload.rows || []).length };
 }
 
+// 주간 UTM 캠페인별 유입→전환 적재 (📲 주간_UTM성과). 같은 주차 upsert(재실행 중복방지).
+function recordUtmWeekly_(payload) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ensureSheetWithHeaders_(ss, '📲 주간_UTM성과', ['주차', '구분', '캠페인', '유입', '구매', '매출(GA4최소치)', '기록일']);
+  var week = String(payload.week || '');
+  var ymd = function (v) { return (Object.prototype.toString.call(v) === '[object Date]') ? Utilities.formatDate(v, 'Asia/Seoul', 'yyyy-MM-dd') : String(v).slice(0, 10); };
+  var data = sh.getDataRange().getValues();
+  for (var i = data.length - 1; i >= 1; i--) { if (ymd(data[i][0]) === week) sh.deleteRow(i + 1); }   // 날짜/문자 둘 다 매칭(upsert)
+  (payload.rows || []).forEach(function (r) {
+    sh.appendRow(["'" + r.week, r.group, r.campaign, r.sessions, r.purchases, r.revenue, r.recordedAt]);   // 주차=텍스트 저장(날짜변환 방지)
+  });
+  return { ok: true, week: week, added: (payload.rows || []).length };
+}
+
+// 주간 버튼클릭(상페 선물/구매/장바구니/공유/리뷰) 위치×버튼별 적재 (📊 주간_버튼클릭). 같은 주차 upsert.
+function recordButtonWeekly_(payload) {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ensureSheetWithHeaders_(ss, '📊 주간_버튼클릭', ['주차', '위치', '버튼', '클릭수', '기록일']);
+  var week = String(payload.week || '');
+  var ymd = function (v) { return (Object.prototype.toString.call(v) === '[object Date]') ? Utilities.formatDate(v, 'Asia/Seoul', 'yyyy-MM-dd') : String(v).slice(0, 10); };
+  var data = sh.getDataRange().getValues();
+  for (var i = data.length - 1; i >= 1; i--) { if (ymd(data[i][0]) === week) sh.deleteRow(i + 1); }
+  (payload.rows || []).forEach(function (r) {
+    sh.appendRow(["'" + r.week, r.zone, r.label, r.clicks, r.recordedAt]);
+  });
+  return { ok: true, week: week, added: (payload.rows || []).length };
+}
+
 // 주간 분석→액션을 개입기록(🛠)에 "후보"로 자동 적재 + Before 스냅샷. 중복방지(날짜+개입내용). 은우가 착수/완료로 바꿈.
 function appendCxCandidates_(payload) {
   var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
   var t = ensureSheetWithHeaders_(ss, '🛠 개입기록', ['날짜', '영역', '개입내용', '맥락(휴무/공구/광고)', 'Before(지표)', 'After(지표)', '측정단위', '판정']);
   var data = t.getDataRange().getValues();
-  var seen = {};
-  for (var i = 1; i < data.length; i++) { seen[String(data[i][0]) + '|' + String(data[i][2])] = true; }
+  // 중복방지(2026-06-23 강화): 날짜무관 같은 개입내용이 이미 활성(완료/폐기 아님)이면 skip.
+  //   기존 날짜|내용 키는 매주 날짜가 달라 같은 추천이 매주 쌓였음(등급쿠폰·레시피PV 누적). 내용 기준으로 변경.
+  // 숫자/퍼센트 제거 정규화 키 — "골든타임 521명"·"384명", "레시피 PV ↓29%"·"↓34%"는 같은 추천이므로 묶음.
+  var norm = function (s) { return String(s).replace(/[\d,]+\s*(명|%|건|원)?/g, '').replace(/[↑↓]/g, '').replace(/\s+/g, ' ').trim(); };
+  var active = {};
+  for (var i = 1; i < data.length; i++) {
+    if (/완료|폐기|종료|효과없음/.test(String(data[i][7]))) continue;
+    active[norm(data[i][2])] = true;
+  }
+  // ★거부 이력(은우가 /삭제한 것) — 재등록 금지 (2026-07-01 좀비 fix: 6/25 삭제한 등급쿠폰·골든타임·레시피PV가 6/29 주간에 부활했음)
+  var dismissed = {};
+  getCxDismissed_().forEach(function (k) { dismissed[k] = true; });
   var added = 0;
   (payload.rows || []).forEach(function (r) {
-    var key = String(r.date) + '|' + String(r.action);
-    if (seen[key]) return;
+    var act = String(r.action).trim();
+    if (active[norm(act)] || dismissed[norm(act)]) return;
     t.appendRow([r.date, r.area || 'CX주간', r.action, r.context || '', r.before || '', '', '주간', '후보']);
-    seen[key] = true; added++;
+    active[act] = true; added++;
   });
   return { ok: true, added: added };
 }
@@ -2750,6 +3336,11 @@ function appendClarityDaily_(c) {
   }
   t.appendRow(vals);
   return { ok: true, appended: today };
+}
+
+// 6/20 GA4 (not set) 검증 리마인더 (GTM 인앱 page_view 고친 효과 확인)
+function remindNotSetCheck() {
+  sendTGMessage(EUNWOO_CHAT_ID, '🔍 <b>오늘 GA4 인앱 추적 검증일</b>\nGTM에서 page_view 초기화 트리거로 고친 거(6/17) 효과 확인할 때.\n→ 클로드한테 "GA4 (not set) % 뽑아줘" 하면 55%에서 떨어졌는지 봐줌.\n떨어졌으면 성공, 별로면 스킨 인앱 fallback 추가.');
 }
 
 // ===== 🩺 헬스체크 (무인 침묵실패 감지) — report.js(Actions)와 독립된 GAS 트리거 =====

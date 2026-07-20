@@ -1432,12 +1432,20 @@ async function getCafe24Reviews(startDate, endDate) {
       if (data.articles.length < 100) break;
       offset += 100;
     }
-    const ratings = articles.map(a => parseInt(a.rating || 0)).filter(r => r > 0);
+    // ★cafe24 게시판 API의 created_start/end_date가 실제로 안 먹음(7일조회=하루조회 동일 결과, 2026-07-20 검증)
+    //   → 누적 전체가 넘어와 "리뷰 1500건"처럼 주간과 무관한 숫자가 찍혔음. 여기서 클라이언트측으로 기간 필터.
+    const inRange = (a) => {
+      const d = String(a.created_date || a.created_datetime || '').slice(0, 10);
+      return d && d >= String(startDate) && d <= String(endDate);
+    };
+    const scoped = articles.filter(inRange);
+    const use = scoped.length ? scoped : [];   // 기간 내 0건이면 0건으로(누적으로 대체 금지)
+    const ratings = use.map(a => parseInt(a.rating || 0)).filter(r => r > 0);
     const avg = ratings.length ? (ratings.reduce((s, r) => s + r, 0) / ratings.length).toFixed(1) : 0;
     const dist = { 5: 0, 4: 0, low: 0 };
     ratings.forEach(r => { if (r === 5) dist[5]++; else if (r === 4) dist[4]++; else dist.low++; });
-    const texts = articles.slice(0, 30).map(a => `[${a.rating}점] ${a.title}`).join('\n');
-    return { count: articles.length, avg, dist, texts };
+    const texts = use.slice(0, 30).map(a => `[${a.rating}점] ${a.title}`).join('\n');
+    return { count: use.length, avg, dist, texts, totalAll: articles.length };
   } catch(e) { console.error('리뷰 오류:', e.message); return null; }
 }
 
@@ -3557,7 +3565,8 @@ async function weeklyReport() {
     ['유료검색+PMax(구글)', cSess('Paid Search') + cSess('Cross-network'), pSess('Paid Search') + pSess('Cross-network')],
     ['유료SNS(메타·인스타)', cSess('Paid Social'), pSess('Paid Social')],
   ];
-  Object.entries(chans).filter(([k]) => !['Paid Search', 'Cross-network', 'Paid Social'].includes(k))
+  // ★'Unassigned'(미분류)는 GA4 집계지연 노이즈라 제외 — 매주 뜨는데 판단 불가 (2026-07-20 가독성 개선)
+  Object.entries(chans).filter(([k]) => !['Paid Search', 'Cross-network', 'Paid Social', 'Unassigned'].includes(k))
     .sort((a, b) => b[1].cur.sessions - a[1].cur.sessions).slice(0, 3)
     .forEach(([k, v]) => merged.push([chMap[k] || k, v.cur.sessions, v.prev.sessions]));
   const chLines = merged.filter(m => m[1] > 0).map(([name, c, p]) => `${name}: ${c}명${wowSafe(c, p)}`).join('\n');
@@ -3576,15 +3585,24 @@ async function weeklyReport() {
 재방문: ${ut.ret.sessions.toLocaleString()}명 | 구매전환 ${pct(ut.ret.conv, ut.ret.sessions)}${diff(ut.ret.conv/Math.max(ut.ret.sessions,1)*100, utPrev?.ret?.conv/Math.max(utPrev?.ret?.sessions||1,1)*100)}`
     : '-';
 
+  // ★URL 슬러그(/surl/P/88 등)는 사람이 못 읽음 → 상품명·페이지명으로 변환 (2026-07-20 가독성 개선)
+  const humanPage = (p) => {
+    const s = String(p || '').trim();
+    if (!s || s === '/') return '홈';
+    const m = s.match(/\/surl\/[Pp]\/(\d+)/) || s.match(/product_no=(\d+)/);
+    if (m) return PRODUCT_NAME[m[1]] || `상품 #${m[1]}`;
+    if (/\/product\/list/i.test(s)) return '카테고리(상품목록)';
+    if (/\/product\/detail/i.test(s)) return '상품상세(기타)';
+    if (/board|article/i.test(s)) return '게시판·레시피';
+    if (/member|login/i.test(s)) return '로그인·회원';
+    if (/order|basket|cart/i.test(s)) return '장바구니·주문';
+    if (/shopinfo|magazine|promotion/i.test(s)) return '매거진·이벤트';
+    return s.length > 18 ? s.slice(0, 18) + '…' : s;
+  };
   const landingLines = (ga4?.landings||[])
     .filter(l => !/not set/i.test(l.page || ''))   // (not set)=GA4 집계중이라 제외
     .slice(0, 4)
-    .map(l => {
-      let name = (l.page || '').trim() || '홈/기타';
-      if (name.length > 22) name = name.slice(0, 22) + '…';
-      const tag = /member\/login/i.test(name) ? '·결심층' : '';
-      return `${name}: ${l.sessions}명 (CVR ${l.cvr}${tag})`;
-    }).join('\n');
+    .map(l => `${humanPage(l.page)}: ${l.sessions}명 (구매전환 ${l.cvr})`).join('\n');
 
   // 상품별 페이지 성과 (top 5) — ★구매수는 GA4 대신 cafe24 실판매(GA4는 외부결제 미귀속으로 0 나옴). CVR=실판매÷GA4세션.
   // ★상품별 실판매 = cafe24 byProduct(진실). GA4 상품페이지 세션은 surl 유입으로 과소집계라 CVR 무의미 → 실판매·매출만.
@@ -3620,12 +3638,21 @@ async function weeklyReport() {
   }
 
   // 📲 UTM 채널 퍼널 (유입→장바구니→구매). 적용 전엔 데이터 없음
+  // ★영문 캠페인코드(danopick-basilpesto 등)는 못 읽음 → 한글 이름으로 (2026-07-20 가독성 개선)
+  const CAMP_KR = { danopick: '다노픽', kimhajeong: '김하정', yamihome: '야미홈', seulgi: '슬기언니', choimanbok: '최만복', kongine: '콩이네', kimdubu: '김두부', yuna: '유나레시피', lazyhome: '레이지홈', 'keto-basac': '키토바삭', chacha: '차차식탁', nabrunch: '나브런치', mamabrunch: '마마브런치', kkuldongi: '꿀동이', 'kkuldongi-2': '꿀동이2차', 'magazine-regulars-jul': '단골매거진', 'coffee-for-you': '커피이벤트' };
+  const campKr = (k) => {
+    const base = String(k || '').replace(/-basilpesto$/, '').replace(/^ig-story-/, '');
+    if (CAMP_KR[base]) return CAMP_KR[base];
+    const ev = base.match(/^event-(\d{4})-(\d{2})$/);
+    if (ev) return `${Number(ev[2])}월이벤트`;
+    return base;
+  };
   let utmLine = '아직 데이터 없음 — UTM 적용 후 측정 시작';
   if (utmEffect && utmEffect.length) {
     utmLine = utmEffect.map(u => {
       const cvr = u.sessions ? (u.purchases / u.sessions * 100).toFixed(1) : '0';
       const camps = Object.entries(u.camps || {}).sort((a, b) => b[1] - a[1]);
-      const detail = camps.length > 1 ? ` [${camps.map(([k, v]) => `${k} ${v}`).join('·')}]` : '';
+      const detail = camps.length > 1 ? ` [${camps.map(([k, v]) => `${campKr(k)} ${v}`).join('·')}]` : '';
       return `· ${u.ch}: 유입 ${u.sessions} → 구매 ${u.purchases}${u.revenue ? ' · ' + formatMoney(u.revenue) : ''}${detail}`;
     }).join('\n') + '\n※ 구매=자사몰 결제분만(외부 간편결제 미집계·최소치) · 장바구니 단계는 GA4가 인앱/외부결제 못 잡아 제외';
   }
@@ -3660,10 +3687,7 @@ async function weeklyReport() {
   const weeklyMsg = `📈 <b>이태리정미소 지난주 CX 리포트</b>
 📅 ${display}
 ━━━━━━━━━━━━━━━━━
-${weeklyActionSection}${crmRunLine}🏪 <b>매출</b> (카페24)
-${formatMoney(cafe24This.sales)}${diff(cafe24This.sales, cafe24Last.sales)} · ${cafe24This.count}건 · 객단가 ${formatMoney(Math.round(cafe24This.sales / Math.max(cafe24This.count, 1)))}
-
-🔁 <b>재구매·리텐션</b> (회원, 최근 90일)
+${weeklyActionSection}${crmRunLine}🔁 <b>재구매·리텐션</b> (회원, 최근 90일)
 ${repurchase
   ? `재구매율 ${repurchase.repurchaseRate.toFixed(1)}% (재구매 회원 ${repurchase.repeatMembers}/${repurchase.distinctMembers}명)${repurchase.avgDaysToRepeat != null ? ` · 평균 ${repurchase.avgDaysToRepeat}일 만에 재구매` : ''}
 이번주 신규 ${formatMoney(repurchase.week.newAmt)}(${repurchase.week.newCount}건) vs 재구매 ${formatMoney(repurchase.week.repAmt)}(${repurchase.week.repCount}건) · 재구매 매출비중 ${repurchase.week.repShare.toFixed(0)}%${repurchase.week.guestCount ? `\n비회원 ${formatMoney(repurchase.week.guestAmt)}(${repurchase.week.guestCount}건, 식별불가)` : ''}`
@@ -3681,9 +3705,8 @@ ${pvLine}
 📲 <b>UTM 유입→구매</b> (자사몰결제만·최소치)
 ${utmLine}
 
-📊 <b>GA4 채널</b> (전주대비)
+📊 <b>유입 채널</b> (전주대비)
 ${chLines}
-※미분류 = 최근일 GA4 집계중 (며칠 뒤 채워짐·정상 지연)
 
 👥 <b>신규 vs 재방문</b>
 ${userTypeLine}
@@ -3695,15 +3718,12 @@ ${landingLines}
 🛍️ <b>상품별 실판매 (cafe24, top 5)</b>
 ${productLines || '데이터 없음'}
 
-🔽 <b>구매 퍼널 (Clarity)</b>
-${funnelLine}
-
-👁️ <b>Clarity</b>
-스크롤 깊이: ${clarity?.scrollDepth?.toFixed(0)||'-'}% | 체류: ${clarity?.activeTimeSec||'-'}초
+👁️ <b>사이트 마찰</b> (Clarity)
 스크립트 에러: ${clarity?.scriptErrorPct?.toFixed(1)||'-'}% ${clarity ? icon(clarity.scriptErrorPct,10,30) : ''} | 빠른뒤로가기: ${clarity?.quickbackPct?.toFixed(1)||'-'}% ${clarity ? icon(clarity.quickbackPct,8,15) : ''}
+※ 🟢정상 🟡주의 🔴이상 — 노란불 이상이면 그 주에 파볼 것
 
-⭐ <b>고객 리뷰</b>
-${reviews ? `${reviews.count}건 | 평균 ${reviews.avg}점 | 5점 ${reviews.dist[5]}건 / 4점 ${reviews.dist[4]}건 / 3점이하 ${reviews.dist.low}건` : '데이터 없음'}`;
+⭐ <b>새 리뷰</b> (이번주 등록분)
+${reviews ? (reviews.count ? `${reviews.count}건 · 평균 ${reviews.avg}점${reviews.dist.low ? ` · ⚠️3점이하 ${reviews.dist.low}건` : ''}` : '이번주 새 리뷰 없음') : '데이터 없음'}`;
 
   const claudeMsg = analysis ? `🤖 <b>저번주 분석 → 이번주 액션</b>
 ━━━━━━━━━━━━━━━━━
