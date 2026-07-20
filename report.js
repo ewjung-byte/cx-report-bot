@@ -894,14 +894,14 @@ async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
     : '카마솥(프리미엄 주방기기: 무쇠·스테인리스·인덕션)';
   // ★업종 강제 — 카테고리 안 맞는 브랜드(주방기기 칸에 화장품 등) 방지 (2026-06-30 Aesop 오분류 fix)
   const CATEGORY = brandKr === 'A 식품'
-    ? '식품·음료·조미료·올리브유·소스 D2C (예: Graza·Fly By Jing·Omsom·Diaspora·Brightland)'
+    ? '식품·음료·차·커피·조미료·장류·소스·디저트 D2C (서양: Graza·Fly By Jing·Omsom·Brightland / 일본: 茅乃舎 kayanoya·一保堂 ippodo·Minimal·久世福商店·中川政七商店 / 한국: 오설록·테라로사·프릳츠·명인명촌·소금집)'
     : '주방기기·쿡웨어·조리도구 + 도자기·자기·테이블웨어·식기 (냄비·팬·그릇·도예, 예: Made In·Caraway·HexClad·Smithey / 도자기: Hasami Porcelain·Kinto·Jicon·Kohyo·광주요·이도·Loveramics·Shang Xia)';
   // 디자인 가이드 큐레이션 풀 = "디자인 톤" 참고용 (업종 무관, 감각만 참고)
   const CURATED = 'aesop.com·muji.com·apple.com(미니멀·세계관), eataly.com·casperscaviar.com(프리미엄 식품)';
   const prompt = `너는 D2C 이커머스 홈페이지 디자인 분석가야. ${subject} 자사몰 홈 개편 레퍼런스로 쓸 브랜드 케이스 ${n}개를 찾아.
-★★반드시 web_search로 실제 검색해서 **현재 운영 중인 진짜 브랜드**만 골라 — 기억으로 지어내지 마(죽은 도메인 방지). 검색어 예: "best ${brandKr === 'A 식품' ? 'premium D2C food olive oil pasta brand' : 'premium cookware kitchenware D2C brand'} website design".
+★★반드시 web_search로 실제 검색해서 **현재 운영 중인 진짜 브랜드**만 골라 — 기억으로 지어내지 마(죽은 도메인 방지). 검색어 예: "${brandKr === 'A 식품' ? '일본 한국 프리미엄 식품 브랜드 웹사이트 디자인 (차·장류·디저트·커피) / premium Japanese Korean artisanal food brand website design' : 'best premium cookware kitchenware D2C brand website design'}".
 ★반드시 "${CATEGORY}" 업종만. ⛔다른 업종 절대 금지 (주방기기 칸에 화장품·식품, 식품 칸에 주방기기 넣지 마).
-${brandKr === 'A 식품' ? '' : '★주방 카테고리는 쿡웨어뿐 아니라 **도자기·자기·테이블웨어(그릇·도예)** 브랜드도 적극 포함해.\n★★가장 중요: **각 나라 고유의 멋을 담은 브랜드**를 우선 골라 — 일본(하사미·기요미즈·아리타·민게이), 중국(청화·자사호·송대 미감), 한국(백자·분청·달항아리·옹기)의 전통미를 현대적으로 풀어낸 브랜드. 서양 D2C 일변도 말고 동아시아 헤리티지 브랜드를 절반 이상.'}
+${brandKr === 'A 식품' ? '★식품 카테고리는 **올리브유에 치우치지 말 것** — 차·커피·장류·조미료·디저트·전통식품까지 폭넓게 (올리브유 브랜드는 많아야 1개).\n★★가장 중요: **한국·일본 식품 브랜드를 절반 이상** 골라. 일본(다시·녹차·간장·화과자·크래프트 초콜릿), 한국(차·장류·전통식품·스페셜티커피·한과)의 고유한 미감을 현대적으로 풀어낸 브랜드 우선. 서양 D2C 일변도 금지.' : '★주방 카테고리는 쿡웨어뿐 아니라 **도자기·자기·테이블웨어(그릇·도예)** 브랜드도 적극 포함해.\n★★가장 중요: **각 나라 고유의 멋을 담은 브랜드**를 우선 골라 — 일본(하사미·기요미즈·아리타·민게이), 중국(청화·자사호·송대 미감), 한국(백자·분청·달항아리·옹기)의 전통미를 현대적으로 풀어낸 브랜드. 서양 D2C 일변도 말고 동아시아 헤리티지 브랜드를 절반 이상.'}
 큐레이션 톤 레퍼런스(${CURATED})는 "디자인 감각"만 참고 — 업종 맞을 때만 브랜드로.
 이미 있는 제목(중복 금지): ${excludeTitles.join(', ')}
 각 케이스 = JSON 객체: {"title":"브랜드명","sub":"한 줄 전략(줄표 금지)","point":"① 히어로 선언/핵심 홈 패턴 한 문장","apply":"${brandKr === 'A 식품' ? '이태리정미소' : '카마솥'} 적용 한 문장","src":"검색으로 확인한 실제 홈 도메인(예: graza.co)"}
