@@ -3679,6 +3679,15 @@ async function weeklyReport() {
     if (rp && rc < rp) weeklyActions.push(`📖 레시피 PV ↓${Math.round((1 - rc / rp) * 100)}% → 상세→레시피 동선 강화 (재구매 입구)`);
     else if (rc > rp) weeklyActions.push(`📖 레시피 PV ↑ 효과 나는 중 → 상세페이지 레시피 링크 더 노출`);
   }
+  // 🎥 Clarity 세션리뷰 = Clarity의 유일한 진짜 인사이트원(수동, 자동화 불가). 주간 상시 루틴으로 액션화 (2026-07-23 은우 "A: 제대로 살린다").
+  //    데드/레이지클릭 급증(데드10%↑·레이지2%↑=진짜 막힘)이면 그 수치를 붙여 초점을 줌. 스크립트에러·빠른뒤로 단독은 인앱노이즈라 액션 X.
+  {
+    const _dead = clarity && clarity.deadClickPct, _rage = clarity && clarity.rageClickPct;
+    const _spike = (_dead != null && _dead >= 10) || (_rage != null && _rage >= 2);
+    weeklyActions.push(_spike
+      ? `🎥 Clarity 마찰 신호↑ (데드 ${(_dead || 0).toFixed(1)}%·레이지 ${(_rage || 0).toFixed(2)}%) — 카트 담고 안 산 세션 5개 녹화 보고 막힘 1개 찾기 (clarity.ms)`
+      : `🎥 Clarity 세션리뷰 — 카트 담고 안 산 세션 5개 녹화 보기 → 막힘 패턴 1개 개선안 (clarity.ms). ※Clarity는 이거 하나만 진짜 인사이트`);
+  }
   // 🔔 운영 중 CRM 명시 (봇이 뭘 아는지 투명화 — "이미 하는 것" 위에서 액션)
   const crmRunLine = (crm && crm.running && crm.running.length)
     ? `🔔 <b>운영 중 CRM</b> (봇 인지): ${crm.running.join(' · ')}\n\n` : '';

@@ -26,6 +26,14 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # ★Clarity 인앱 막힘신호 수집 (2026-07-23 클라우드 이관). 이전엔 로컬 스케줄러라 PC 꺼지면 빵꾸(7일 결측 사고).
+      #   report.js 앞에 둬서 오늘 데이터 적재 후 리포트가 최신을 읽게. 실패해도 리포트는 진행(continue-on-error).
+      - name: Collect Clarity in-app metrics
+        run: node clarity-to-action.js
+        continue-on-error: true
+        env:
+          CLARITY_TOKEN: ${{ secrets.CLARITY_TOKEN }}
+
       - name: Run CX Report
         run: node report.js ${{ inputs.mode }}
         env:
