@@ -2270,13 +2270,17 @@ function buildEunwooMonthlySummary_(month) {
 
 // 내용 키워드로 창 자동 분류 (1창 두뇌·전략 / 2창 자사몰 메인 / 3창 데이터·측정 / 4창 상세·이미지). 못 정하면 CX.
 // ★규칙 기반이라 완벽치 않음 — 답장에 [N창] 표시되니 틀리면 /삭제 후 재등록하거나 영역 직접수정.
+// ★영역 = 인쇄 / 플랫폼 / CX 관리자 3분류 (2026-07-21, 은우 "1창~4창 창 번호 쓰지마"). 창 번호 폐지.
 function cxAutoArea_(s) {
   var t = String(s).toLowerCase();
-  if (/측정|추적|전환율|리포트|ga4|클러리티|clarity|데이터|효과\s*측정|광고.*효과|퍼널|지표|\butm\b/.test(t)) return '3창';
-  if (/디자인|썸네일|이미지|사진|상페|상세\s*페이지|상세페이지|카마솥|가마솥|홀더|목업|단박스|인스타|영상|쿠팡|스마트?\s*스토어|스마스토어|레퍼런스|포토|패키지|엽서|인쇄|비주얼|로고/.test(t)) return '4창';
-  if (/클릭|버튼|바텀시트|결제|푸터|연결.*안|안됨|발행|재고|레시피.*(순서|업데이트|업뎃)|구매영역|네이버페이|카카오페이|스크롤|깨짐|옵션|\bui\b|화면|팝업|배너/.test(t)) return '2창';
-  if (/전략|기획|벤치마킹|브랜딩|나무위키|매출|\bsku\b|번들|회고|목표|컨셉|방향|앵커링|듀오링고/.test(t)) return '1창';
-  return 'CX';
+  // CX 관리자 = 측정·데이터·UTM (은우 본업) — 우선 체크(측정이 다른 키워드보다 앞)
+  if (/측정|추적|전환율|리포트|ga4|클러리티|clarity|데이터|효과\s*측정|광고.*효과|퍼널|지표|\butm\b|재구매율|골든타임|유입.*분석/.test(t)) return 'CX 관리자';
+  // 인쇄 = 물리 제작·패키징·소싱
+  if (/단박스|박스|엽서|인쇄|패키지|패키징|보냉|뚝배기|코브랜딩|굿즈|홀더|목업|소싱|스티커|에코백|테이프|부자재/.test(t)) return '인쇄';
+  // 플랫폼 = 온라인 채널·자사몰·상세페이지·사이트·마켓
+  if (/상세\s*페이지|상세페이지|상페|디자인|썸네일|이미지|사진|비주얼|로고|인스타|영상|쿠팡|스마트?\s*스토어|스마스토어|29cm|배너|클릭|버튼|바텀시트|결제|발행|재고|구매영역|네이버페이|카카오페이|스크롤|깨짐|옵션|\bui\b|화면|팝업|카마솥|가마솥|상품마스터|카페24|cafe24|메인|홈페이지|피드|캐러셀|케러셀/.test(t)) return '플랫폼';
+  // 그 외(전략·기획·브랜딩 등) = CX 관리자 기본값
+  return 'CX 관리자';
 }
 // 텔레그램 한 줄로 개입기록에 추가 (Before=최신 주간_요약 전환율 자동). /적용·/개입·/백로그 공용. verdict 기본 착수.
 function addCxStart_(content, area, verdict) {
@@ -3010,6 +3014,15 @@ function sendNextDesignCase_() {
   var a = sendOneDesignByBrand_(sh, data, 'A');
   var b = sendOneDesignByBrand_(sh, data, 'B');
   SpreadsheetApp.flush();
+  // ★큐 헬스 경고 (2026-07-23 은우 요청) — 조용한 실패 방지. 예전엔 큐 비면 console.warn만 하고 DM 안 나가
+  //   2주 발송 끊겨도 아무도 몰랐음. 이제 브랜드 큐 비거나(❌) ≤1개(⚠️)면 은우 DM으로 알림.
+  var cnt = function (pre) { var n = 0; for (var i = 1; i < data.length; i++) { if (String(data[i][0]).charAt(0) === pre && String(data[i][8]).trim() === '미발송') n++; } return n; };
+  var warn = [];
+  [['A', '식품', a], ['B', '주방기기', b]].forEach(function (x) {
+    if (!x[2]) warn.push('❌ ' + x[1] + ' 큐 비어 오늘 발송 못함 — 수동 보충 필요');
+    else { var rem = cnt(x[0]) - 1; if (rem <= 1) warn.push('⚠️ ' + x[1] + ' 큐 ' + rem + '개 남음 — 곧 고갈'); }
+  });
+  if (warn.length) sendTGMessage(EUNWOO_CHAT_ID, '🎨 <b>디자인 케이스북 큐 경고</b>\n' + warn.join('\n') + '\n→ 클로드한테 "디자인 사례 큐 보충해줘"');
   if (!a && !b) return { ok: true, done: true }; // 양쪽 다 미발송 없음
   return { ok: true, sent: [a, b].filter(Boolean) };
 }
