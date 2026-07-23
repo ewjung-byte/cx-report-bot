@@ -1042,7 +1042,7 @@ async function getActivePromoFunnel(promos) {
     // 클릭로그 1회 로드 → 캠페인별 집계
     let clicks = [];
     try {
-      const cl = await fetchJson(`https://sheets.googleapis.com/v4/spreadsheets/1nxnsbqQSxv-lRcCDsUh6r16qoyeywVRJhPScd2N21bA/values/${encodeURIComponent('📊 단축링크_클릭!A2:D9000')}`, auth);
+      const cl = await fetchJson(`https://sheets.googleapis.com/v4/spreadsheets/1nxnsbqQSxv-lRcCDsUh6r16qoyeywVRJhPScd2N21bA/values/${encodeURIComponent('📊 단축링크_클릭!A2:D50000')}`, auth); // ★A2:D9000이면 로그 12000행 넘어 최근 클릭 잘림→실클릭 0 오표시 (2026-07-22 fix)
       clicks = (cl.values || []).filter(c => !CLICKLOG_BOT_UA.test(String(c[3] || '')));
     } catch (e) { }
     const kd = ts => { const m = String(ts).match(/(\d{4})[.\-]\s*(\d{1,2})[.\-]\s*(\d{1,2})/); return m ? `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}` : ''; };
@@ -2737,7 +2737,7 @@ async function dailyReport() {
       ? ` · CRM매칭 ${segments.crmMatchedGuests}/${segments.guestPhones.length}`
       : '';
     const lb = segments.lookbackDays || 365;
-    retentionSection = `회원 주문 ${memberTotal}건 중 재방문 <b>${m.retCount}건 (${memberRetPct.toFixed(0)}%)</b> · 게스트 ${guestTotal}건 중 반복 ${g.repeatCount}건${crmMatch}\n(하루 표본이라 %는 출렁임 — 추세 판단은 월요일 주간 리포트로)`;
+    retentionSection = ''; // ★일별 재방문% 삭제 (2026-07-22 은우 "하루 표본 노이즈, 추세는 주간으로"). 30일 재구매·휴면·VIP(ltvSection)와 세그먼트 매출은 유지.
   } else {
     retentionSection = '⚠️ Cafe24 데이터 미수집';
   }
@@ -2830,7 +2830,7 @@ async function dailyReport() {
   try { ltvForReport = await calculateLTVMetrics(today); }
   catch (e) { console.error('[LTV daily fetch] 실패:', e.message); }
   const ltvSection = ltvForReport
-    ? `\n· 신규 30일내 재구매 ${ltvForReport.신규_D30_retention}% (${ltvForReport.신규_D30_cohort_size}명 기준) · 휴면(3~6개월) ${ltvForReport.휴면_91_180d}명 · VIP 상위10% = 매출 ${ltvForReport.상위10_매출점유}%`
+    ? `· 신규 30일내 재구매 ${ltvForReport.신규_D30_retention}% (${ltvForReport.신규_D30_cohort_size}명 기준) · 휴면(3~6개월) ${ltvForReport.휴면_91_180d}명 · VIP 상위10% = 매출 ${ltvForReport.상위10_매출점유}%`
     : '';
 
   // 🆕 세그먼트 매출 분해 — 별도 섹션 (빈 줄 분리)
