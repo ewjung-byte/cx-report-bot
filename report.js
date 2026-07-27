@@ -2367,22 +2367,43 @@ ${songCtx}
   }).join(' / ');
 })()}
 ※ ★상품 구매수는 반드시 위 cafe24 실판매를 쓸 것. GA4 ecommercePurchases는 네이버페이·톡 등 외부결제를 못 잡아 0으로 나옴 — "세션은 많은데 구매 0"이라는 결론은 측정오류지 사실이 아님(2026-07-27 실제 오진).
+
+[★전주 대비 변화 — 액션 근거는 여기서만 찾을 것]
+${(() => {
+  const out = [];
+  const ch = ga4?.channels || {};
+  Object.entries(ch).forEach(([k, v]) => {
+    const c = v?.cur?.sessions || 0, p = v?.prev?.sessions || 0;
+    if (p >= 100 && c >= 0) { const d = Math.round((c - p) / p * 100); if (Math.abs(d) >= 15) out.push(`- 유입 ${k}: ${p}→${c} (${d > 0 ? '↑' : '↓'}${Math.abs(d)}%)`); }
+  });
+  const pv = data.pvWoW;
+  if (pv && pv.cur && pv.prev) Object.keys(pv.cur).forEach(k => {
+    const c = pv.cur[k], p = pv.prev[k];
+    if (p >= 100) { const d = Math.round((c - p) / p * 100); if (Math.abs(d) >= 15) out.push(`- 페이지뷰 ${k}: ${p}→${c} (${d > 0 ? '↑' : '↓'}${Math.abs(d)}%)`); }
+  });
+  return out.length ? out.join('\n') : '- 전주 대비 15% 이상 움직인 지표 없음 (= 이번 주는 특이 변화 없음)';
+})()}
 ${reviews ? `\n[이번 주 리뷰 ${reviews.count}건 / 평균 ${reviews.avg}점]\n${reviews.texts}` : ''}
 
 ${crmCtx}
 
-== 파트 1: 이번 주 홈페이지/CX 액션 (최대 3개) ==
+== 파트 1: 이번 주 액션 (0~2개. 없으면 "특이 변화 없음"만 쓸 것) ==
+★★가장 중요 — **"늘 있는 상태"는 액션이 아니다.**
+- 장바구니 이탈·전환율 낮음·스크롤 짧음·인앱 이탈 같은 건 **매주 항상 있는 상수**다. 이걸 근거로 액션 쓰지 마.
+- 액션의 근거는 **이번 주에 전주 대비 실제로 변한 것**이어야 한다. 근거 문장에 반드시 **전주 대비 변화(↑↓%나 A→B)**를 넣어라. 변화 수치를 못 쓰겠으면 그 액션은 버려라.
+- **일반적 UX 조언 금지**: "버튼 위치 조정", "상단에 리뷰 노출", "혜택 배너 삽입", "스크롤 유도" 류는 데이터 없이도 나오는 소리라 금지.
+- 진짜 변화가 1개뿐이면 **1개만** 써라. 아무 변화 없으면 **"특이 변화 없음 — 이번 주는 유지"** 한 줄로 끝내라. 억지로 3개 채우지 마.
 각 액션은 정확히 3줄로, 짧게:
   제목 (난이도: 쉬움/보통/어려움)
-  근거: 숫자 1개 + 어디서 새는지 (한 문장)
+  근거: **전주 대비 변화 숫자** + 어디서 새는지 (한 문장)
   실행: 가장 구체적인 것 1개 (한 문장)
 긴 문단·불릿 나열 금지. ★위 "운영 중 CRM"에 이미 있는 건 추천하지 마(이미 함). 데이터가 죽었다고 말하는 레버(예: 사용률 낮은 쿠폰)를 "더 하라"고 하지 마.
 
 == 파트 2: 리뷰 인사이트 (2줄) ==
 ${reviews ? `반복 칭찬 키워드 1줄 + 불만/개선 키워드 1줄. 즉각대응 리뷰 있으면 1줄 추가.` : '리뷰 데이터 없음.'}
 
-== 파트 3: 중장기 (최대 2개, 각 1줄) ==
-데이터 기반 방향성.
+== 파트 3: 중장기 (0~1개, 1줄) ==
+★매주 비슷한 소리 반복 금지. 이번 주 데이터가 **구조적 변화**를 보여줄 때만 1줄. 없으면 이 파트 통째로 생략(빈 줄로 두지 말고 아예 쓰지 마).
 
 한국어. 번호 매김. ★마크다운 기호(#,*,**,---,>) 금지·일반 텍스트만. 전체 짧고 스캔 가능하게.`;
   }
@@ -3503,6 +3524,13 @@ async function weeklyReport() {
 
   // 📊 레버 baseline 저장 (UI/UX 개입 전후 비교의 기준점) — 매주 자동, 같은 주차 upsert.
   // 이게 있으면 UI/UX 바꾼 뒤 다음주 레버와 비교해 "바꿨더니 숫자가 바뀜"이 측정됨.
+  // ★지난주 레버값 먼저 읽기(저장 전에! 저장 후엔 이번주가 마지막 행) — 골든타임 등 "변화 있을 때만" 판정용
+  let prevLevers = null;
+  try {
+    const lv = await postToAppsScript({ action: 'get_levers' }, APPS_SCRIPT_URL).catch(() => null);
+    const rows = (lv && lv.ok && lv.rows) || [];
+    prevLevers = rows.length ? rows[rows.length - 1] : null;
+  } catch (e) { }
   try {
     const avgCoupon = couponConv?.coupons?.length ? Math.round(couponConv.coupons.reduce((s, c) => s + c.rate, 0) / couponConv.coupons.length) : '';
     const wk = repurchase?.week;
@@ -3562,7 +3590,7 @@ async function weeklyReport() {
   } catch (e) { console.error('[주간 PV]', e.message); }
 
   const crm = await fetchCrmStatus(); // 운영 중 CRM — 죽은/중복 액션 차단 + Claude에 주입
-  const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, cafe24Products, clarity, ga4, reviews, repurchase, crm });
+  const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, cafe24Products, clarity, ga4, reviews, repurchase, crm, pvWoW });
 
   const chMap = { 'Paid Social':'유료SNS(메타·인스타)', 'Paid Search':'유료검색(구글)', 'Organic Social':'자연SNS', 'Organic Search':'자연검색', 'Organic Video':'유튜브', 'Organic Shopping':'네이버쇼핑', 'Direct':'직접유입', 'Referral':'추천유입', 'Paid Other':'기타광고', 'Unassigned':'미분류' };
   // ★전주≈0이면 %가 ∞로 폭발(Cross-network ↑82567% 등) → 급변/신규로 표기. 구글은 검색+PMax(Cross-network) 합산(분리하면 예산이동을 폭락으로 오해).
@@ -3670,26 +3698,36 @@ async function weeklyReport() {
   }
 
   // 🎯 이번주 할 것 — 레버 종합 (데이터→행동, 측정값 직결). 각 줄 = "지표 → 바꿀 행동".
+  // ★노이즈 제거 원칙 (2026-07-27 은우 "늘 있는 거 아냐? 꼭 필요한 것만"):
+  //   "상태"(매주 존재하는 사실)는 액션이 아니다. **전주 대비 실제로 변한 것만** 액션으로 올린다.
+  //   쿠폰 4%·골든타임 300명·레시피PV ±몇% 는 매주 나오는 상태값 → 임계 넘는 변화가 있을 때만 표출.
   const weeklyActions = [];
   if (couponConv && couponConv.coupons && couponConv.coupons.length) {
     const avgRate = couponConv.coupons.reduce((s, c) => s + c.rate, 0) / couponConv.coupons.length;
-    // ★등급쿠폰이 이미 운영 중인데 사용률 낮음 → "타이밍 바꿔라"(새 일인 척) 금지. 효과 낮음을 짚고 다른 수단으로.
-    if (avgRate < 5) {
-      weeklyActions.push(crm && crm.runningCoupon
-        ? `💳 등급쿠폰(운영 중) 사용 ${avgRate.toFixed(0)}% → 효과 약함 확인. 등급쿠폰 더 만지기보다 다른 리텐션 수단 검토`
-        : `💳 등급쿠폰 사용 ${avgRate.toFixed(0)}% → 발송 타이밍 D+21(소비주기)로 + 멤버십 혜택 노출`);
+    // 쿠폰은 매월 재발급분 고정값이라 매주 반복 = 노이즈. 사실상 죽은 수준(2%↓)일 때만 1회성으로 짚음.
+    if (avgRate < 2 && !(crm && crm.runningCoupon)) {
+      weeklyActions.push(`💳 등급쿠폰 사용 ${avgRate.toFixed(0)}% — 사실상 미작동. 쿠폰 대신 다른 리텐션 수단 검토`);
     }
   }
-  if (goldenZone && goldenZone.d21_35 > 0) {
-    // ★재구매 리마인더(알파푸쉬)가 운영 중이면 "보내라" 대신 "도달·전환 점검"
-    weeklyActions.push(crm && crm.runningRemind
-      ? `🔁 골든타임 ${goldenZone.d21_35}명 — 재구매 리마인더 이미 운영 중 → 신규발송 X, 도달·전환·문구 점검`
-      : `🔁 골든타임 ${goldenZone.d21_35}명 → 이번주 레시피 리마인드 (휴면 직전 깨우기)`);
+  // 골든타임 = OKR 지표라 유지하되, **전주 대비 ±20% 이상 움직일 때만**(그 외엔 아래 본문 숫자로 충분)
+  //   전주값 = 주간_레버 시트(save_levers가 매주 적재)에서 조회. 없으면(첫 주) 침묵.
+  if (goldenZone && goldenZone.d21_35 > 0 && prevLevers && prevLevers.골든타임) {
+    const gz = goldenZone.d21_35, gp = parseInt(prevLevers.골든타임) || 0;
+    if (gp > 0) {
+      const dPct = Math.round((gz - gp) / gp * 100);
+      if (Math.abs(dPct) >= 20) {
+        weeklyActions.push(`🔁 골든타임 ${gz}명 (전주 ${gp} ${dPct > 0 ? '↑' : '↓'}${Math.abs(dPct)}%) — 소비주기 막 지난 층이 ${dPct > 0 ? '몰림' : '줄어듦'}. ${crm && crm.runningRemind ? '리마인더 도달·문구 점검' : '레시피 리마인드'}`);
+      }
+    }
   }
+  // 레시피 PV = 매주 ±로 흔들림 → **±25% 이상 급변만**
   if (pvWoW) {
     const rc = pvWoW.cur.레시피, rp = pvWoW.prev.레시피;
-    if (rp && rc < rp) weeklyActions.push(`📖 레시피 PV ↓${Math.round((1 - rc / rp) * 100)}% → 상세→레시피 동선 강화 (재구매 입구)`);
-    else if (rc > rp) weeklyActions.push(`📖 레시피 PV ↑ 효과 나는 중 → 상세페이지 레시피 링크 더 노출`);
+    if (rp) {
+      const d = Math.round((rc - rp) / rp * 100);
+      if (d <= -25) weeklyActions.push(`📖 레시피 PV ↓${Math.abs(d)}% (${rp}→${rc}) — 재구매 입구 막힘. 상세→레시피 동선 점검`);
+      else if (d >= 25) weeklyActions.push(`📖 레시피 PV ↑${d}% (${rp}→${rc}) — 뭐가 통했는지 확인해 복제`);
+    }
   }
   // 🎥 Clarity 세션리뷰 = Clarity의 유일한 진짜 인사이트원(수동, 자동화 불가). 주간 상시 루틴으로 액션화 (2026-07-23 은우 "A: 제대로 살린다").
   //    데드/레이지클릭 급증(데드10%↑·레이지2%↑=진짜 막힘)이면 그 수치를 붙여 초점을 줌. 스크립트에러·빠른뒤로 단독은 인앱노이즈라 액션 X.
@@ -3708,35 +3746,22 @@ async function weeklyReport() {
   const weeklyMsg = `📈 <b>이태리정미소 지난주 CX 리포트</b>
 📅 ${display}
 ━━━━━━━━━━━━━━━━━
-${weeklyActionSection}${crmRunLine}🔁 <b>재구매·리텐션</b> (회원, 최근 90일)
+${weeklyActionSection}${crmRunLine}🔁 <b>리텐션</b> (회원·90일)
 ${repurchase
-  ? `재구매율 ${repurchase.repurchaseRate.toFixed(1)}% (재구매 회원 ${repurchase.repeatMembers}/${repurchase.distinctMembers}명)${repurchase.avgDaysToRepeat != null ? ` · 평균 ${repurchase.avgDaysToRepeat}일 만에 재구매` : ''}
-이번주 신규 ${formatMoney(repurchase.week.newAmt)}(${repurchase.week.newCount}건) vs 재구매 ${formatMoney(repurchase.week.repAmt)}(${repurchase.week.repCount}건) · 재구매 매출비중 ${repurchase.week.repShare.toFixed(0)}%${repurchase.week.guestCount ? `\n비회원 ${formatMoney(repurchase.week.guestAmt)}(${repurchase.week.guestCount}건, 식별불가)` : ''}`
+  ? `재구매율 ${repurchase.repurchaseRate.toFixed(1)}% (${repurchase.repeatMembers}/${repurchase.distinctMembers}명)${repurchase.avgDaysToRepeat != null ? ` · 평균 ${repurchase.avgDaysToRepeat}일` : ''} · 재구매 매출비중 ${repurchase.week.repShare.toFixed(0)}%
+신규 ${formatMoney(repurchase.week.newAmt)}(${repurchase.week.newCount}건) / 재구매 ${formatMoney(repurchase.week.repAmt)}(${repurchase.week.repCount}건)${repurchase.week.guestCount ? ` / 비회원 ${formatMoney(repurchase.week.guestAmt)}(${repurchase.week.guestCount}건)` : ''}`
   : '데이터 없음'}
+⭐ 깨울 타겟(D+21~35): <b>${goldenZone?.d21_35 ?? '-'}명</b> · 휴면(D91+) ${goldenZone?.d91 ?? '-'}명 · 등급쿠폰 사용 ${couponConv?.coupons?.length ? Math.round(couponConv.coupons.reduce((s, c) => s + c.rate, 0) / couponConv.coupons.length) + '%' : '-'}
 
-💳 <b>쿠폰 전환</b> (등급쿠폰 · 미주 발송→은우 전환측정)
-${couponLine}
-
-🔁 <b>재구매 골든타임</b>
-${goldenLine}
-
-📄 <b>헤더 페이지뷰</b> (전주 대비)
-${pvLine}
-
-📲 <b>UTM 유입→구매</b> (자사몰결제만·최소치)
+📲 <b>UTM 유입→구매</b> (자사몰결제 최소치)
 ${utmLine}
 
-📊 <b>유입 채널</b> (전주대비)
+📊 <b>유입</b> (전주대비)
 ${chLines}
-
-👥 <b>신규 vs 재방문</b>
 ${userTypeLine}
+📄 페이지뷰: ${pvLine.replace(/\n/g, ' · ')}
 
-🏠 <b>랜딩 페이지</b> (방문 top · CVR=GA4 최소치)
-${landingLines}
-※외부결제 빠진 floor라 실제 전환 더 높음 · (not set)=집계중 제외
-
-🛍️ <b>상품별 실판매 (cafe24, top 5)</b>
+🛍️ <b>상품별 실판매</b> (cafe24 top 5)
 ${productLines || '데이터 없음'}
 
 👁️ <b>사이트 마찰</b> (Clarity)
