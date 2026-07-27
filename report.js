@@ -9,7 +9,10 @@ function tryReadJson(p) {
   try { return readJson(p); } catch(e) { return null; }
 }
 
-const _cf  = tryReadJson('G:/공유 드라이브/이태리정미소-자동화/tokens/italy.token.json')
+// ★공유드라이브 폴더명이 정렬번호 붙어 바뀜(2026-07-24: 이태리정미소-자동화 → "4. 이태리정미소-자동화").
+//   또 바뀔 수 있으니 신·구 경로 둘 다 시도 (로컬 실행용. GitHub Actions는 Drive API로 별도 조회).
+const _cf  = tryReadJson('G:/공유 드라이브/4. 이태리정미소-자동화/tokens/italy.token.json')
+          || tryReadJson('G:/공유 드라이브/이태리정미소-자동화/tokens/italy.token.json')
           || tryReadJson('../cafe24_token.json') || {};
 const _mt  = tryReadJson('../meta_token.json') || {};
 const _tg  = tryReadJson('../telegram_config.json') || {};
@@ -277,6 +280,15 @@ async function cafe24OauthRefresh(refreshToken) {
 }
 
 async function refreshCafe24Token() {
+  // 0) 로컬 실행 폴백 — CAFE24_TOKEN_DRIVE_FILE_ID는 GitHub 시크릿 전용이라 로컬에선 Drive 읽기가 항상 null.
+  //    이때 마운트된 공유드라이브 파일(_cf)이 유효하면 그대로 사용 (VPS가 회전한 최신본).
+  if (!process.env.CAFE24_TOKEN_DRIVE_FILE_ID && _cf && _cf.access_token) {
+    if (await testCafe24Token(_cf.access_token)) {
+      CAFE24_ACCESS_TOKEN = _cf.access_token;
+      console.log('[카페24] 토큰 = 로컬 공유드라이브 파일 (Drive API 미설정)');
+      return true;
+    }
+  }
   // 1) Drive에서 token 파일 가져오기
   const drive = await loadCafe24FromDrive();
   if (drive && drive.access_token) {
