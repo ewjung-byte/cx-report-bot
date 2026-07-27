@@ -3607,6 +3607,33 @@ async function weeklyReport() {
   // 📊 레버 baseline 저장 (UI/UX 개입 전후 비교의 기준점) — 매주 자동, 같은 주차 upsert.
   // 이게 있으면 UI/UX 바꾼 뒤 다음주 레버와 비교해 "바꿨더니 숫자가 바뀜"이 측정됨.
   // ★지난주 레버값 먼저 읽기(저장 전에! 저장 후엔 이번주가 마지막 행) — 골든타임 등 "변화 있을 때만" 판정용
+  // 🔍 자연검색(브랜드 인지) = 광고 끄면 남는 자산. 네이버/구글로 쪼개야 SEO 레버가 보임.
+  //    ★네이버는 m.search.naver 등 referral로 들어오지만 GA4가 Organic Search로 묶어줌(2026-07-28 실측) → source로 재분해.
+  //    ★시트 저장(save_levers)보다 먼저 계산해야 값이 누적됨.
+  let searchNaver = '', searchGoogle = '', searchSplitLine = '';
+  try {
+    const _tk = await getGA4Token();
+    if (_tk) {
+      const q = (s, e) => ga4Fetch(_tk, {
+        dateRanges: [{ startDate: s, endDate: e }],
+        dimensions: [{ name: 'sessionSource' }, { name: 'sessionMedium' }], metrics: [{ name: 'sessions' }], limit: 300,
+      });
+      const pick = rows => {
+        let nv = 0, gg = 0;
+        (rows || []).forEach(x => {
+          const src = x.dimensionValues[0].value, med = x.dimensionValues[1].value, n = +x.metricValues[0].value;
+          if (/naver/i.test(src) && (med === 'organic' || med === 'referral') && !/pay|shopping|orders|blog|talk|link|navercorp/i.test(src)) nv += n;
+          else if (/^google$/i.test(src) && med === 'organic') gg += n;
+        });
+        return { nv, gg };
+      };
+      const [cur, prev] = await Promise.all([q(thisStart, thisEnd), q(dateStr(14), dateStr(8))]);
+      const c = pick(cur.rows), p = pick(prev.rows);
+      searchNaver = c.nv; searchGoogle = c.gg;
+      searchSplitLine = `\n🔍 자연검색(브랜드 인지): 네이버 ${c.nv}${diff(c.nv, p.nv)} · 구글 ${c.gg}${diff(c.gg, p.gg)}`;
+    }
+  } catch (e) { console.error('[자연검색 분해]', e.message); }
+
   let prevLevers = null;
   try {
     const lv = await postToAppsScript({ action: 'get_levers' }, APPS_SCRIPT_URL).catch(() => null);
@@ -3627,6 +3654,8 @@ async function weeklyReport() {
       드라마_브랜드검색: drama ? Math.round(drama.brandCur) : '',
       드라마_신규비율: drama ? +drama.newCur.toFixed(1) : '',
       드라마_판정: drama ? drama.verdict : '',
+      // 🔍 자연검색(브랜드 인지) — 광고 끄면 남는 자산, SEO 레버 추적용
+      자연검색_네이버: searchNaver, 자연검색_구글: searchGoogle,
     }, APPS_SCRIPT_URL).catch(() => {});
     console.log('[레버 baseline] 저장:', display);
   } catch (e) { console.error('[레버 저장]', e.message); }
@@ -3701,6 +3730,7 @@ async function weeklyReport() {
     .sort((a, b) => b[1].cur.sessions - a[1].cur.sessions).slice(0, 3)
     .forEach(([k, v]) => merged.push([chMap[k] || k, v.cur.sessions, v.prev.sessions]));
   const chLines = merged.filter(m => m[1] > 0).map(([name, c, p]) => `${name}: ${c}명${wowSafe(c, p)}`).join('\n');
+  const searchSplit = searchSplitLine;   // 위(시트 저장 전)에서 계산됨
 
   // 사이트 전환율 = cafe24 주문 ÷ GA4 총세션 (양끝 정확). Clarity funnel은 페이지 방문 수(순차 아님)라 비율 오해 → 카운트만 + 진짜 전환율 별도.
   const ga4TotalSess = Object.values(ga4?.channels || {}).reduce((a, v) => a + (v.cur?.sessions || 0), 0);
@@ -3848,7 +3878,7 @@ ${repurchase
 ${utmLine}
 
 📊 <b>유입</b> (전주대비)
-${chLines}
+${chLines}${searchSplit}
 ${userTypeLine}
 📄 페이지뷰: ${pvLine.replace(/\n/g, ' · ')}
 
