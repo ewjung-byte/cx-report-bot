@@ -1898,7 +1898,9 @@ function setupUtmDesign_() {
 }
 
 // 주간 레버 스냅샷 — UI/UX 개입 전후 비교용 (CX 관리자 성과 측정의 baseline)
-var LEVER_HEADERS = ['주차', '날짜', '쿠폰전환%', '골든타임_D21_35', '레시피PV', '재구매율%', '게스트%', '메모'];
+// ★드라마 협찬 5칸 추가 (2026-07-27, KBS2 '사랑이 온다' 효과 추적). 기존 시트엔 ensureLeverHeaders_가 자동 증설.
+var LEVER_HEADERS = ['주차', '날짜', '쿠폰전환%', '골든타임_D21_35', '레시피PV', '재구매율%', '게스트%', '메모',
+  '드라마_방영시간대배수', '드라마_브랜드검색배수', '드라마_브랜드검색', '드라마_신규비율%', '드라마_판정'];
 function getLeverTab_() {
   var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
   var sh = ss.getSheetByName('주간_레버');
@@ -1907,6 +1909,12 @@ function getLeverTab_() {
     sh.appendRow(LEVER_HEADERS);
     sh.getRange(1, 1, 1, LEVER_HEADERS.length).setFontWeight('bold').setBackground('#1f2a44').setFontColor('#ffffff');
     sh.setFrozenRows(1);
+  }
+  // ★기존 시트에 새 칼럼(드라마 5칸) 자동 증설 — 헤더가 짧으면 뒤에 붙임 (2026-07-27)
+  var hdr = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0];
+  if (hdr.length < LEVER_HEADERS.length) {
+    sh.getRange(1, 1, 1, LEVER_HEADERS.length).setValues([LEVER_HEADERS]);
+    sh.getRange(1, 1, 1, LEVER_HEADERS.length).setFontWeight('bold').setBackground('#1f2a44').setFontColor('#ffffff');
   }
   return sh;
 }
@@ -1918,7 +1926,8 @@ function saveLevers_(d) {
     var data = sh.getDataRange().getValues();
     for (var i = data.length - 1; i >= 1; i--) { if (String(data[i][0]) === week) sh.deleteRow(i + 1); }
     var today = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
-    sh.appendRow([week, today, d.쿠폰전환 || '', d.골든타임 || '', d.레시피PV || '', d.재구매율 || '', d.게스트 || '', d.메모 || '']);
+    sh.appendRow([week, today, d.쿠폰전환 || '', d.골든타임 || '', d.레시피PV || '', d.재구매율 || '', d.게스트 || '', d.메모 || '',
+      d.드라마_방영시간대배수 || '', d.드라마_브랜드검색배수 || '', d.드라마_브랜드검색 || '', d.드라마_신규비율 || '', d.드라마_판정 || '']);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 }

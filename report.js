@@ -3329,6 +3329,74 @@ async function getRepurchaseGoldenZone(asOfDate) {
 }
 
 // ── 헤더 메뉴 페이지뷰 전주 대비 (레시피=재구매 동선 선행지표) ──
+// ── 🎬 드라마 협찬 효과 3지표 (KBS2 '사랑이 온다', 2026-07-25 첫방송) ──
+// 1창 지정: ①방영 시간대 유입(토·일 밤 30분 단위, 같은 요일 4주 평균 대비 배수)
+//           ②브랜드 검색 유입(오가닉+네이버검색, 주말 평균 대비 배수) ③신규 방문 비율
+// 판정: ①②가 같이 튀면 드라마 효과. ③은 확인사살. 상세 분석은 cx-data/bot/_drama_3.js
+async function getDramaMetrics(thisStart, thisEnd) {
+  try {
+    const token = await getGA4Token(); if (!token) return null;
+    const dow = ymd => new Date(ymd + 'T00:00:00Z').getUTCDay();          // 0=일 6=토
+    const isWknd = d => [0, 6].includes(dow(d));
+    const base = { start: dateStr(35), end: dateStr(8) };                  // 직전 4주(이번주 제외)
+    const ymdOf = v => `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}`;
+
+    // ① 30분 슬롯 (20:00~23:30) — 주말만
+    const hm = await ga4Fetch(token, {
+      dateRanges: [{ startDate: base.start, endDate: thisEnd }],
+      dimensions: [{ name: 'dateHourMinute' }], metrics: [{ name: 'sessions' }], limit: 100000,
+    });
+    const slot = {};
+    (hm.rows || []).forEach(x => {
+      const v = x.dimensionValues[0].value, ymd = ymdOf(v);
+      const h = +v.slice(8, 10); if (h < 20 || h > 23) return;
+      const key = `${String(h).padStart(2, '0')}:${+v.slice(10, 12) < 30 ? '00' : '30'}`;
+      slot[ymd] = slot[ymd] || {}; slot[ymd][key] = (slot[ymd][key] || 0) + (+x.metricValues[0].value);
+    });
+    const days = Object.keys(slot);
+    const curW = days.filter(d => d >= thisStart && d <= thisEnd && isWknd(d));
+    const baseW = days.filter(d => d >= base.start && d <= base.end && isWknd(d));
+    let peak = null;
+    ['20:00', '20:30', '21:00', '21:30', '22:00', '22:30', '23:00', '23:30'].forEach(s => {
+      const c = curW.length ? curW.reduce((a, d) => a + ((slot[d] || {})[s] || 0), 0) / curW.length : 0;
+      const b = baseW.length ? baseW.reduce((a, d) => a + ((slot[d] || {})[s] || 0), 0) / baseW.length : 0;
+      if (b > 0) { const ratio = c / b; if (!peak || ratio > peak.ratio) peak = { s, ratio, cur: Math.round(c), base: Math.round(b) }; }
+    });
+
+    // ②③ 일자별 브랜드검색 / 세션·신규
+    const bs = await ga4Fetch(token, {
+      dateRanges: [{ startDate: base.start, endDate: thisEnd }],
+      dimensions: [{ name: 'date' }, { name: 'sessionSource' }, { name: 'sessionMedium' }],
+      metrics: [{ name: 'sessions' }], limit: 5000,
+    });
+    const brand = {};
+    (bs.rows || []).forEach(x => {
+      const ymd = ymdOf(x.dimensionValues[0].value), src = x.dimensionValues[1].value, med = x.dimensionValues[2].value;
+      if (med === 'organic' || /search\.naver/.test(src)) brand[ymd] = (brand[ymd] || 0) + (+x.metricValues[0].value);
+    });
+    const su = await ga4Fetch(token, {
+      dateRanges: [{ startDate: base.start, endDate: thisEnd }],
+      dimensions: [{ name: 'date' }], metrics: [{ name: 'sessions' }, { name: 'newUsers' }], limit: 200,
+    });
+    const sess = {}, newu = {};
+    (su.rows || []).forEach(x => { const y = ymdOf(x.dimensionValues[0].value); sess[y] = +x.metricValues[0].value; newu[y] = +x.metricValues[1].value; });
+    const avgOf = (obj, list) => list.length ? list.reduce((a, d) => a + (obj[d] || 0), 0) / list.length : 0;
+    const bBrand = avgOf(brand, baseW), cBrand = avgOf(brand, curW);
+    const nr = d => sess[d] ? newu[d] / sess[d] * 100 : 0;
+    const bNew = baseW.length ? baseW.reduce((a, d) => a + nr(d), 0) / baseW.length : 0;
+    const cNew = curW.length ? curW.reduce((a, d) => a + nr(d), 0) / curW.length : 0;
+
+    const r1 = peak ? peak.ratio : 0, r2 = bBrand > 0 ? cBrand / bBrand : 0;
+    return {
+      slotPeak: peak, slotRatio: r1,
+      brandBase: bBrand, brandCur: cBrand, brandRatio: r2,
+      newBase: bNew, newCur: cNew, newDiff: cNew - bNew,
+      hit: (r1 >= 1.5 && r2 >= 1.5),
+      verdict: (r1 >= 1.5 && r2 >= 1.5) ? '드라마 효과 신호' : (r1 >= 1.5 || r2 >= 1.5) ? '한쪽만 튐 — 관찰' : '신호 없음',
+    };
+  } catch (e) { console.error('[드라마 지표]', e.message); return null; }
+}
+
 async function getPageViewWoW() {
   try {
     const token = await getGA4Token();
@@ -3517,7 +3585,7 @@ async function weeklyReport() {
   const display = `${formatDate(thisStart)} ~ ${formatDate(thisEnd)}`;
   console.log(`[주간] ${display}`);
 
-  const [metaThis, metaLast, cafe24This, cafe24Last, clarity, ga4, reviews, repurchase, pvWoW, cafe24Products] = await Promise.all([
+  const [metaThis, metaLast, cafe24This, cafe24Last, clarity, ga4, reviews, repurchase, pvWoW, drama, cafe24Products] = await Promise.all([
     getMetaStats(thisStart, thisEnd),
     getMetaStats(dateStr(14), dateStr(8)),
     getCafe24Sales(thisStart, thisEnd),
@@ -3527,6 +3595,7 @@ async function weeklyReport() {
     getCafe24Reviews(thisStart, thisEnd),
     getRepurchaseStats(90, thisStart, thisEnd),
     getPageViewWoW(),
+    getDramaMetrics(thisStart, thisEnd),   // 🎬 드라마 협찬 3지표
     getCafe24SalesByProduct(thisStart, thisEnd),
   ]);
   // cafe24 무거운 호출(365일 orders·쿠폰 issues)은 순차 실행 —
@@ -3549,7 +3618,16 @@ async function weeklyReport() {
     const wk = repurchase?.week;
     const guestPct = wk && wk.guestCount != null && (wk.newCount + wk.repCount + wk.guestCount) > 0
       ? Math.round(wk.guestCount / (wk.newCount + wk.repCount + wk.guestCount) * 100) : '';
-    await postToAppsScript({ action: 'save_levers', 주차: display, 쿠폰전환: avgCoupon, 골든타임: goldenZone?.d21_35 || '', 레시피PV: pvWoW?.cur?.레시피 || '', 재구매율: repurchase?.repurchaseRate || '', 게스트: guestPct }, APPS_SCRIPT_URL).catch(() => {});
+    await postToAppsScript({
+      action: 'save_levers', 주차: display, 쿠폰전환: avgCoupon, 골든타임: goldenZone?.d21_35 || '',
+      레시피PV: pvWoW?.cur?.레시피 || '', 재구매율: repurchase?.repurchaseRate || '', 게스트: guestPct,
+      // 🎬 드라마 협찬 3지표 (2026-07-27~) — 매주 누적해야 제품 노출 후 비교 가능
+      드라마_방영시간대배수: drama ? +drama.slotRatio.toFixed(2) : '',
+      드라마_브랜드검색배수: drama ? +drama.brandRatio.toFixed(2) : '',
+      드라마_브랜드검색: drama ? Math.round(drama.brandCur) : '',
+      드라마_신규비율: drama ? +drama.newCur.toFixed(1) : '',
+      드라마_판정: drama ? drama.verdict : '',
+    }, APPS_SCRIPT_URL).catch(() => {});
     console.log('[레버 baseline] 저장:', display);
   } catch (e) { console.error('[레버 저장]', e.message); }
 
@@ -3776,6 +3854,11 @@ ${userTypeLine}
 
 🛍️ <b>상품별 실판매</b> (cafe24 top 5)
 ${productLines || '데이터 없음'}
+
+🎬 <b>드라마 협찬</b> (KBS2 사랑이 온다 · 토·일)
+${drama
+  ? `방영시간대 ${drama.slotRatio.toFixed(2)}배${drama.slotPeak ? `(${drama.slotPeak.s} ${drama.slotPeak.base}→${drama.slotPeak.cur})` : ''} · 브랜드검색 ${drama.brandRatio.toFixed(2)}배(${drama.brandBase.toFixed(0)}→${drama.brandCur.toFixed(0)}) · 신규비율 ${drama.newCur.toFixed(0)}%(${drama.newDiff >= 0 ? '+' : ''}${drama.newDiff.toFixed(1)}%p)\n→ <b>${drama.verdict}</b>${drama.hit ? ' 🎬' : ''}`
+  : '측정 실패'}
 
 👁️ <b>사이트 마찰</b> (Clarity)
 스크립트 에러: ${clarity?.scriptErrorPct?.toFixed(1)||'-'}% ${clarity ? icon(clarity.scriptErrorPct,10,30) : ''} | 빠른뒤로가기: ${clarity?.quickbackPct?.toFixed(1)||'-'}% ${clarity ? icon(clarity.quickbackPct,8,15) : ''}
