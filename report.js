@@ -911,6 +911,7 @@ async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
   // 디자인 가이드 큐레이션 풀 = "디자인 톤" 참고용 (업종 무관, 감각만 참고)
   const CURATED = 'aesop.com·muji.com·apple.com(미니멀·세계관), eataly.com·casperscaviar.com(프리미엄 식품)';
   const prompt = `너는 D2C 이커머스 홈페이지 디자인 분석가야. ${subject} 자사몰 홈 개편 레퍼런스로 쓸 브랜드 케이스 ${n}개를 찾아.
+★★★검색 예산 제한 (2026-07-27, 330s 타임아웃 방지): **web_search는 최대 2회만** 호출하고 바로 답해. 후보를 넓게 훑지 말고, 아는 브랜드 1~2개를 검색으로 "지금 살아있는지"만 확인한 뒤 즉시 JSON 출력. 완벽한 후보를 찾느라 검색을 반복하지 마 — 시간 초과되면 결과가 통째로 버려진다.
 ★★반드시 web_search로 실제 검색해서 **현재 운영 중인 진짜 브랜드**만 골라 — 기억으로 지어내지 마(죽은 도메인 방지). 검색어 예: "${brandKr === 'A 식품' ? '일본 한국 프리미엄 식품 브랜드 웹사이트 디자인 (차·장류·디저트·커피) / premium Japanese Korean artisanal food brand website design' : 'best premium cookware kitchenware D2C brand website design'}".
 ★반드시 "${CATEGORY}" 업종만. ⛔다른 업종 절대 금지 (주방기기 칸에 화장품·식품, 식품 칸에 주방기기 넣지 마).
 ${brandKr === 'A 식품' ? '★식품 카테고리는 **올리브유에 치우치지 말 것** — 차·커피·장류·조미료·디저트·전통식품까지 폭넓게 (올리브유 브랜드는 많아야 1개).\n★★가장 중요: **한국·일본 식품 브랜드를 절반 이상** 골라. 일본(다시·녹차·간장·화과자·크래프트 초콜릿), 한국(차·장류·전통식품·스페셜티커피·한과)의 고유한 미감을 현대적으로 풀어낸 브랜드 우선. 서양 D2C 일변도 금지.' : '★주방 카테고리는 쿡웨어뿐 아니라 **도자기·자기·테이블웨어(그릇·도예)** 브랜드도 적극 포함해.\n★★가장 중요: **각 나라 고유의 멋을 담은 브랜드**를 우선 골라 — 일본(하사미·기요미즈·아리타·민게이), 중국(청화·자사호·송대 미감), 한국(백자·분청·달항아리·옹기)의 전통미를 현대적으로 풀어낸 브랜드. 서양 D2C 일변도 말고 동아시아 헤리티지 브랜드를 절반 이상.'}
@@ -998,21 +999,28 @@ async function autoRefillDesignCases() {
     const brands = [{ kr: 'A 식품', pre: 'A' }, { kr: 'B 주방기기', pre: 'B' }];
     const newRows = [];
     const starved = []; // 재고 0인데 생성분이 전멸(도메인검증)한 브랜드 — DM 못 나감, 경고 대상
+    // ★리필 구조 재설계 (2026-07-27) — 기존 문제 2개:
+    //   ①재고 0일 때만 리필 = 매번 벼랑 끝. 한 번 실패하면 바로 발송 끊김
+    //   ②한 요청에 3개를 웹서치로 찾아 330s 초과 (2026-07-27 로그: "웹서치 stream 전체 330s 초과" → 1개만 건짐)
+    //   → 해결: 재고 3개 미만이면 미리 리필 + 1개씩 나눠 요청(짧아서 타임아웃 회피) + 부분 성공 인정
+    const LOW = 3;      // 이 개수 미만이면 미리 채움(고갈 전에)
+    const WANT = 2;     // 한 번 돌 때 목표 확보 수
     for (const b of brands) {
       const unsent = rows.filter(r => String(r[2] || '').trim() === b.kr && String(r[8] || '').trim() === '미발송').length;
-      if (unsent >= 1) continue; // 재고 있으면 skip
+      if (unsent >= LOW) continue; // 여유 있으면 skip
       const maxId = rows.filter(r => String(r[0]).charAt(0) === b.pre).reduce((mx, r) => Math.max(mx, parseInt(String(r[0]).slice(1)) || 0), 0);
-      // 재고 0 → 최대 2회 재시도로 검증 통과분 확보 (2026-07-08: 생성분 전멸 시 B DM 끊기던 버그)
+      // ★1개씩 요청 = 웹서치 짧아져 타임아웃 회피. 실패해도 다음 시도가 살아남음(부분 성공 누적).
       let got = 0;
-      for (let attempt = 0; attempt < 3 && got === 0; attempt++) {
-        const gen = await generateDesignCasesViaClaude(b.kr, 3, titles); // 3개(4개는 검색 길어져 타임아웃) × 3회 재시도
-        gen.forEach((c, i) => {
-          newRows.push([b.pre + (maxId + 1 + got + i), dateStr(0), b.kr, c.title, c.sub || '', c.point || '', c.apply || '', c.src || '', '미발송', '']);
+      for (let attempt = 0; attempt < 3 && got < WANT; attempt++) {
+        const gen = await generateDesignCasesViaClaude(b.kr, 1, titles).catch(() => []);
+        gen.forEach((c) => {
+          newRows.push([b.pre + (maxId + 1 + got), dateStr(0), b.kr, c.title, c.sub || '', c.point || '', c.apply || '', c.src || '', '미발송', '']);
           titles.push(c.title);
+          got++;
         });
-        got += gen.length;
       }
-      if (got === 0) starved.push(b.kr);
+      // 재고가 0인데 한 개도 못 건졌을 때만 "고갈" 경고 (여유 있는 선제 리필 실패는 조용히 넘어감)
+      if (got === 0 && unsent === 0) starved.push(b.kr);
     }
     if (newRows.length) {
       // ★getGA4Token은 읽기전용(403) → 쓰기는 GAS(시트 소유) 통해서
