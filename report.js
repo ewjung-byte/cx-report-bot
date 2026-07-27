@@ -2165,7 +2165,7 @@ function pickClarityPage(byUrl, predicate) {
 
 // ── Claude 분석 ────────────────────────────────────────
 async function getClaudeAnalysis(mode, data) {
-  const { meta, cafe24, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit, baseline, baselineN, pageStats, memos, promos, salesContext, crm } = data;
+  const { meta, cafe24, cafe24Products, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit, baseline, baselineN, pageStats, memos, promos, salesContext, crm } = data;
   // 운영 중 CRM — Claude가 "이미 하는 것"을 또 추천 못 하게 (2026-06-29)
   const crmCtx = crm && crm.running && crm.running.length
     ? `[★이미 운영 중인 CRM — 아래를 "하라"고 추천 금지, 이미 함]\n${crm.running.join(' · ')}\n(등급쿠폰 운영중·효과 낮으면 "타이밍 바꿔라" 금지 → 다른 수단 제안. 재구매 리마인더 운영중이면 "리마인드 보내라" 금지 → 도달·전환 점검)`
@@ -2351,10 +2351,22 @@ ${songCtx}
 - 스크롤 깊이: ${clarity?.scrollDepth?.toFixed(0)||'-'}% (기준: 50% 이상)
 - 활성 체류: ${clarity?.activeTimeSec||'-'}초
 - 인스타 인앱: ${clarity?.instagramPct||'-'}%
-- 구매 퍼널: 랜딩 ${f?.landing||0}명 → 상품 ${f?.product||0}명(${pct(f?.product,f?.landing)}) → 장바구니 ${f?.cart||0}명(${pct(f?.cart,f?.landing)}) → 구매하기 ${f?.checkout||0}명(${pct(f?.checkout,f?.landing)})
+- 페이지 방문수(Clarity, ★순차 퍼널 아님): 랜딩 ${f?.landing||0} · 상품상세 ${f?.product||0} · 장바구니 ${f?.cart||0} · 구매하기 ${f?.checkout||0}
+※ ★이건 각 페이지를 몇 번 봤나이지 "단계별 통과"가 아님. 장바구니 수 < 구매하기 수여도 **역전·이상 아님**(비회원 즉시구매가 장바구니를 건너뜀). 이 숫자로 이탈률·역전 분석 금지.
 - GA4 구매전환율(ecommercePurchases): 신규 ${pct(ga4?.userType?.cur?.new?.conv, ga4?.userType?.cur?.new?.sessions)} / 재방문 ${pct(ga4?.userType?.cur?.ret?.conv, ga4?.userType?.cur?.ret?.sessions)} (재방문이 신규보다 현저히 높으면 리텐션 전략 ROI 시그널)
 - 재구매(회원·90일): 재구매율 ${repurchase?.repurchaseRate?.toFixed(1)||'-'}% (재구매 ${repurchase?.repeatMembers||0}/${repurchase?.distinctMembers||0}명), 평균 ${repurchase?.avgDaysToRepeat??'-'}일 만에 재구매 / 이번주 재구매 매출비중 ${repurchase?.week?.repShare?.toFixed(0)||'-'}% (회사 OKR: 바질 재구매자 300명)
-- 상품별 페이지 성과(top 5, GA4 product_no 기준): ${(ga4?.topProducts||[]).map(p=>`#${p.id} ${p.sessions}세션·구매 ${p.purchases}(CVR ${pct(p.purchases,p.sessions)})`).join(' / ')||'없음'}
+- 상품별 실판매(cafe24=진실, top 5): ${(() => {
+  const bp = (cafe24Products && cafe24Products.byProduct) || {};
+  const top = Object.values(bp).filter(v => v.count > 0).sort((a, b) => b.amount - a.amount).slice(0, 5);
+  if (!top.length) return '없음';
+  const sess = {}; (ga4?.topProducts || []).forEach(p => { sess[String(p.id)] = p.sessions; });
+  return top.map(p => {
+    const nm = PRODUCT_NAME[String(p.productNo)] || p.name || `#${p.productNo}`;
+    const s = sess[String(p.productNo)];
+    return `${nm} 실판매 ${p.count}건·${formatMoney(p.amount)}${s ? `(GA4세션 ${s})` : ''}`;
+  }).join(' / ');
+})()}
+※ ★상품 구매수는 반드시 위 cafe24 실판매를 쓸 것. GA4 ecommercePurchases는 네이버페이·톡 등 외부결제를 못 잡아 0으로 나옴 — "세션은 많은데 구매 0"이라는 결론은 측정오류지 사실이 아님(2026-07-27 실제 오진).
 ${reviews ? `\n[이번 주 리뷰 ${reviews.count}건 / 평균 ${reviews.avg}점]\n${reviews.texts}` : ''}
 
 ${crmCtx}
@@ -3550,7 +3562,7 @@ async function weeklyReport() {
   } catch (e) { console.error('[주간 PV]', e.message); }
 
   const crm = await fetchCrmStatus(); // 운영 중 CRM — 죽은/중복 액션 차단 + Claude에 주입
-  const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, clarity, ga4, reviews, repurchase, crm });
+  const analysis = await getClaudeAnalysis('weekly', { meta: metaThis, cafe24: cafe24This, cafe24Products, clarity, ga4, reviews, repurchase, crm });
 
   const chMap = { 'Paid Social':'유료SNS(메타·인스타)', 'Paid Search':'유료검색(구글)', 'Organic Social':'자연SNS', 'Organic Search':'자연검색', 'Organic Video':'유튜브', 'Organic Shopping':'네이버쇼핑', 'Direct':'직접유입', 'Referral':'추천유입', 'Paid Other':'기타광고', 'Unassigned':'미분류' };
   // ★전주≈0이면 %가 ∞로 폭발(Cross-network ↑82567% 등) → 급변/신규로 표기. 구글은 검색+PMax(Cross-network) 합산(분리하면 예산이동을 폭락으로 오해).
