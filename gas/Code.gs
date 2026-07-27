@@ -3019,8 +3019,13 @@ function sendNextDesignCase_() {
   var cnt = function (pre) { var n = 0; for (var i = 1; i < data.length; i++) { if (String(data[i][0]).charAt(0) === pre && String(data[i][8]).trim() === '미발송') n++; } return n; };
   var warn = [];
   [['A', '식품', a], ['B', '주방기기', b]].forEach(function (x) {
-    if (!x[2]) warn.push('❌ ' + x[1] + ' 큐 비어 오늘 발송 못함 — 수동 보충 필요');
-    else { var rem = cnt(x[0]) - 1; if (rem <= 1) warn.push('⚠️ ' + x[1] + ' 큐 ' + rem + '개 남음 — 곧 고갈'); }
+    if (!x[2]) warn.push('❌ ' + x[1] + ' — 큐가 비어 오늘 발송 못함');
+    else {
+      // ★data는 발송 전 스냅샷(위 getDataRange)이라 오늘 나간 1건이 아직 '미발송'으로 잡힘 → -1이 실제 잔여
+      var rem = cnt(x[0]) - 1;
+      if (rem <= 0) warn.push('❌ ' + x[1] + ' — 오늘이 마지막. 내일 발송분 없음');
+      else if (rem <= 2) warn.push('⚠️ ' + x[1] + ' — ' + rem + '일치 남음');
+    }
   });
   if (warn.length) sendTGMessage(EUNWOO_CHAT_ID, '🎨 <b>디자인 케이스북 큐 경고</b>\n' + warn.join('\n') + '\n→ 클로드한테 "디자인 사례 큐 보충해줘"');
   if (!a && !b) return { ok: true, done: true }; // 양쪽 다 미발송 없음
