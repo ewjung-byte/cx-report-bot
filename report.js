@@ -2354,7 +2354,7 @@ ${songCtx}
 - 도입부 멘트("확인했어요"·"분석합니다"·요약 줄) X. 바로 첫 신호 🚨로 시작.`;
   } else {
     prompt = `너는 이태리정미소(프리미엄 이탈리안 식품 쇼핑몰) CX 분석가야.
-이번 주 데이터를 분석하고 세 파트로 답해줘.
+아래 데이터에서 **이번 주에 실제로 변한 것**만 골라 짧게 답해줘. 설명·서론 없이 결론만.
 
 [이번 주 데이터]
 - 메타 ROAS: ${meta.roas}% / 광고비: ${formatMoney(meta.spend)} / 구매: ${meta.purchases}건
@@ -2399,23 +2399,20 @@ ${reviews ? `\n[이번 주 리뷰 ${reviews.count}건 / 평균 ${reviews.avg}점
 
 ${crmCtx}
 
-== 파트 1: 이번 주 액션 (0~2개. 없으면 "특이 변화 없음"만 쓸 것) ==
-★★가장 중요 — **"늘 있는 상태"는 액션이 아니다.**
-- 장바구니 이탈·전환율 낮음·스크롤 짧음·인앱 이탈 같은 건 **매주 항상 있는 상수**다. 이걸 근거로 액션 쓰지 마.
-- 액션의 근거는 **이번 주에 전주 대비 실제로 변한 것**이어야 한다. 근거 문장에 반드시 **전주 대비 변화(↑↓%나 A→B)**를 넣어라. 변화 수치를 못 쓰겠으면 그 액션은 버려라.
-- **일반적 UX 조언 금지**: "버튼 위치 조정", "상단에 리뷰 노출", "혜택 배너 삽입", "스크롤 유도" 류는 데이터 없이도 나오는 소리라 금지.
-- 진짜 변화가 1개뿐이면 **1개만** 써라. 아무 변화 없으면 **"특이 변화 없음 — 이번 주는 유지"** 한 줄로 끝내라. 억지로 3개 채우지 마.
-각 액션은 정확히 3줄로, 짧게:
-  제목 (난이도: 쉬움/보통/어려움)
-  근거: **전주 대비 변화 숫자** + 어디서 새는지 (한 문장)
-  실행: 가장 구체적인 것 1개 (한 문장)
-긴 문단·불릿 나열 금지. ★위 "운영 중 CRM"에 이미 있는 건 추천하지 마(이미 함). 데이터가 죽었다고 말하는 레버(예: 사용률 낮은 쿠폰)를 "더 하라"고 하지 마.
+== 출력 형식 (이 형식만. 파트 구분·제목·난이도·머리말 전부 금지) ==
+아래 형식으로 **최대 4줄**. 각 줄 한 문장, 80자 이내.
 
-== 파트 2: 리뷰 인사이트 (2줄) ==
-${reviews ? `반복 칭찬 키워드 1줄 + 불만/개선 키워드 1줄. 즉각대응 리뷰 있으면 1줄 추가.` : '리뷰 데이터 없음.'}
+· [변화] 무엇이 얼마나 변했나(A→B ↑↓%) → 그래서 뭘 할지 한 가지
+· [변화] …  (최대 2줄까지)
+· [리뷰] 이번 주 리뷰에서 나온 것 한 줄 (없으면 이 줄 생략)
 
-== 파트 3: 중장기 (0~1개, 1줄) ==
-★매주 비슷한 소리 반복 금지. 이번 주 데이터가 **구조적 변화**를 보여줄 때만 1줄. 없으면 이 파트 통째로 생략(빈 줄로 두지 말고 아예 쓰지 마).
+★규칙 (어기면 그 줄을 버려라)
+1. **"늘 있는 상태"는 쓰지 마.** 장바구니 이탈·전환율 낮음·스크롤 짧음·인앱 이탈은 매주 있는 상수다. 액션 근거로 금지.
+2. 근거엔 반드시 **위 [전주 대비 변화] 블록에 있는 숫자**를 써라. 그 블록에 없는 숫자로 액션 만들지 마.
+3. **일반 UX 조언 금지**: 버튼 위치·상단 리뷰 노출·배너 삽입·스크롤 유도 같은 건 데이터 없이도 나오는 소리라 금지.
+4. **이미 운영 중인 CRM(위 목록)을 "하라"고 하지 마.**
+5. 변화가 없으면 **"· 특이 변화 없음 — 유지"** 한 줄로 끝내라. 억지로 채우지 마.
+6. 중장기·구조 제안·설명 문단 쓰지 마. 이번 주에 할 것만.
 
 한국어. 번호 매김. ★마크다운 기호(#,*,**,---,>) 금지·일반 텍스트만. 전체 짧고 스캔 가능하게.`;
   }
@@ -2949,21 +2946,19 @@ async function dailyReport() {
     dailyActions.push(`🗣 어제 부정 VOC ${voc.negCount}건${prods ? ` (${prods})` : ''} — 반복 패턴인지 확인, 상페·CS 대응`);
   }
 
-  // (1) 공구·광고 맥락 — 오늘 매출을 어떻게 읽을지 (상태가 매일 달라 자동 변동)
-  const activeGongu = promos && promos.find(p => p.active && p.type === '공구');
-  const activeAd = promos && promos.find(p => p.active && p.type === '광고');
-  const nextP = promos && promos.find(p => !p.active && p.dToStart > 0);
-  // ★상태(진행중 광고·SKU집중)는 매일 반복 금지 — "변화 시점"에만 (2026-07-02 은우 "획일화" fix)
-  if (activeGongu && activeGongu.dToEnd <= 2) {
-    dailyActions.push(`📅 ${activeGongu.title} 공구 종료 D-${activeGongu.dToEnd} → 종료 후 매출 방어 시퀀스(구매자 정가 SKU 쿠폰) 준비`);
-  } else if (activeAd) {
-    // 광고는 시작 첫날(오염 시작)·종료 임박(집계 예약)만 — 진행 중간엔 침묵(매일 "효과일" 반복 제거)
-    const adDays = Math.floor((Date.now() - new Date(String(activeAd.start).replace(/\./g, '-')).getTime()) / 86400000);
-    if (adDays <= 1) dailyActions.push(`🔵 ${activeAd.title} 광고 시작 — 오늘부터 매출에 광고 유입 섞임. 첫 유입·전용상품 구매 확인`);
-    else if (activeAd.dToEnd != null && activeAd.dToEnd <= 1) dailyActions.push(`🔵 ${activeAd.title} 광고 종료 D-${activeAd.dToEnd} → 종료 후 유입·전환 최종 집계`);
-  } else if (!activeGongu) {
-    dailyActions.push(`📉 공구·광고 공백${nextP ? ` (다음 ${nextP.type} D-${nextP.dToStart})` : ''} → 오늘=순수 평상시 baseline. 공백 메울 CRM/콘텐츠 1개`);
-  }
+  // (1) ★공구·광고 캘린더 알림 전면 제거 (2026-07-27 은우 "공구 주마다 있는데 왜 자꾸 나와. 필요없어,
+  //     발행 안 된 링크만 체크"). 공구 시작/종료 D-N은 매주 반복되는 일정이지 액션이 아님.
+  //     대신 **은우가 실제로 해야 하는 것 = UTM 링크 미발행**만 남김.
+  try {
+    const missing = await getMissingUtmRows();
+    if (missing && missing.length) {
+      // action 형식: "🔗 UTM 만들기: {이름} ({유형} {시작일})" → 이름만 뽑아 축약
+      const names = missing.slice(0, 3)
+        .map(m => (String(m.action || '').match(/만들기:\s*([^(]+)/) || [, ''])[1].trim())
+        .filter(Boolean).join('·');
+      dailyActions.push(`🔗 UTM 링크 미발행 ${missing.length}건${names ? ` (${names}${missing.length > 3 ? ' 외' : ''})` : ''} — 시작 전 링크 만들기`);
+    }
+  } catch (e) { console.error('[UTM 미발행 체크]', e.message); }
 
   // (2) 상품 과의존 — 구조 리스크라 매일 같음 → 주1회(월요일)만, 단 60%↑ 극단이면 즉시
   if (cafe24 && cafe24.byProduct) {
@@ -2986,9 +2981,7 @@ async function dailyReport() {
     dailyActions.push(`📱 인스타 인앱 ${inappPct}% · 데드클릭 ${inDead}%(임계 초과) — 그날 인앱 결제마찰 실측 신호, 녹화로 원인 확인`);
   }
 
-  // (4) 공구 임박 점검
-  const soon = promos && promos.find(p => p.dToStart >= 0 && p.dToStart <= 3);
-  if (soon) dailyActions.push(`🗓 ${soon.title} 시작 D-${soon.dToStart} → 발행·링크·재고 점검`);
+  // (4) ~~공구 임박 점검~~ 제거 — 위 (1)의 UTM 미발행 체크로 대체 (2026-07-27 은우 요청)
 
   // 오늘 액션 = 은우 개인 DM에만(단톡방 중복 제거). 번호 + 3버튼(오늘/나중에/패스)으로 콕핏 연결.
   const dmActions = dailyActions.slice(0, 4);
@@ -3783,9 +3776,7 @@ ${productLines || '데이터 없음'}
 ⭐ <b>새 리뷰</b> (이번주 등록분)
 ${reviews ? (reviews.count ? `${reviews.count}건 · 평균 ${reviews.avg}점${reviews.dist.low ? ` · ⚠️3점이하 ${reviews.dist.low}건` : ''}` : '이번주 새 리뷰 없음') : '데이터 없음'}`;
 
-  const claudeMsg = analysis ? `🤖 <b>저번주 분석 → 이번주 액션</b>
-━━━━━━━━━━━━━━━━━
-${analysis}` : '';
+  const claudeMsg = analysis ? `🤖 <b>이번 주 판단</b>\n${analysis}` : '';
 
   console.log('\n======= 텔레그램 전문 (주간) =======');
   console.log(weeklyMsg.replace(/<[^>]+>/g, ''));
