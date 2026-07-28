@@ -212,7 +212,12 @@ const META_TOKEN         = (process.env.META_ACCESS_TOKEN || _mt.access_token   
 const META_AD_ACCOUNT    = (process.env.META_AD_ACCOUNT   || _mt.ad_account_id   || '').toString().trim();
 const TG_TOKEN           = (process.env.TG_BOT_TOKEN      || _tg.bot_token       || '').trim();
 const TG_CHAT_ID         = (process.env.TG_CHAT_ID        || _tg.chat_id         || '').toString().trim();
-const CLAUDE_API_KEY     = (process.env.CLAUDE_API_KEY    || _cl.api_key         || '').trim();
+// ★AI 분석 OFF (2026-07-28 은우 C안) — 봇 API 크레딧 소진(3달 무료분 소진, Max 구독과 별개).
+//   AI가 쓰던 문단(🤖CX 판단·🎯CX 관리자 분석·디자인 케이스 생성)만 끄고, 숫자·발송·시트는 그대로.
+//   분석은 은우가 클로드 창에서 실데이터 까며 함(품질↑·추가비용 0).
+//   ★되살리려면: 크레딧 충전 후 AI_ANALYSIS_ON=1 환경변수(GitHub 시크릿)만 추가하면 됨.
+const AI_ANALYSIS_ON     = process.env.AI_ANALYSIS_ON === '1';
+const CLAUDE_API_KEY     = AI_ANALYSIS_ON ? (process.env.CLAUDE_API_KEY || _cl.api_key || '').trim() : '';
 const CLAUDE_MODEL       = (process.env.CLAUDE_MODEL      || _cl.model           || 'claude-sonnet-4-6').trim();
 const CLARITY_PROJECT_ID = 'vzm43te29q';
 const clarityToken       = (process.env.CLARITY_TOKEN     || _cla).trim();
@@ -1011,7 +1016,8 @@ async function autoRefillDesignCases() {
       const maxId = rows.filter(r => String(r[0]).charAt(0) === b.pre).reduce((mx, r) => Math.max(mx, parseInt(String(r[0]).slice(1)) || 0), 0);
       // ★1개씩 요청 = 웹서치 짧아져 타임아웃 회피. 실패해도 다음 시도가 살아남음(부분 성공 누적).
       let got = 0;
-      for (let attempt = 0; attempt < 3 && got < WANT; attempt++) {
+      // AI OFF면 생성 시도 자체를 건너뜀 (400 재시도 6번 노이즈 제거). 큐는 클로드 창에서 수동 보충.
+      for (let attempt = 0; AI_ANALYSIS_ON && attempt < 3 && got < WANT; attempt++) {
         const gen = await generateDesignCasesViaClaude(b.kr, 1, titles).catch(() => []);
         gen.forEach((c) => {
           newRows.push([b.pre + (maxId + 1 + got), dateStr(0), b.kr, c.title, c.sub || '', c.point || '', c.apply || '', c.src || '', '미발송', '']);
@@ -2185,6 +2191,7 @@ function pickClarityPage(byUrl, predicate) {
 
 // ── Claude 분석 ────────────────────────────────────────
 async function getClaudeAnalysis(mode, data) {
+  if (!CLAUDE_API_KEY) return null;   // AI OFF(크레딧 소진) — 조용히 건너뜀, 숫자 리포트는 그대로
   const { meta, cafe24, cafe24Products, clarity, ga4, ga4Daily, dailyOrders, reviews, repurchase, segments, restock, voc, songmamans, adAudit, baseline, baselineN, pageStats, memos, promos, salesContext, crm } = data;
   // 운영 중 CRM — Claude가 "이미 하는 것"을 또 추천 못 하게 (2026-06-29)
   const crmCtx = crm && crm.running && crm.running.length
@@ -2608,8 +2615,10 @@ function buildDataHealthWarnings(d) {
     w.push('결제진입 0 (추적 누락 의심 — 장바구니는 잡히는데 결제진입 이벤트 미발화)');
   }
   if (!clarity) w.push('Clarity 한도/미수집(GA4 백업으로 대체됨)');
-  if (!analysis) w.push('CX 판단(Claude) 비어있음');
-  if (!cxManagerAnalysis) w.push('CX 관리자 분석(Claude) 비어있음');
+  // ★AI 분석은 의도적으로 OFF(2026-07-28 C안) → 비어있는 게 정상이라 경고 안 함.
+  //   AI_ANALYSIS_ON=1로 되살렸을 때만 누락을 경고.
+  if (AI_ANALYSIS_ON && !analysis) w.push('CX 판단(Claude) 비어있음');
+  if (AI_ANALYSIS_ON && !cxManagerAnalysis) w.push('CX 관리자 분석(Claude) 비어있음');
   if (!restock) w.push('재입고알림(CRM) 미수집');
   if (adAudit && adAudit.total > 0 && adAudit.broken && adAudit.broken.length / adAudit.total > 0.5) {
     w.push(`광고 URL 절반 이상 깨짐 (${adAudit.broken.length}/${adAudit.total})`);
