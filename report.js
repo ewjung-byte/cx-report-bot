@@ -1122,37 +1122,48 @@ async function getDailySignals() {
   try {
     const token = await getGA4Token();
     const y = dateStr(1), p0 = dateStr(8), p1 = dateStr(2); // 어제 / 직전7일(어제 제외)
-    const evRates = async (s, e) => {
-      const r = await ga4Fetch(token, { dateRanges: [{ startDate: s, endDate: e }], metrics: [{ name: 'eventCount' }], dimensions: [{ name: 'eventName' }], dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: ['view_item', 'add_to_cart'] } } } });
-      const m = {}; (r.rows || []).forEach(x => m[x.dimensionValues[0].value] = +x.metricValues[0].value); return m;
+    // ★2026-07-29 개편 (은우 실측으로 기존 로직 폐기)
+    //   폐기 이유 ①오가닉 일별 조회가 170~500뿐이라 담기율이 4.0%~31.9%로 널뜀 = 하루 단위는 신호가 아니라 잡음.
+    //            ②GA4 소스분류가 흔들리면(광고 랜딩 /surl/P/88이 (not set)으로 하루 133건 샘) 광고 트래픽이
+    //              오가닉 통에 섞여 담기율을 끌어내림 → "오가닉도 하락 = 사이트 점검(은우)" 오진이 남았음.
+    //   개편 = 광고는 하루(표본 1,400대라 신뢰) / 오가닉은 3일 묶음(표본 500+ 확보)으로 분리 판정.
+    const splitRates = async (s, e) => {
+      const r = await ga4Fetch(token, { dateRanges: [{ startDate: s, endDate: e }], metrics: [{ name: 'eventCount' }], dimensions: [{ name: 'eventName' }, { name: 'sessionDefaultChannelGroup' }], dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: ['view_item', 'add_to_cart'] } } } });
+      const ad = { v: 0, a: 0 }, og = { v: 0, a: 0 }, un = { v: 0, a: 0 };
+      (r.rows || []).forEach(x => {
+        const ev = x.dimensionValues[0].value, ch = x.dimensionValues[1].value, n = +x.metricValues[0].value;
+        // ★Unassigned = GA4가 출처를 못 잡은 것. 오가닉에 넣으면 광고 유실분이 섞여 오가닉 담기율을 깎아먹음
+        //   (7/29 실측: Unassigned 32→177/일로 5.5배, 같은 기간 Cross-network 1429→817/일. 광고가 미분류로 샌 것)
+        const t = /Paid|Cross-network|Display/i.test(ch) ? ad : (/Unassigned/i.test(ch) ? un : og);
+        if (ev === 'view_item') t.v += n; else t.a += n;
+      });
+      ad.rate = ad.v ? ad.a / ad.v * 100 : 0; og.rate = og.v ? og.a / og.v * 100 : 0;
+      return { ad, og, un };
     };
-    const yE = await evRates(y, y), pE = await evRates(p0, p1);
-    const yRate = yE.view_item ? yE.add_to_cart / yE.view_item * 100 : 0;
-    const pRate = pE.view_item ? pE.add_to_cart / pE.view_item * 100 : 0;
-    if (pRate > 0 && yRate > 0) {
-      const rel = (yRate - pRate) / pRate * 100;
-      if (rel <= -12) {
-        // ★신호 조합 = 판단 (2026-07-08 은우 "유의미해?"): 담기율↓면 그 자리에서 오가닉/광고 분리해 원인까지.
-        //   6/26 수동으로 하던 _addcart_split 자동화 — 오가닉도↓=사이트 회귀 / 오가닉 정상=광고 트래픽 희석(대표 영역).
-        let cause = '';
-        try {
-          const splitRates = async (s, e) => {
-            const r = await ga4Fetch(token, { dateRanges: [{ startDate: s, endDate: e }], metrics: [{ name: 'eventCount' }], dimensions: [{ name: 'eventName' }, { name: 'sessionDefaultChannelGroup' }], dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: ['view_item', 'add_to_cart'] } } } });
-            const ad = { v: 0, a: 0 }, og = { v: 0, a: 0 };
-            (r.rows || []).forEach(x => {
-              const ev = x.dimensionValues[0].value, ch = x.dimensionValues[1].value, n = +x.metricValues[0].value;
-              const t = /Paid|Cross-network|Display/i.test(ch) ? ad : og;
-              if (ev === 'view_item') t.v += n; else t.a += n;
-            });
-            return { ad: ad.v ? ad.a / ad.v * 100 : 0, og: og.v ? og.a / og.v * 100 : 0 };
-          };
-          const yS = await splitRates(y, y), pS = await splitRates(p0, p1);
-          const ogDown = pS.og > 0 && (yS.og - pS.og) / pS.og * 100 <= -12;
-          cause = `\n   ↳ 원인분리: 오가닉 ${yS.og.toFixed(1)}%(평균 ${pS.og.toFixed(1)}) · 광고 ${yS.ad.toFixed(1)}%(평균 ${pS.ad.toFixed(1)}) → ${ogDown ? '오가닉도 하락 = 사이트 쪽 점검(은우)' : '오가닉 정상 = 광고 유입 희석(사이트 무죄, 대표·미주 영역)'}`;
-        } catch (e2) { }
-        out.push(`📉 담기율 어제 ${yRate.toFixed(1)}% (7일평균 ${pRate.toFixed(1)}%) ↓${Math.abs(Math.round(rel))}%${cause}`);
+    // ① 광고 담기율 — 어제 vs 직전7일. 어제 조회 300건 미만이면 표본 부족으로 스킵.
+    const yS = await splitRates(y, y), pS = await splitRates(p0, p1);
+    if (yS.ad.v >= 300 && pS.ad.rate > 0 && yS.ad.rate > 0) {
+      const rel = (yS.ad.rate - pS.ad.rate) / pS.ad.rate * 100;
+      if (rel <= -15) out.push(`📉 광고 담기율 어제 ${yS.ad.rate.toFixed(1)}% (7일평균 ${pS.ad.rate.toFixed(1)}%) ↓${Math.abs(Math.round(rel))}% — 소재·랜딩 점검(대표·미주 영역)`);
+      else if (rel >= 25) out.push(`📈 광고 담기율 어제 ${yS.ad.rate.toFixed(1)}% (7일평균 ${pS.ad.rate.toFixed(1)}%) ↑${Math.round(rel)}% — 뭐가 통했나 확인해 복제`);
+    }
+    // ② 소스분류 이상 먼저 — 미분류(Unassigned)가 2배 넘게 튀면 채널별 지표 자체를 못 믿음.
+    //    이때 오가닉 알림은 띄우지 않는다(오진의 원인이었음).
+    const o3 = await splitRates(dateStr(3), dateStr(1)), oP = await splitRates(dateStr(10), dateStr(4));
+    const un3 = o3.un.v / 3, unP = oP.un.v / 7;
+    const unBroken = unP >= 10 && un3 / unP >= 2 && un3 >= 80;
+    if (unBroken) out.push(`📛 GA4 소스분류 이상 — 출처 미분류 조회 ${Math.round(unP)}→${Math.round(un3)}/일 (${(un3 / unP).toFixed(1)}배). 광고 유입이 미분류로 새는 중이라 채널별 담기율은 이번 기간 판단 근거로 쓰지 말 것`);
+    // ③ 오가닉 담기율 — 최근3일 vs 직전7일. 3일 조회 500건 미만이면 스킵(하루치는 아예 안 봄).
+    //    ★담기율만 보면 오진한다(7/29 실측): 조회량이 같이 늘었으면 담기율 하락은 사이트 회귀가 아니라
+    //      담기율 낮은 새 유입(인플루언서 링크·direct)이 섞여 평균이 희석된 것. 조회량 증감을 반드시 같이 본다.
+    else if (o3.og.v >= 500 && oP.og.rate > 0 && o3.og.rate > 0) {
+      const rel = (o3.og.rate - oP.og.rate) / oP.og.rate * 100;
+      const vRel = ((o3.og.v / 3) - (oP.og.v / 7)) / (oP.og.v / 7) * 100; // 조회량 일평균 증감
+      if (rel <= -20) {
+        const diluted = vRel >= 30;
+        out.push(`📉 오가닉 담기율 최근3일 ${o3.og.rate.toFixed(1)}% (직전7일 ${oP.og.rate.toFixed(1)}%) ↓${Math.abs(Math.round(rel))}%\n   ↳ 오가닉 조회 ${Math.round(oP.og.v / 7)}→${Math.round(o3.og.v / 3)}/일 ${vRel >= 0 ? '↑' : '↓'}${Math.abs(Math.round(vRel))}% → ${diluted ? '유입 늘고 담기율만 하락 = 새 유입 희석(사이트 무죄). 어느 소스가 늘었나 확인' : '유입 그대로인데 담기율 하락 = 사이트 쪽 점검(은우)'}`);
       }
-      else if (rel >= 20) out.push(`📈 담기율 어제 ${yRate.toFixed(1)}% (7일평균 ${pRate.toFixed(1)}%) ↑${Math.round(rel)}% — 뭐가 통했나 확인해 복제`);
+      else if (rel >= 30) out.push(`📈 오가닉 담기율 최근3일 ${o3.og.rate.toFixed(1)}% (직전7일 ${oP.og.rate.toFixed(1)}%) ↑${Math.round(rel)}% — 뭐가 통했나 확인해 복제`);
     }
     const chMap2 = async (s, e) => {
       const r = await ga4Fetch(token, { dateRanges: [{ startDate: s, endDate: e }], metrics: [{ name: 'sessions' }], dimensions: [{ name: 'sessionDefaultChannelGroup' }] });
