@@ -912,7 +912,8 @@ async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
     const dPrompt = `너는 웹 UI/UX 분석가야. **홈페이지 1페이지의 UI·UX 디테일**이 뛰어난 사이트 ${n}개를 찾아.
 ★검색 예산: web_search 최대 2회. 후보를 넓게 훑지 말고 아는 사이트가 지금 살아있는지만 확인하고 즉시 JSON 출력. 시간 초과되면 결과가 통째로 버려진다.
 ★업종·카테고리 무관 — 식품이든 금융이든 스튜디오든 상관없다. 기준은 오직 "홈 1페이지가 잘 만들어졌나".
-★반드시 web_search로 실제 확인 — 기억으로 지어내지 마(죽은 도메인 방지). 검색어 예: "awwwards site of the day", "best website homepage interaction design 2026".
+★반드시 web_search로 실제 확인 — 기억으로 지어내지 마(죽은 도메인 방지).
+★수집원(대표 선정 갤러리 8곳) 안에서 고를 것: awwwards.com(Site of the Day·Food & Drink) · lapa.ninja(랜딩 8,000+) · siteinspire.com(Minimal 필터) · cssdesignawards.com(타이포 정교) · thefwa.com(인터랙티브·모션·3D) · maxibestof.one · dribbble.com · behance.net. 검색어 예: "awwwards site of the day", "siteinspire minimal", "lapa ninja landing page".
 ★기록 단위는 브랜드 전략이 아니라 **화면 위의 구체적 장치 1개**. 예: 첫 화면 CTA를 하나로 줄이고 그것만 컬러 / 내비를 화면 하단에 알약으로 띄움 / 스크롤 힌트 배지 / 페이지 높이를 뷰포트 1화면으로 끝냄 / 좌하단 상시 정보카드.
 ⛔ 금지: "감성적이다" "세련됐다" 같은 인상 서술, 브랜드 스토리 요약, 업종 분석. 위치·크기·순서·색·개수처럼 **따라 만들 수 있는 사실**만.
 이미 있는 제목(중복 금지): ${excludeTitles.join(', ')}

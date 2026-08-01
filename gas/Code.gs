@@ -3059,7 +3059,12 @@ function getDesignCasesForWeb_() {
   var data = sh.getDataRange().getValues().slice(1);
   return data.filter(function (r) {
     var st = String(r[8]).trim();
-    return (st === '발송' || st === '채택' || st === '패스') && String(r[3]).trim();
+    if (!String(r[3]).trim()) return false;
+    // ★C 상세페이지 / D 홈페이지(2026-08-01)는 "쌓아두고 꺼내 보는" 칸이라 발송 여부와 무관하게
+    //   전부 웹에 보여야 한다. 특히 C는 봇 DM 대상이 아니라 상태가 계속 '미발송'이라
+    //   기존 조건대로면 영영 안 떴음.
+    if ('CD'.indexOf(String(r[0]).charAt(0)) >= 0) return true;
+    return (st === '발송' || st === '채택' || st === '패스');
   }).map(function (r) {
     return {
       id: String(r[0]), brand: String(r[2]), title: String(r[3]), sub: String(r[4]),
