@@ -3015,19 +3015,22 @@ function sendOneDesignByBrand_(sh, data, prefix) {
   }
   return null;
 }
-// 매일 A(식품) 1개 + B(주방기기) 1개 = 2개 발송 (각 브랜드 미발송분부터). 은우 2026-06-24.
+// 매일 A(식품)+B(주방기기)+D(홈페이지 UI/UX) 각 1개 = 3개 발송. 은우 2026-06-24 / D 추가 2026-08-01.
 function sendNextDesignCase_() {
   var sh = getDesignTab_();
   if (!sh || sh.getLastRow() < 2) return { ok: false, error: '디자인_사례 시트 없음/빔' };
   var data = sh.getDataRange().getValues();
   var a = sendOneDesignByBrand_(sh, data, 'A');
   var b = sendOneDesignByBrand_(sh, data, 'B');
+  // D 홈페이지 = 2026-08-01 신설(은우 '개쩌는 홈 1페이지 UI/UX 모을 것'). 업종 무관.
+  // C 상세페이지는 은우가 수동으로 참고하는 칸이라 발송 대상 아님.
+  var d = sendOneDesignByBrand_(sh, data, 'D');
   SpreadsheetApp.flush();
   // ★큐 헬스 경고 (2026-07-23 은우 요청) — 조용한 실패 방지. 예전엔 큐 비면 console.warn만 하고 DM 안 나가
   //   2주 발송 끊겨도 아무도 몰랐음. 이제 브랜드 큐 비거나(❌) ≤1개(⚠️)면 은우 DM으로 알림.
   var cnt = function (pre) { var n = 0; for (var i = 1; i < data.length; i++) { if (String(data[i][0]).charAt(0) === pre && String(data[i][8]).trim() === '미발송') n++; } return n; };
   var warn = [];
-  [['A', '식품', a], ['B', '주방기기', b]].forEach(function (x) {
+  [['A', '식품', a], ['B', '주방기기', b], ['D', '홈페이지', d]].forEach(function (x) {
     if (!x[2]) warn.push('❌ ' + x[1] + ' — 큐가 비어 오늘 발송 못함');
     else {
       // ★data는 발송 전 스냅샷(위 getDataRange)이라 오늘 나간 1건이 아직 '미발송'으로 잡힘 → -1이 실제 잔여
@@ -3037,8 +3040,8 @@ function sendNextDesignCase_() {
     }
   });
   if (warn.length) sendTGMessage(EUNWOO_CHAT_ID, '🎨 <b>디자인 케이스북 큐 경고</b>\n' + warn.join('\n') + '\n→ 클로드한테 "디자인 사례 큐 보충해줘"');
-  if (!a && !b) return { ok: true, done: true }; // 양쪽 다 미발송 없음
-  return { ok: true, sent: [a, b].filter(Boolean) };
+  if (!a && !b && !d) return { ok: true, done: true }; // 셋 다 미발송 없음
+  return { ok: true, sent: [a, b, d].filter(Boolean) };
 }
 function setDesignCaseStatus_(id, status) {
   var sh = getDesignTab_();

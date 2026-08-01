@@ -906,6 +906,30 @@ function claudeStreamMessage(body, totalMs) {
 }
 async function generateDesignCasesViaClaude(brandKr, n, excludeTitles) {
   if (!CLAUDE_API_KEY) return [];
+  // ── D 홈페이지 (2026-08-01 신설) — 업종 무관, 홈 "1페이지"의 UI/UX 디테일만 모은다 ──
+  //    은우: "카테고리 상관없어 그냥 개쩌는 것". A·B와 달리 브랜드 전략이 아니라 화면 위 장치를 기록.
+  if (brandKr === 'D 홈페이지') {
+    const dPrompt = `너는 웹 UI/UX 분석가야. **홈페이지 1페이지의 UI·UX 디테일**이 뛰어난 사이트 ${n}개를 찾아.
+★검색 예산: web_search 최대 2회. 후보를 넓게 훑지 말고 아는 사이트가 지금 살아있는지만 확인하고 즉시 JSON 출력. 시간 초과되면 결과가 통째로 버려진다.
+★업종·카테고리 무관 — 식품이든 금융이든 스튜디오든 상관없다. 기준은 오직 "홈 1페이지가 잘 만들어졌나".
+★반드시 web_search로 실제 확인 — 기억으로 지어내지 마(죽은 도메인 방지). 검색어 예: "awwwards site of the day", "best website homepage interaction design 2026".
+★기록 단위는 브랜드 전략이 아니라 **화면 위의 구체적 장치 1개**. 예: 첫 화면 CTA를 하나로 줄이고 그것만 컬러 / 내비를 화면 하단에 알약으로 띄움 / 스크롤 힌트 배지 / 페이지 높이를 뷰포트 1화면으로 끝냄 / 좌하단 상시 정보카드.
+⛔ 금지: "감성적이다" "세련됐다" 같은 인상 서술, 브랜드 스토리 요약, 업종 분석. 위치·크기·순서·색·개수처럼 **따라 만들 수 있는 사실**만.
+이미 있는 제목(중복 금지): ${excludeTitles.join(', ')}
+각 케이스 = JSON 객체: {"title":"사이트명 · 그 장치를 한 줄로(예: Jeton · 내비를 화면 하단에 띄움)","sub":"[영역] 그 장치가 화면 어디에 어떻게 있는지 구체적으로(줄표 금지)","point":"★따라 하려면 알아야 할 디테일(위치·개수·색·순서)","apply":"이태리정미소 자사몰 홈에 어떻게 옮길지 한 문장","src":"검색으로 확인한 실제 도메인"}
+마지막 답변은 JSON 배열만(마크다운·설명·코드펜스 금지).`;
+    try {
+      let body = { model: CLAUDE_MODEL, max_tokens: 3000, tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 4 }], messages: [{ role: 'user', content: dPrompt }] };
+      let res = await claudeStreamMessage(body, 330000);
+      if (res.stop_reason === 'pause_turn' && res.content) {
+        body.messages.push({ role: 'assistant', content: res.content });
+        res = await claudeStreamMessage(body, 330000);
+      }
+      const txt = (res.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
+      const m = txt.match(/\[[\s\S]*\]/);
+      return m ? JSON.parse(m[0]) : [];
+    } catch (e) { console.error('[디자인 케이스 D 생성]', e.message); return []; }
+  }
   const subject = brandKr === 'A 식품'
     ? '이태리정미소(이탈리아 프리미엄 식품: 올리브유·바질페스토·파스타·빵)'
     : '카마솥(프리미엄 주방기기: 무쇠·스테인리스·인덕션)';
@@ -997,11 +1021,15 @@ async function autoRefillDesignCases() {
   try {
     const token = await getGA4Token();
     const auth = { 'Authorization': `Bearer ${token}` };
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${DESIGN_SHEET_ID}/values/${encodeURIComponent('🎨 디자인_사례!A2:J100')}`;
+    // ★A2:J100이었다가 2026-08-01 수정 — 시트가 125행이 되면서 최근 행(A43~·C1~·D1~)을 못 읽어
+    //   "미발송 0 = 큐 고갈"로 잘못 판정하고 있었음. 행수가 범위 상한과 같으면 잘림 의심할 것.
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${DESIGN_SHEET_ID}/values/${encodeURIComponent('🎨 디자인_사례!A2:J2000')}`;
     const data = await fetchJson(url, auth);
     const rows = (data.values || []).filter(r => r[0]);
     const titles = rows.map(r => String(r[3] || ''));
-    const brands = [{ kr: 'A 식품', pre: 'A' }, { kr: 'B 주방기기', pre: 'B' }];
+    // D 홈페이지 = 2026-08-01 신설(은우 "카테고리 상관없어 그냥 개쩌는 것"). 업종 무관, 홈 1페이지의 UI/UX 디테일만.
+    // C 상세페이지는 은우가 수동으로 쌓는 칸이라 자동생성 대상 아님.
+    const brands = [{ kr: 'A 식품', pre: 'A' }, { kr: 'B 주방기기', pre: 'B' }, { kr: 'D 홈페이지', pre: 'D' }];
     const newRows = [];
     const starved = []; // 재고 0인데 생성분이 전멸(도메인검증)한 브랜드 — DM 못 나감, 경고 대상
     // ★리필 구조 재설계 (2026-07-27) — 기존 문제 2개:
