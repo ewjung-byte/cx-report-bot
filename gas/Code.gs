@@ -670,6 +670,9 @@ function doPost(e) {
     if (action === 'send_next_design_case') { // 디자인 사례집 — 다음 미발송 1개 개인DM 발송 (report.js 데일리가 호출)
       return jsonOut(sendNextDesignCase_());
     }
+    if (action === 'track_weekly') { // 📈 개입_추적 주별 적재 — report.js 주간이 호출(시트 쓰기는 GAS만)
+      return jsonOut(trackWeeklyUpsert_(contents.rows || []));
+    }
     if (action === 'append_design_cases') { // 디자인 케이스북 자동보충 — report.js가 Claude로 생성한 행 적재(시트 쓰기는 GAS만)
       return jsonOut(appendDesignCases_(contents.rows || []));
     }
@@ -2976,6 +2979,31 @@ function markUXSkip_(date) {
 // ===== 🎨 디자인 사례집 (매일 1개 개인 DM, 채택=시트표시만) =====
 // 시트 🎨디자인_사례 [ID,추가일,브랜드,제목,부제,핵심,적용,출처,상태,발송일시]. 상태=미발송→발송→채택/패스.
 function getDesignTab_() { return SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID).getSheetByName('🎨 디자인_사례'); }
+// 📈 개입_추적 (2026-08-03) — 개입 효과를 주별로 쌓는다. 키 = 주차|지표|대상 upsert.
+//   한 주 Before/After로는 그 주의 흔들림(광고비·유입량)에 속는다. 바페 상단 측정에서 실제로 겪음:
+//   11.1→17.5%를 "개선"으로 읽었으나 8주로 보니 원래 14~17%대였고 11.1%가 예외적 저점이었다.
+//   행 = [주차, 시작, 종료, 지표, 대상, 값, 분모, 비고, 갱신]
+function trackWeeklyUpsert_(rows) {
+  try {
+    if (!rows || !rows.length) return { ok: true, added: 0, updated: 0 };
+    var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+    var sh = ensureSheetWithHeaders_(ss, '📈 개입_추적',
+      ['주차', '시작', '종료', '지표', '대상', '값', '분모', '비고', '갱신']);
+    var data = sh.getDataRange().getValues();
+    var idx = {};
+    for (var i = 1; i < data.length; i++) idx[data[i][0] + '|' + data[i][3] + '|' + data[i][4]] = i + 1;
+    var added = 0, updated = 0, now = new Date();
+    rows.forEach(function (r) {
+      r[8] = now;
+      var k = r[0] + '|' + r[3] + '|' + r[4];
+      if (idx[k]) { sh.getRange(idx[k], 1, 1, 9).setValues([r]); updated++; }
+      else { sh.appendRow(r); added++; }
+    });
+    SpreadsheetApp.flush();
+    return { ok: true, added: added, updated: updated };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
 // 자동보충 적재 — report.js가 Claude로 생성한 행([ID..발송일시] 10칸) append, 제목 중복 skip
 function appendDesignCases_(rows) {
   try {

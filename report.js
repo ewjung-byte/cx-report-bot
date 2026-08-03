@@ -4054,6 +4054,40 @@ ${dramaLine}
       const cr = await postToAppsScript({ action: 'append_cx_candidates', rows: candRows }, APPS_SCRIPT_URL).catch(() => null);
       console.log('[CX 후보 적재]', cr && cr.ok ? `+${cr.added}` : '실패');
     }
+    // 📈 개입_추적 주별 적재 (2026-08-03) — 개입 효과를 한 주 Before/After가 아니라 추세로 보기 위해.
+    //   바페 상단에서 실제로 속았다: 11.1→17.5%를 "개선"으로 읽었으나 8주로 보니 원래 14~17%대였다.
+    //   지표는 GA4 view_item/add_to_cart(페이지 기준)와 cafe24 실판매. 시트 쓰기는 GAS 경유.
+    try {
+      const _tk = await getGA4Token();
+      const _ga = await ga4Fetch(_tk, {
+        dateRanges: [{ startDate: thisStart, endDate: thisEnd }],
+        dimensions: [{ name: 'pagePathPlusQueryString' }, { name: 'eventName' }], metrics: [{ name: 'eventCount' }],
+        dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: ['view_item', 'add_to_cart'] } } }, limit: 3000,
+      });
+      const _bp = {};
+      (_ga.rows || []).forEach(x => {
+        const p = x.dimensionValues[0].value, ev = x.dimensionValues[1].value, n = +x.metricValues[0].value;
+        const m = p.match(/product_no=(\d+)/) || p.match(/surl\/P\/(\d+)/i);
+        if (!m) return;
+        _bp[m[1]] = _bp[m[1]] || {}; _bp[m[1]][ev] = (_bp[m[1]][ev] || 0) + n;
+      });
+      const _label = `${thisStart}~${thisEnd.slice(5)}`;
+      const _rows = [];
+      // 추적 대상 — 개입이 생기면 여기에 추가
+      [['#27 오가닉', '27'], ['#88 광고', '88'], ['#83 광고', '83']].forEach(([lb, no]) => {
+        const v = _bp[no] || {}; const vi = v.view_item || 0, ac = v.add_to_cart || 0;
+        if (!vi) return;
+        _rows.push([_label, thisStart, thisEnd, '담기율', lb, +(ac / vi * 100).toFixed(1), vi, `담기 ${ac}`, '']);
+      });
+      const _bpq = (cafe24Products && cafe24Products.byProduct) || {};
+      const _q = ['27', '88', '83'].reduce((t, n) => t + ((_bpq[n] || {}).count || 0), 0);
+      if (_q) _rows.push([_label, thisStart, thisEnd, '실판매', '바페 3종', _q, 7, `일평균 ${(_q / 7).toFixed(1)}`, '']);
+      if (_rows.length) {
+        const _tr = await postToAppsScript({ action: 'track_weekly', rows: _rows }, APPS_SCRIPT_URL).catch(() => null);
+        console.log('[개입 추적]', _tr && _tr.ok ? `+${_tr.added}·갱신${_tr.updated}` : '실패');
+      }
+    } catch (e) { console.error('[개입 추적]', e.message); }
+
     // 📍 콕핏(COMPASS E55) 갱신 — 개입기록 라이브 뷰(이번주 액션+진행중+이번달 완료). 후보 적재 후 호출.
     const rr = await postToAppsScript({ action: 'refresh_cockpit' }, APPS_SCRIPT_URL).catch(() => null);
     console.log('[콕핏 갱신]', rr && rr.ok ? `행${rr.row}` : '실패');
