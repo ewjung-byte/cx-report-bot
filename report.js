@@ -3008,18 +3008,27 @@ async function dailyReport() {
   if (cafe24 && cafe24.byProduct) {
     const all = Object.values(cafe24.byProduct).filter(v => v.count > 0).sort((a, b) => b.amount - a.amount);
     if (all.length) {
+      // ★2026-08-03 fix — "합계"가 상위 6종 합이었다(전체 아님). 8/1 실측: 표기 2,077,800 vs
+      //   원장 2,394,950, 20종 중 14종(285,050원)이 통째로 빠져 "매출이 안 맞는다"는 지적이 나왔다.
+      //   비중(%)도 6종 기준이라 실제보다 부풀려졌음(꿀동이 35% → 실제 31%).
+      //   → 합계·비중 모두 전체 기준으로 바꾸고, 안 보여준 것은 "외 N종"으로 한 줄 남긴다.
+      const totalAmt = all.reduce((s, p) => s + p.amount, 0);
       const topN = all.slice(0, 6);
-      const topAmt = topN.reduce((s, p) => s + p.amount, 0);
       const lines = topN.map(p => {
         const id = String(p.productNo);
         const customNm = PRODUCT_NAME[id];
         const label = customNm ? `${customNm} (#${id})` : `${(p.name || '제품').replace(/^\[.*?\]\s*/, '')} (#${id})`;
-        const share = topAmt > 0 ? Math.round(p.amount / topAmt * 100) : 0;
-        return `· ${label}: ${formatMoney(p.amount)} · ${p.count}건 (${share}%)`;
+        const share = totalAmt > 0 ? Math.round(p.amount / totalAmt * 100) : 0;
+        return `· ${label}: ${formatMoney(p.amount)} · ${p.count}개 (${share}%)`;
       });
+      const rest = all.slice(6);
+      if (rest.length) {
+        const restAmt = rest.reduce((s, p) => s + p.amount, 0);
+        lines.push(`· 외 ${rest.length}종: ${formatMoney(restAmt)} (${Math.round(restAmt / totalAmt * 100)}%)`);
+      }
       const t0 = topN[0], t0id = String(t0.productNo);
-      sumTop = { nm: PRODUCT_NAME[t0id] || `#${t0id}`, share: topAmt > 0 ? Math.round(t0.amount / topAmt * 100) : 0 };
-      productSalesOnly = `합계 <b>${formatMoney(topAmt)}</b>\n${lines.join('\n')}`;
+      sumTop = { nm: PRODUCT_NAME[t0id] || `#${t0id}`, share: totalAmt > 0 ? Math.round(t0.amount / totalAmt * 100) : 0 };
+      productSalesOnly = `합계 <b>${formatMoney(totalAmt)}</b> (배송비 제외 · 전체 ${all.length}종)\n${lines.join('\n')}`;
     }
   }
 
