@@ -487,12 +487,17 @@ async function getCafe24SalesByProduct(startDate, endDate) {
       if (data.orders.length < 100) break;
       offset += 100;
     }
-    const valid = allOrders.filter(o => o.paid === 'T' && o.canceled === 'F');
+    // ★paid==='T' 필터를 뺐다 (2026-08-03). 무통장 입금대기 등 미결제 주문이 빠지면서
+    //   주간 리포트가 실제보다 낮게 나오고 있었음. 7/27~8/2 실측 기준 #88 -141,000 ·
+    //   #83 -79,600 · #106 -61,400 = 총 28만원 누락. 이 숫자가 광고 ROAS 분모로 쓰여
+    //   유튜브·피맥스 효율이 실제보다 나쁘게 보였다. 취소는 아이템 단위(order_status C*)로 뺀다.
+    const valid = allOrders.filter(o => o.canceled === 'F');
 
     const byProduct = {};
     valid.forEach(o => {
       const items = Array.isArray(o.items) ? o.items : (o.items ? [o.items] : []);
       items.forEach(item => {
+        if (/^C/.test(String(item.order_status || ''))) return; // 취소·반품 아이템 제외
         const raw = item.product_name_default || item.product_name || '';
         const name = raw.replace(/^\[.*?\]\s*/, '').trim();
         if (!name) return;
@@ -500,11 +505,13 @@ async function getCafe24SalesByProduct(startDate, endDate) {
         const key = `${productNo}`;
         const price = parseFloat(item.product_price || 0) + parseFloat(item.option_price || 0);
         const qty = parseInt(item.quantity || 1);
-        if (!byProduct[key]) byProduct[key] = { productNo, name, count: 0, amount: 0 };
-        byProduct[key].count += qty;
+        if (!byProduct[key]) byProduct[key] = { productNo, name, count: 0, amount: 0, orders: new Set() };
+        byProduct[key].count += qty;      // ★수량이지 주문수가 아니다 (문구는 "개")
         byProduct[key].amount += price * qty;
+        byProduct[key].orders.add(o.order_id);
       });
     });
+    Object.values(byProduct).forEach(v => { v.orderCount = v.orders.size; delete v.orders; });
 
     const totalSales = Object.values(byProduct).reduce((s, v) => s + v.amount, 0);
     // ★공구 전용상품이 들어간 주문의 "장바구니 전체" 합계 (2026-08-01)
@@ -519,6 +526,7 @@ async function getCafe24SalesByProduct(startDate, endDate) {
         if (!items.some(i => String(i.product_no) === key)) return;
         orders++;
         items.forEach(i => {
+          if (/^C/.test(String(i.order_status || ''))) return; // 취소·반품 아이템 제외
           const q = parseInt(i.quantity || 1);
           qty += q;
           amount += q * (parseFloat(i.product_price || 0) + parseFloat(i.option_price || 0));
@@ -3939,38 +3947,83 @@ async function weeklyReport() {
     ? `🔔 <b>운영 중 CRM</b> (봇 인지): ${crm.running.join(' · ')}\n\n` : '';
   const weeklyActionSection = weeklyActions.length ? `📊 <b>저번주 분석 → 🎯 이번주 액션</b>\n${weeklyActions.join('\n')}\n\n` : '';
 
+  // 📈 4주 추세 (2026-08-03 추가) — 주간_레버 시트 누적을 읽어 방향을 보여준다.
+  //   단독 숫자만 보면 오르는 중인지 내리는 중인지 모른다. 시트엔 13주가 이미 쌓여 있었다.
+  let trendLine = '';
+  try {
+    const _tk = await getGA4Token();
+    const _tu = `https://sheets.googleapis.com/v4/spreadsheets/${DESIGN_SHEET_ID}/values/${encodeURIComponent('주간_레버!A1:H60')}`;
+    const _td = await fetchJson(_tu, { 'Authorization': 'Bearer ' + _tk });
+    const _rows = (_td.values || []).filter(r => r && r[0]);
+    const _hd = _rows[0] || [];
+    const _ix = (name) => _hd.findIndex(h => String(h).replace(/\s/g, '').includes(name));
+    const last4 = _rows.slice(1).slice(-4);
+    if (last4.length >= 3) {
+      const pick = (name, fix) => {
+        const c = _ix(name); if (c < 0) return null;
+        const v = last4.map(r => { const n = parseFloat(String(r[c] || '').replace(/[^\d.]/g, '')); return isNaN(n) ? null : n; });
+        if (v.filter(x => x != null).length < 3) return null;
+        const txt = v.map(x => x == null ? '-' : (fix != null ? x.toFixed(fix) : Math.round(x))).join(' → ');
+        // 화살표 = 직전 주 대비(최근 두 값). 첫값 대비로 하면 484→293→313→476이 ↘로 찍혀
+        // '떨어졌다 회복 중'을 '하락'으로 오해하게 된다.
+        const vv = v.filter(x => x != null);
+        const lst = vv[vv.length - 1], prv = vv[vv.length - 2];
+        const arrow = lst > prv ? '↗' : (lst < prv ? '↘' : '→');
+        return { txt, arrow };
+      };
+      const rows = [];
+      const a = pick('재구매율', 1); if (a) rows.push(`재구매율 ${a.txt}% ${a.arrow}`);
+      const b = pick('게스트', 0);   if (b) rows.push(`게스트 ${b.txt}% ${b.arrow}`);
+      const c = pick('레시피PV', 0); if (c) rows.push(`레시피PV ${c.txt} ${c.arrow}`);
+      if (rows.length) trendLine = `📈 <b>4주 추세</b>\n${rows.join('\n')}\n\n`;
+    }
+  } catch (e) { console.error('[4주 추세]', e.message); }
+
+  // 💳 결제수단 (2026-08-03 추가) — cafe24 원장 기준이라 GA4 누락과 무관하게 처음부터 정확.
+  //   미주는 채널별 매출(자사몰/네이버/쿠팡)만 보고 "자사몰 안에서 뭘로 결제했나"는 아무도 안 본다.
+  //   네이버페이는 외부(주문형=게스트)와 결제창 버튼(회원多)이 섞여 있어 분해해서 본다.
+  let payLine = '데이터 없음';
+  try {
+    const [_dc, _dp] = await Promise.all([
+      getCafe24DailyOrders(thisStart, thisEnd),
+      getCafe24DailyOrders(dateStr(14), dateStr(8)),
+    ]);
+    const _pc = (_dc && _dc.payMethods) || null;
+    const _pp = (_dp && _dp.payMethods) || null;
+    if (_pc) {
+      const dd = (a, b) => (b ? ` ${a - b >= 0 ? '↑' : '↓'}${Math.abs(Math.round((a - b) / b * 100))}%` : '');
+      const parts = ['네이버페이', '자체결제', '카카오페이', '기타간편']
+        .filter(k => _pc[k] > 0)
+        .map(k => `${k} ${_pc[k]}건${_pp ? dd(_pc[k], _pp[k]) : ''}`);
+      const tot = (_pc.회원 || 0) + (_pc.비회원 || 0);
+      const guestPct = tot ? Math.round(_pc.비회원 / tot * 100) : null;
+      const gPrev = _pp && (_pp.회원 + _pp.비회원) ? Math.round(_pp.비회원 / (_pp.회원 + _pp.비회원) * 100) : null;
+      payLine = parts.join(' · ')
+        + (guestPct != null ? `\n비회원 ${guestPct}%${gPrev != null ? ` (전주 ${gPrev}%)` : ''} · 네이버 외부주문 ${_pc.네이버_외부}건` : '');
+    }
+  } catch (e) { }
+
+  const dramaLine = (drama && drama.hit)
+    ? `\n🎬 <b>드라마 협찬</b> 방영시간대 ${drama.slotRatio.toFixed(2)}배 · 브랜드검색 ${drama.brandRatio.toFixed(2)}배 → <b>${drama.verdict}</b> 🎬\n`
+    : ''; // 신호 없으면 아예 안 씀 (3주째 "신호 없음"만 나가던 줄)
+
   const weeklyMsg = `📈 <b>이태리정미소 지난주 CX 리포트</b>
 📅 ${display}
 ━━━━━━━━━━━━━━━━━
-${weeklyActionSection}${crmRunLine}🔁 <b>리텐션</b> (회원·90일)
+${weeklyActionSection}🔁 <b>리텐션</b> (회원·90일)
 ${repurchase
-  ? `재구매율 ${repurchase.repurchaseRate.toFixed(1)}% (${repurchase.repeatMembers}/${repurchase.distinctMembers}명)${repurchase.avgDaysToRepeat != null ? ` · 평균 ${repurchase.avgDaysToRepeat}일` : ''} · 재구매 매출비중 ${repurchase.week.repShare.toFixed(0)}%
-신규 ${formatMoney(repurchase.week.newAmt)}(${repurchase.week.newCount}건) / 재구매 ${formatMoney(repurchase.week.repAmt)}(${repurchase.week.repCount}건)${repurchase.week.guestCount ? ` / 비회원 ${formatMoney(repurchase.week.guestAmt)}(${repurchase.week.guestCount}건)` : ''}`
+  ? `재구매율 ${repurchase.repurchaseRate.toFixed(1)}% (${repurchase.repeatMembers}/${repurchase.distinctMembers}명)${repurchase.avgDaysToRepeat != null ? ` · 평균 ${repurchase.avgDaysToRepeat}일` : ''}
+⭐ 깨울 타겟(D+21~35) <b>${goldenZone?.d21_35 ?? '-'}명</b> · 휴면 ${goldenZone?.d91 ?? '-'}명`
   : '데이터 없음'}
-⭐ 깨울 타겟(D+21~35): <b>${goldenZone?.d21_35 ?? '-'}명</b> · 휴면(D91+) ${goldenZone?.d91 ?? '-'}명 · 등급쿠폰 사용 ${couponConv?.coupons?.length ? Math.round(couponConv.coupons.reduce((s, c) => s + c.rate, 0) / couponConv.coupons.length) + '%' : '-'}
 
-📲 <b>UTM 유입→구매</b> (자사몰결제 최소치)
-${utmLine}
+${trendLine}💳 <b>결제수단</b> (cafe24 원장)
+${payLine}
 
-📊 <b>유입</b> (전주대비)
+📊 <b>유입 경로</b> (전주대비)
 ${chLines}${searchSplit}
 ${userTypeLine}
-📄 페이지뷰: ${pvLine.replace(/\n/g, ' · ')}
-
-🛍️ <b>상품별 실판매</b> (cafe24 top 5)
-${productLines || '데이터 없음'}
-
-🎬 <b>드라마 협찬</b> (KBS2 사랑이 온다 · 토·일)
-${drama
-  ? `방영시간대 ${drama.slotRatio.toFixed(2)}배${drama.slotPeak ? `(${drama.slotPeak.s} ${drama.slotPeak.base}→${drama.slotPeak.cur})` : ''} · 브랜드검색 ${drama.brandRatio.toFixed(2)}배(${drama.brandBase.toFixed(0)}→${drama.brandCur.toFixed(0)}) · 신규비율 ${drama.newCur.toFixed(0)}%(${drama.newDiff >= 0 ? '+' : ''}${drama.newDiff.toFixed(1)}%p)\n→ <b>${drama.verdict}</b>${drama.hit ? ' 🎬' : ''}`
-  : '측정 실패'}
-
-👁️ <b>사이트 마찰</b> (Clarity)
-스크립트 에러: ${clarity?.scriptErrorPct?.toFixed(1)||'-'}% ${clarity ? icon(clarity.scriptErrorPct,10,30) : ''} | 빠른뒤로가기: ${clarity?.quickbackPct?.toFixed(1)||'-'}% ${clarity ? icon(clarity.quickbackPct,8,15) : ''}
-※ 🟢정상 🟡주의 🔴이상 — 노란불 이상이면 그 주에 파볼 것
-
-⭐ <b>새 리뷰</b> (이번주 등록분)
-${reviews ? (reviews.count ? `${reviews.count}건 · 평균 ${reviews.avg}점${reviews.dist.low ? ` · ⚠️3점이하 ${reviews.dist.low}건` : ''}` : '이번주 새 리뷰 없음') : '데이터 없음'}`;
+${dramaLine}
+<i>※ 매출·광고 ROAS·퍼널·상품별·리뷰는 송마망봇 월요일 보고 (중복 제거)</i>`;
 
   const claudeMsg = analysis ? `🤖 <b>이번 주 판단</b>\n${analysis}` : '';
 
