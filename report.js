@@ -507,8 +507,27 @@ async function getCafe24SalesByProduct(startDate, endDate) {
     });
 
     const totalSales = Object.values(byProduct).reduce((s, v) => s + v.amount, 0);
-    return { totalSales, count: valid.length, byProduct };
-  } catch(e) { console.error('Cafe24 상품별 오류:', e.message); return { totalSales: 0, count: 0, byProduct: {} }; }
+    // ★공구 전용상품이 들어간 주문의 "장바구니 전체" 합계 (2026-08-01)
+    //   byProduct는 전용상품만 세므로 크로스셀(파스타·빵 동반구매)이 안 보인다.
+    //   꿀동이 2차 실측: 전용상품 2,624,800 vs 장바구니 전체 3,767,750 = 크로스셀이 매출의 30%.
+    //   인플루언서 재계약 협상에서 공구의 실제 값어치가 이 차액에 들어있다.
+    const basketBy = (pno) => {
+      const key = String(pno);
+      let orders = 0, qty = 0, amount = 0;
+      valid.forEach(o => {
+        const items = Array.isArray(o.items) ? o.items : (o.items ? [o.items] : []);
+        if (!items.some(i => String(i.product_no) === key)) return;
+        orders++;
+        items.forEach(i => {
+          const q = parseInt(i.quantity || 1);
+          qty += q;
+          amount += q * (parseFloat(i.product_price || 0) + parseFloat(i.option_price || 0));
+        });
+      });
+      return { orders, qty, amount };
+    };
+    return { totalSales, count: valid.length, byProduct, basketBy };
+  } catch(e) { console.error('Cafe24 상품별 오류:', e.message); return { totalSales: 0, count: 0, byProduct: {}, basketBy: () => ({ orders: 0, qty: 0, amount: 0 }) }; }
 }
 
 // ── 일별 주문 요약 (매출 + 유입경로 + 결제수단) ──────────
@@ -1115,9 +1134,13 @@ async function getActivePromoFunnel(promos) {
       const gaS = p._camps.reduce((a, c) => a + (gaMap[c] || 0), 0);
       const sales = await getCafe24SalesByProduct(p.start, dateStr(0));
       const pd = sales.byProduct[String(p.productNo)] || { count: 0, amount: 0 };
+      // ★"건"이 아니라 수량이었음(옵션상품은 주문수와 다름) + 크로스셀 별도 표기 (2026-08-01)
+      const bk = sales.basketBy ? sales.basketBy(p.productNo) : { orders: 0, amount: 0 };
+      const cross = Math.round(bk.amount - pd.amount);
       lines.push(`${p.type === '공구' ? '🟠' : '🔵'} <b>${p.who}</b> (${p.start.slice(5).replace('-', '/')}~ 누적)`
         + `\n· 유입: 실클릭 ${myClicks.length}${inapp ? ` (인앱 ${inapp})` : ''}${gaS ? ` · GA4 ${gaS}세션` : ''}`
-        + `\n· 구매: #${p.productNo} <b>${pd.count}건 · ${formatMoney(Math.round(pd.amount))}</b>`);
+        + `\n· 구매: #${p.productNo} <b>${pd.count}개 · ${formatMoney(Math.round(pd.amount))}</b> (전용상품만${bk.orders ? ` · 주문 ${bk.orders}건` : ''})`
+        + (cross > 0 ? `\n· 크로스셀 포함 총매출 <b>${formatMoney(Math.round(bk.amount))}</b> (+${formatMoney(cross)}, ${Math.round(cross / bk.amount * 100)}%)` : ''));
     }
     return lines.length ? `\n\n📣 <b>진행중 캠페인</b> (시작~지금 · 구매=cafe24 진실)\n${lines.join('\n')}` : '';
   } catch (e) { console.error('[진행중 캠페인 퍼널]', e.message); return ''; }
@@ -1134,7 +1157,10 @@ async function getPromoWrapups(promoSchedule) {
       if (p.productNo) {
         const s = await getCafe24SalesByProduct(p.start, p.end);
         const pd = s.byProduct[p.productNo] || { count: 0, amount: 0 };
-        line += `\n· 💰 전용상품 #${p.productNo}: <b>${pd.count}건 · ${formatMoney(Math.round(pd.amount))}</b>`;
+        const bk = s.basketBy ? s.basketBy(p.productNo) : { orders: 0, amount: 0 };
+        const cr = Math.round(bk.amount - pd.amount);
+        line += `\n· 💰 전용상품 #${p.productNo}: <b>${pd.count}개 · ${formatMoney(Math.round(pd.amount))}</b>${bk.orders ? ` (주문 ${bk.orders}건)` : ''}`;
+        if (cr > 0) line += `\n· 🛒 크로스셀 포함 총매출: <b>${formatMoney(Math.round(bk.amount))}</b> (+${formatMoney(cr)}, ${Math.round(cr / bk.amount * 100)}%) — 재계약 협상 근거`;
       } else {
         line += `\n· ⚠️ 상품번호 미기입(공구&광고 시트 상품번호 열) — 매출 자동집계 불가`;
       }
@@ -4030,6 +4056,8 @@ if (require.main === module) {
 
 // personal-metrics 등 외부 스크립트에서 데이터 수집 함수 재사용
 module.exports = {
+  getActivePromos,
+  fetchPromoSchedule, getActivePromoFunnel,
   refreshCafe24Token,
   getCafe24Sales,
   getCafe24SalesByProduct,
