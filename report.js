@@ -1588,7 +1588,7 @@ async function getGA4Daily(dateStrYmd) {
     // 전일(D-1) 채널 — 유입 섹션 전일대비용
     const _pv = new Date(dateStrYmd + 'T00:00:00Z'); _pv.setUTCDate(_pv.getUTCDate() - 1);
     const prevYmd = _pv.toISOString().slice(0, 10);
-    const [chRes, utRes, pageRes, funnelRes, chPrevRes, devRes] = await Promise.all([
+    const [chRes, utRes, pageRes, funnelRes, chPrevRes, devRes, engRes] = await Promise.all([
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'sessionDefaultChannelGroup'}], limit: 8, orderBys:[{metric:{metricName:'sessions'},desc:true}] }),
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'},{name:'ecommercePurchases'}], dimensions:[{name:'newVsReturning'}] }),
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'screenPageViews'},{name:'sessions'}], dimensions:[{name:'pagePathPlusQueryString'}], limit: 40, orderBys:[{metric:{metricName:'screenPageViews'},desc:true}] }),
@@ -1598,6 +1598,8 @@ async function getGA4Daily(dateStrYmd) {
       ga4Fetch(token, { dateRanges:[{startDate:prevYmd,endDate:prevYmd}], metrics:[{name:'sessions'}], dimensions:[{name:'sessionDefaultChannelGroup'}], limit: 12 }),
       // 디바이스(모바일/PC) — Clarity 한도 시 방문환경 백업용 (Clarity와 독립적으로 GA4가 항상 채움)
       ga4Fetch(token, { dateRanges:[range], metrics:[{name:'sessions'}], dimensions:[{name:'deviceCategory'}] }),
+      // 체류시간·페이지뎁스 — 오늘+전일 두 구간 한 쿼리(dateRange 차원 자동 추가). 나중 추세비교용으로 스냅샷에도 적재
+      ga4Fetch(token, { dateRanges:[range, {startDate:prevYmd, endDate:prevYmd}], metrics:[{name:'averageSessionDuration'},{name:'screenPageViewsPerSession'}] }),
     ]);
     // 디바이스 집계
     const devMap = {};
@@ -1641,7 +1643,16 @@ async function getGA4Daily(dateStrYmd) {
     checkoutFunnel.checkoutToPurchasePct = checkoutFunnel.beginCheckout > 0
       ? Math.round(checkoutFunnel.purchase / checkoutFunnel.beginCheckout * 100) : null;
 
-    return { channels, channelsPrev, userType, surlSessions, checkoutFunnel, totalSessions: ga4Sessions, mobilePct: ga4MobilePct, pcPct: ga4PcPct };
+    // 체류·뎁스 (dateRanges 2개면 rows에 date_range_0/1 차원이 붙음)
+    const eng = { durSec: 0, pages: 0, durSecPrev: 0, pagesPrev: 0 };
+    (engRes.rows || []).forEach(r => {
+      const which = (r.dimensionValues && r.dimensionValues[0]) ? r.dimensionValues[0].value : 'date_range_0';
+      const dur = parseFloat(r.metricValues[0].value || 0);
+      const pg = parseFloat(r.metricValues[1].value || 0);
+      if (which === 'date_range_0') { eng.durSec = dur; eng.pages = pg; }
+      else { eng.durSecPrev = dur; eng.pagesPrev = pg; }
+    });
+    return { channels, channelsPrev, userType, surlSessions, checkoutFunnel, totalSessions: ga4Sessions, mobilePct: ga4MobilePct, pcPct: ga4PcPct, engagement: eng };
   } catch(e) { console.error('GA4 일간 오류:', e.message); return null; }
 }
 
@@ -1727,7 +1738,7 @@ async function pushExternalOrdersToGA4(date) {
 }
 
 // 일별 스냅샷 — Before/After 측정 + 7일 이동평균 폭증 감지용
-function buildDailySnapshot(date, { clarity, dailyOrders, segments, meta, adAudit, pageStats, ltv }) {
+function buildDailySnapshot(date, { clarity, dailyOrders, segments, meta, adAudit, pageStats, ltv, ga4Daily }) {
   const findP = (pno) => pickClarityPage(pageStats?.byUrl, v => v.url.includes(`product_no=${pno}`) || v.url.includes(`/surl/p/${pno}`));
   const findCO = (prefix) => pickClarityPage(pageStats?.byUrl, v => v.url.startsWith(prefix));
   const basket = findCO('/order/basket'), orderform = findCO('/order/orderform'), login = findCO('/member/login');
@@ -1782,6 +1793,9 @@ function buildDailySnapshot(date, { clarity, dailyOrders, segments, meta, adAudi
     LTV_상위10_점유: ltv?.상위10_매출점유 || 0,
     LTV_휴면_91_180d: ltv?.휴면_91_180d || 0,
     LTV_신규_D30_retention: ltv?.신규_D30_retention || 0,
+    // 체류·뎁스 (2026-08-04 추가) — 시트 헤더명과 동일해야 적재됨(GAS가 헤더 키로 매핑)
+    GA4_체류초: Math.round(ga4Daily?.engagement?.durSec || 0),
+    GA4_페이지뎁스: +(ga4Daily?.engagement?.pages || 0).toFixed(2),
   };
 }
 
@@ -3133,6 +3147,14 @@ async function dailyReport() {
     concl.push(`💰 매출 <b>${formatMoney(dailyOrders.revenue)}</b> · 🛒 ${ordN}건${sumFlow?.cvr ? ` · ⚡ 전환 <b>${sumFlow.cvr}%</b>` : ''}`);
   }
   if (sumFlow) concl.push(`🚪 유입 <b>${sumFlow.tot.toLocaleString()}세션</b>${sumFlow.arrow}`);
+  // ⏱ 체류·페이지뎁스 — 사이트가 좋아지는지 나쁜지 추세 비교용 (2026-08-04 은우 요청)
+  if (ga4Daily?.engagement?.durSec > 0) {
+    const e = ga4Daily.engagement;
+    const fmtDur = (s) => s >= 60 ? `${Math.floor(s / 60)}분 ${Math.round(s % 60)}초` : `${Math.round(s)}초`;
+    const durArrow = e.durSecPrev > 0 ? ` (전일 ${fmtDur(e.durSecPrev)})` : '';
+    const pgArrow = e.pagesPrev > 0 ? ` (전일 ${e.pagesPrev.toFixed(1)})` : '';
+    concl.push(`⏱ 체류 <b>${fmtDur(e.durSec)}</b>${durArrow} · 📄 뎁스 <b>${e.pages.toFixed(1)}p</b>${pgArrow}`);
+  }
   if (sumTop) concl.push(`${sumTop.share >= 60 ? '🚨' : '🎯'} 톱 SKU ${sumTop.nm} <b>${sumTop.share}%</b>${sumTop.share >= 60 ? ' ← 집중 극단' : ''}`);
   if (sumSeg) concl.push(`🔁 첫구매 <b>${sumSeg.first}%</b> : 재구매 <b>${sumSeg.rep}%</b>`);
   const conclusionBlock = concl.length ? `\n🧭 <b>오늘의 결론</b>\n${concl.join('\n')}\n━━━━━━━━━━━━━━━━━` : '';
@@ -3268,7 +3290,7 @@ ${productSalesOnly}${activeFunnelSection}${promoScheduleSection}${wrapupSection}
     let ltv = null;
     try { ltv = await calculateLTVMetrics(today); }
     catch (e) { console.error('[LTV 계산] 실패:', e.message); }
-    const snap = buildDailySnapshot(today, { clarity, dailyOrders, segments, meta: metaToday, adAudit, pageStats, ltv });
+    const snap = buildDailySnapshot(today, { clarity, dailyOrders, segments, meta: metaToday, adAudit, pageStats, ltv, ga4Daily });
     const res = await saveDailySnapshot(snap);
     console.log(`[일별 스냅샷] ${today} 저장 → ${res && res.ok ? 'OK' : JSON.stringify(res)}`);
   } catch (e) { console.error('[일별 스냅샷] 실패:', e.message); }
