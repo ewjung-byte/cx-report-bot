@@ -1950,16 +1950,16 @@ function getLevers_() {
 function findEunwooMemoCell_() {
   var sh = SpreadsheetApp.openById(STRATEGY_SHEET_ID).getSheetByName('🧭 COMPASS');
   if (!sh) return null;
-  var aCol = sh.getRange('A49:A60').getValues();
+  var aCol = sh.getRange('A1:A60').getValues();
   for (var i = 0; i < aCol.length; i++) {
-    if (String(aCol[i][0]).trim() === '은우') return sh.getRange(49 + i, 3); // C열 = 개인메모
+    if (String(aCol[i][0]).trim() === '은우') return sh.getRange(1 + i, 3); // C열 = 개인메모 (2026-08-03 행 이동 반영)
   }
   return null;
 }
 function appendEunwooCompassMemo_(text) {
   try {
     var cell = findEunwooMemoCell_();
-    if (!cell) return { ok: false, error: '은우 행 못 찾음 (COMPASS A49:A60)' };
+    if (!cell) return { ok: false, error: '은우 행 못 찾음 (COMPASS A1:A60)' };
     var cur = String(cell.getValue() || '');
     var d = Utilities.formatDate(new Date(), 'Asia/Seoul', 'MM/dd');
     var line = '• ' + d + ' ' + text;
@@ -1979,10 +1979,10 @@ function getEunwooCompassRow_() {
   try {
     var sh = SpreadsheetApp.openById(STRATEGY_SHEET_ID).getSheetByName('🧭 COMPASS');
     if (!sh) return { ok: false, error: 'COMPASS 없음' };
-    var aCol = sh.getRange('A49:A60').getValues();
+    var aCol = sh.getRange('A1:A60').getValues();
     for (var i = 0; i < aCol.length; i++) {
       if (String(aCol[i][0]).trim() === '은우') {
-        var row = 49 + i, v = sh.getRange(row, 1, 1, 5).getValues()[0];
+        var row = 1 + i, v = sh.getRange(row, 1, 1, 5).getValues()[0];
         return { ok: true, row: row, focus: String(v[1] || ''), memo: String(v[2] || ''), work: String(v[3] || ''), cockpit: String(v[4] || '') };
       }
     }
@@ -1995,10 +1995,10 @@ function getOneThing_() {
   try {
     var sh = SpreadsheetApp.openById(STRATEGY_SHEET_ID).getSheetByName('🧭 COMPASS');
     if (!sh) return '';
-    var aCol = sh.getRange('A49:A60').getValues();
+    var aCol = sh.getRange('A1:A60').getValues();
     for (var i = 0; i < aCol.length; i++) {
       if (String(aCol[i][0]).trim() === '은우') {
-        return String(sh.getRange(49 + i, 2).getValue() || '').replace(/^[·\s]+/, '').trim();
+        return String(sh.getRange(1 + i, 2).getValue() || '').replace(/^[·\s]+/, '').trim();
       }
     }
   } catch (e) {}
@@ -2008,12 +2008,12 @@ function setOneThing_(v) {
   try {
     var sh = SpreadsheetApp.openById(STRATEGY_SHEET_ID).getSheetByName('🧭 COMPASS');
     if (!sh) return { ok: false, error: 'COMPASS 없음' };
-    var aCol = sh.getRange('A49:A60').getValues();
+    var aCol = sh.getRange('A1:A60').getValues();
     for (var i = 0; i < aCol.length; i++) {
       if (String(aCol[i][0]).trim() === '은우') {
-        sh.getRange(49 + i, 2).setValue(v ? '· ' + v : '').setWrap(true).setVerticalAlignment('top');
+        sh.getRange(1 + i, 2).setValue(v ? '· ' + v : '').setWrap(true).setVerticalAlignment('top');
         SpreadsheetApp.flush();
-        return { ok: true, row: 49 + i };
+        return { ok: true, row: 1 + i };
       }
     }
     return { ok: false, error: '은우 행 못 찾음' };
@@ -2025,24 +2025,39 @@ function renderMemoCell_() {
   try {
     var sh = SpreadsheetApp.openById(STRATEGY_SHEET_ID).getSheetByName('🧭 COMPASS');
     if (!sh) return { ok: false };
-    var aCol = sh.getRange('A49:A60').getValues();
+    var aCol = sh.getRange('A1:A60').getValues();
     for (var i = 0; i < aCol.length; i++) {
       if (String(aCol[i][0]).trim() === '은우') {
         var memo = PropertiesService.getScriptProperties().getProperty('EUNWOO_MEMO') || '';
         var lines = memo.split('\n').filter(function (s) { return s.trim(); });
-        var txt = '📝 메모 (' + lines.length + ')\n\n' + (lines.length ? lines.join('\n') : '· (비어있음 — 봇에 /메모 [내용])');
-        var cell = sh.getRange(49 + i, 5); // E열=비고
+        var memoBlock = '📝 메모 (' + lines.length + ')\n\n' + (lines.length ? lines.join('\n') : '· (비어있음 — 봇에 /메모 [내용])');
+        var cell = sh.getRange(1 + i, 5); // E열=비고
+        // ★E열 위쪽에 은우가 손으로 쓴 내용(성과추적·자동화 목록 등)을 보존한다 (2026-08-03).
+        //   예전엔 통째로 덮어써서 은우가 적어둔 게 갱신 때마다 사라졌다.
+        //   규칙: "📝 메모" 앞부분은 그대로 두고 메모 블록만 갈아끼운다.
+        var prev = String(cell.getValue() || '');
+        var mi = prev.indexOf('📝 메모');
+        var head = mi > 0 ? prev.slice(0, mi).replace(/\s+$/, '') : (mi < 0 ? prev.replace(/\s+$/, '') : '');
+        var txt = head ? (head + '\n\n' + memoBlock) : memoBlock;
         cell.setValue(txt);
         cell.setWrap(true).setVerticalAlignment('top').setFontSize(11);
         SpreadsheetApp.flush();
         try {
           var b = SpreadsheetApp.newRichTextValue().setText(txt);
-          b.setTextStyle(0, txt.indexOf('\n') > 0 ? txt.indexOf('\n') : txt.length,
-            SpreadsheetApp.newTextStyle().setBold(true).setFontSize(13).setForegroundColor('#cc0000').build());
+          // ★E열 제목줄 서식 = 초록·볼드·기울임 (2026-08-03 은우 지정).
+          //   📈 성과 추적(은우가 손으로 쓴 head)과 📝 메모(봇 블록) 둘 다 같은 결로.
+          //   이전엔 메모만 칠하고 head는 안 칠해서 갱신할 때마다 성과추적 서식이 날아갔다.
+          var titleStyle = SpreadsheetApp.newTextStyle().setBold(true).setItalic(true).setFontSize(13).setForegroundColor('#1c7843').build();
+          var _ls = txt.split('\n'), _p = 0;
+          for (var _i = 0; _i < _ls.length; _i++) {
+            var _ln = _ls[_i];
+            if (/^(📈|📝|📌|📊)/.test(_ln) && _ln.length > 0) b.setTextStyle(_p, _p + _ln.length, titleStyle);
+            _p += _ln.length + 1;
+          }
           cell.setRichTextValue(b.build());
           SpreadsheetApp.flush();
         } catch (e) {}
-        return { ok: true, row: 49 + i, count: lines.length };
+        return { ok: true, row: 1 + i, count: lines.length };
       }
     }
   } catch (e) { return { ok: false, error: e.message }; }
@@ -2053,10 +2068,12 @@ function setEunwooCompassRemarks_(text) {
   try {
     var sh = SpreadsheetApp.openById(STRATEGY_SHEET_ID).getSheetByName('🧭 COMPASS');
     if (!sh) return { ok: false, error: 'COMPASS 없음' };
-    var aCol = sh.getRange('A49:A60').getValues();
+    // ★탐색 범위 A49:A60 → A1:A60 (2026-08-03). 미주가 COMPASS 구조를 바꿔 은우 행이 55→9로
+    //   옮겨지면서 범위 밖으로 나가 refresh_cockpit이 "은우 행 못 찾음"으로 실패하고 있었다.
+    var aCol = sh.getRange('A1:A60').getValues();
     for (var i = 0; i < aCol.length; i++) {
       if (String(aCol[i][0]).trim() === '은우') {
-        var cell = sh.getRange(49 + i, 4); // ★D열=서브(잊지 말 것) — 다른 직원(미주·경태)과 통일 (2026-07-14, 이전 E열)
+        var cell = sh.getRange(1 + i, 4); // ★D열=서브(잊지 말 것) — 다른 직원(미주·경태)과 통일 (2026-07-14, 이전 E열)
         // ★2026-06-23 신뢰성 재설계: RichText 단독 쓰기가 간헐적 미커밋(ok뜨는데 셀 안바뀜) →
         //   ① 평문 setValue로 내용 먼저 확실히 박고 ② 굵게는 best-effort ③ 읽기검증 안되면 재시도.
         cell.setValue(text);
@@ -2064,7 +2081,8 @@ function setEunwooCompassRemarks_(text) {
         SpreadsheetApp.flush();
         try { // 섹션 헤더 굵게 (실패해도 내용은 이미 박힘)
           var b = SpreadsheetApp.newRichTextValue().setText(text);
-          var headStyle = SpreadsheetApp.newTextStyle().setBold(true).setFontSize(13).setForegroundColor('#1155cc').build();
+          // 2026-08-03 은우 지정: 제목·영역 = 빨강·볼드·기울임(밑줄 X) / ↳ 하위 현재상황만 파랑
+          var headStyle = SpreadsheetApp.newTextStyle().setBold(true).setItalic(true).setFontSize(13).setForegroundColor('#cc0000').build();
           var strikeStyle = SpreadsheetApp.newTextStyle().setStrikethrough(true).setForegroundColor('#888888').build();
           // 오프셋 = UTF-16 (setTextStyle 기준). ↳ 현재상황 빨강 (은우 2026-07-16). ★이모지 오프셋 이슈 겪었으나 setTextStyle=UTF-16 확인, .length 그대로가 맞음
           var lines = text.split('\n'), pos = 0, inDone = false;
@@ -2075,7 +2093,7 @@ function setEunwooCompassRemarks_(text) {
               inDone = ln.indexOf('이번주 한 일') >= 0; // 이 섹션 안의 항목만 취소선
             }
             // 이번주 한 일 = 취소선 (월요일 보고 후 눈으로 바로 구분)
-            else if (/^▸/.test(ln)) b.setTextStyle(pos, pos + ln.length, SpreadsheetApp.newTextStyle().setBold(true).setItalic(true).setFontSize(12).setForegroundColor('#1155cc').build()); // 영역 헤더 = 파랑·기울임 (은우 요청 2026-07-16, 빨강→파랑 가독성)
+            else if (/^▸/.test(ln)) b.setTextStyle(pos, pos + ln.length, SpreadsheetApp.newTextStyle().setBold(true).setItalic(true).setFontSize(12).setForegroundColor('#cc0000').build()); // 영역 헤더 = 빨강·볼드·기울임 (2026-08-03)
             else if (inDone && ln.length > 0 && ln.indexOf('· ') >= 0) b.setTextStyle(pos, pos + ln.length, strikeStyle);
             else if (ln.indexOf('↳') >= 0) { // 진행 상황(↳)의 현재값 = 빨강 강조: "A → B → C"면 마지막 C만, 화살표 없으면 ↳ 이후 전체
               var _ai = ln.lastIndexOf('→');
@@ -2089,14 +2107,14 @@ function setEunwooCompassRemarks_(text) {
           SpreadsheetApp.flush();
         } catch (e) {}
         // 검증: 셀 내용이 새 텍스트로 안 바뀌었으면 평문으로 한 번 더 강제
-        if (String(sh.getRange(49 + i, 4).getValue()).indexOf(text.slice(0, 18)) < 0) {
-          sh.getRange(49 + i, 4).setValue(text);
+        if (String(sh.getRange(1 + i, 4).getValue()).indexOf(text.slice(0, 18)) < 0) {
+          sh.getRange(1 + i, 4).setValue(text);
           SpreadsheetApp.flush();
         }
-        return { ok: true, row: 49 + i };
+        return { ok: true, row: 1 + i };
       }
     }
-    return { ok: false, error: '은우 행 못 찾음 (COMPASS A49:A60)' };
+    return { ok: false, error: '은우 행 못 찾음 (COMPASS A1:A60)' };
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
@@ -3010,37 +3028,103 @@ function appendDesignCases_(rows) {
     var sh = getDesignTab_();
     if (!sh) return { ok: false, error: '시트 없음' };
     var data = sh.getDataRange().getValues();
-    var titles = {}; for (var i = 1; i < data.length; i++) titles[String(data[i][3] || '').trim()] = true;
-    var added = [];
+    // ★제목만 보면 Our Place처럼 제목이 조금 다른 같은 사이트가 통과한다(2026-08-06) → 도메인도 막는다
+    var titles = {}, doms = {};
+    for (var i = 1; i < data.length; i++) {
+      titles[String(data[i][3] || '').trim()] = true;
+      var d0 = designDomain_(data[i][7]);
+      if (d0) doms[d0] = true;
+    }
+    var added = [], skipped = [];
     (rows || []).forEach(function (r) {
       var t = String(r[3] || '').trim();
       if (!t || titles[t]) return;
-      sh.appendRow(r); titles[t] = true; added.push(r[0] + ' ' + t);
+      var d = designDomain_(r[7]);
+      if (d && doms[d]) { skipped.push(d); return; }   // 같은 사이트는 애초에 안 쌓는다
+      sh.appendRow(r); titles[t] = true; if (d) doms[d] = true; added.push(r[0] + ' ' + t);
     });
+    if (skipped.length) Logger.log('[디자인 적재] 같은 사이트라 건너뜀: ' + skipped.join(', '));
     SpreadsheetApp.flush();
     return { ok: true, added: added.length, items: added };
   } catch (e) { return { ok: false, error: e.message }; }
 }
-// 브랜드 prefix('A'/'B')의 다음 미발송 1개 발송. 발송하면 {id,title}, 없으면 null.
+// ★중복 발송 방지 (2026-08-06, 은우 "저번에 온 거 같은데" 지적에서). 실측 근거 2개:
+//   ① 같은 사이트 재발송 — Our Place(fromourplace.com)가 6/26 '패스' 후 8/3에 또 나감.
+//      기존 중복검사는 제목만 봐서(appendDesignCases_) 제목이 조금 다르면 통과했음.
+//   ② 같은 소재 연속 — D3 By-Kin(8/3)·D4 House of Honey(8/4)가 이틀 연속 "뷰포트 1화면 900px".
+//      사이트는 달라도 사람은 "아까 그거"로 읽는다. D 19건 중 'DOM에 N벌 복제'만 7건이었음.
+var DESIGN_THEMES = [
+  ['뷰포트1화면', /900\s*px|뷰포트\s*(딱\s*)?1\s*화면|스크롤이?\s*(아예\s*)?없/],
+  ['DOM복제', /(두|세|[23])\s*벌|복제/],
+  ['canvas배경', /canvas/i],
+  ['폰트벌수', /폰트\s*\d\s*벌/],
+  ['트랜지션수', /트랜지션\s*\d+/],
+  ['스크롤핀', /핀\s*고정|sticky|스크롤\s*스토리텔링/i],
+  ['카운트업', /카운트\s*업|숫자를?\s*0으로/]
+];
+function designDomain_(u) {
+  var m = /https?:\/\/([^\/\s]+)/i.exec(String(u || ''));
+  return m ? m[1].replace(/^www\./, '').toLowerCase() : '';
+}
+function designThemes_(row) {
+  var txt = [row[3], row[4], row[5], row[6]].join(' ');
+  var out = {};
+  for (var i = 0; i < DESIGN_THEMES.length; i++) if (DESIGN_THEMES[i][1].test(txt)) out[DESIGN_THEMES[i][0]] = true;
+  return out;
+}
+function sendDesignRow_(sh, data, i) {
+  var r = data[i];
+  var msg = '🎨 <b>디자인 사례</b> [' + r[0] + '] · ' + r[2]
+    + '\n\n<b>' + r[3] + '</b>' + (r[4] ? '\n<i>' + r[4] + '</i>' : '')
+    + (r[5] ? '\n\n💡 ' + r[5] : '')
+    + (r[6] ? '\n\n🎯 <b>우리 적용:</b> ' + r[6] : '')
+    + (r[7] ? '\n\n🔗 ' + r[7] : '');
+  var kb = { inline_keyboard: [[
+    { text: '⭐ 채택', callback_data: 'dzc:add:' + r[0] },
+    { text: '✕ 패스', callback_data: 'dzc:pass:' + r[0] }
+  ]] };
+  sendTGMessage(EUNWOO_CHAT_ID, msg, kb);
+  sh.getRange(i + 1, 9).setValue('발송');
+  sh.getRange(i + 1, 10).setValue(new Date());
+  return { id: r[0], title: r[3] };
+}
+// 브랜드 prefix('A'/'B'/'D')의 다음 미발송 1개 발송. 발송하면 {id,title}, 없으면 null.
 function sendOneDesignByBrand_(sh, data, prefix) {
+  // 이미 보낸 사이트 (브랜드 무관 — 같은 사이트면 카테고리가 달라도 사람은 같은 걸로 읽는다)
+  var sentDom = {}, recent = [];
   for (var i = 1; i < data.length; i++) {
-    if (String(data[i][0]).charAt(0) === prefix && String(data[i][8]).trim() === '미발송') {
-      var r = data[i];
-      var msg = '🎨 <b>디자인 사례</b> [' + r[0] + '] · ' + r[2]
-        + '\n\n<b>' + r[3] + '</b>' + (r[4] ? '\n<i>' + r[4] + '</i>' : '')
-        + (r[5] ? '\n\n💡 ' + r[5] : '')
-        + (r[6] ? '\n\n🎯 <b>우리 적용:</b> ' + r[6] : '')
-        + (r[7] ? '\n\n🔗 ' + r[7] : '');
-      var kb = { inline_keyboard: [[
-        { text: '⭐ 채택', callback_data: 'dzc:add:' + r[0] },
-        { text: '✕ 패스', callback_data: 'dzc:pass:' + r[0] }
-      ]] };
-      sendTGMessage(EUNWOO_CHAT_ID, msg, kb);
-      sh.getRange(i + 1, 9).setValue('발송');
-      sh.getRange(i + 1, 10).setValue(new Date());
-      return { id: r[0], title: r[3] };
+    if (!data[i][9]) continue;                       // 발송일시 비어 있으면 아직 안 나간 것
+    var d0 = designDomain_(data[i][7]);
+    if (d0) sentDom[d0] = true;
+    if (String(data[i][0]).charAt(0) === prefix) {
+      var tm = 0; try { tm = new Date(data[i][9]).getTime() || 0; } catch (e) {}
+      recent.push({ t: tm, row: data[i] });
     }
   }
+  recent.sort(function (a, b) { return b.t - a.t; });
+  var recentTheme = {};
+  recent.slice(0, 3).forEach(function (x) {          // 직전 3건 = 사람이 "저번에 봤다"고 느끼는 범위
+    var th = designThemes_(x.row);
+    for (var k in th) recentTheme[k] = true;
+  });
+
+  var fallback = -1;
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]).charAt(0) !== prefix) continue;
+    if (String(data[i][8]).trim() !== '미발송') continue;
+    var dom = designDomain_(data[i][7]);
+    if (dom && sentDom[dom]) {                       // ① 같은 사이트 → 아예 큐에서 뺀다
+      sh.getRange(i + 1, 9).setValue('중복');
+      continue;
+    }
+    if (fallback < 0) fallback = i;                  // 전부 소재가 겹칠 때 쓸 대비책
+    var th = designThemes_(data[i]), clash = false;
+    for (var k in th) { if (recentTheme[k]) { clash = true; break; } }
+    if (clash) continue;                             // ② 직전 3건과 소재 겹침 → 뒤로 미루고 다음 후보
+    return sendDesignRow_(sh, data, i);
+  }
+  // 남은 게 전부 겹치면 그냥 보낸다 — 발송이 끊기는 게 반복보다 나쁘다
+  if (fallback >= 0) return sendDesignRow_(sh, data, fallback);
   return null;
 }
 // 매일 A(식품)+B(주방기기)+D(홈페이지 UI/UX) 각 1개 = 3개 발송. 은우 2026-06-24 / D 추가 2026-08-01.
@@ -3451,6 +3535,7 @@ function triggerCXWorkflow_(workflowFile, mode) {
   return code;
 }
 function triggerDailyReport() { return triggerCXWorkflow_('daily-report.yml'); }
+
 function triggerUXDraft()     { return triggerCXWorkflow_('daily-report.yml', 'ux_draft'); }
 function triggerUXSend()      { return triggerCXWorkflow_('daily-report.yml', 'ux_send'); }
 function triggerCollector()   { return triggerCXWorkflow_('collect-messages.yml'); }
@@ -3463,8 +3548,19 @@ function setupCXTriggers() {
   ScriptApp.newTrigger('triggerDailyReport').timeBased().atHour(9).nearMinute(0).everyDays(1).create();
   ScriptApp.newTrigger('triggerCollector').timeBased().everyHours(2).create();
   ScriptApp.newTrigger('triggerUXDraftMon').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(9).nearMinute(0).create();
-  ScriptApp.newTrigger('triggerUXDraftThu').timeBased().onWeekDay(ScriptApp.WeekDay.THURSDAY).atHour(9).nearMinute(0).create();
+  // 2026-08-05: 주 2회 → 주 1회(월요일만). 은우 '주 1회 밀도 높은 글로'. 목요일 트리거 제거.
   console.log('트리거 등록 완료');
 }
-function triggerUXDraftMon() { return triggerCXWorkflow_('daily-report.yml', 'ux_draft'); }
-function triggerUXDraftThu() { return triggerCXWorkflow_('daily-report.yml', 'ux_draft'); }
+// ★2026-08-05 구조 변경: UX 사례 본문은 Claude API가 아니라 은우 클로드 세션에서 쓴다.
+//   7/28 AI_ANALYSIS_ON=0 이후 생성기가 죽어 8일간 조용히 멈췄던 것 재발 방지.
+//   흐름: 클로드가 UX_사례 시트에 draft 저장 → 월요일 09시 이 트리거가 발송만 한다(AI 무관).
+//   주 2회 → 주 1회(월). 은우 "주 1회 밀도 높은 글로".
+function triggerUXDraftMon() {
+  var p = getUXPending_();
+  if (!p || !p.ok || !p.draft) {
+    sendTGMessage(EUNWOO_CHAT_ID, '📚 <b>UX 사례 발송 못함</b> — 대기 중 초안이 없습니다.' + String.fromCharCode(10) + '→ 클로드한테 "이번 주 UX 사례 써줘"');
+    return { ok: false, error: 'no draft' };
+  }
+  return triggerUXSend();
+}
+function triggerUXDraftThu()  { return { ok: true, skipped: '주 1회 전환(2026-08-05) — 목요일 발송 없음' }; }

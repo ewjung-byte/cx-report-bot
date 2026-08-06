@@ -3970,8 +3970,8 @@ async function weeklyReport() {
     const _dead = clarity && clarity.deadClickPct, _rage = clarity && clarity.rageClickPct;
     const _spike = (_dead != null && _dead >= 10) || (_rage != null && _rage >= 2);
     weeklyActions.push(_spike
-      ? `🎥 Clarity 마찰 신호↑ (데드 ${(_dead || 0).toFixed(1)}%·레이지 ${(_rage || 0).toFixed(2)}%) — 카트 담고 안 산 세션 5개 녹화 보고 막힘 1개 찾기 (clarity.ms)`
-      : `🎥 Clarity 세션리뷰 — 카트 담고 안 산 세션 5개 녹화 보기 → 막힘 패턴 1개 개선안 (clarity.ms). ※Clarity는 이거 하나만 진짜 인사이트`);
+      ? `🎥 Clarity 마찰 신호↑ (데드 ${(_dead || 0).toFixed(1)}%·레이지 ${(_rage || 0).toFixed(2)}%) — go.italy-jungmiso.com/watch 최신 5개(1.5배속)로 막힘 1개 찾기 → /메모 클러리티`
+      : `🎥 주간 세션리뷰 10분 — go.italy-jungmiso.com/watch 열어 최신 5개만(1.5배속). 질문 하나: 나가기 직전에 뭘 했나 → /메모 클러리티 MMDD 한 줄. ※지금 지켜보는 페이지=광고랜딩 88(10%지점 이탈 53%·✕닫기 4위). 링크는 고정, 대상 바뀌면 3창이 목적지만 교체`);
   }
   // 🔔 운영 중 CRM 명시 (봇이 뭘 아는지 투명화 — "이미 하는 것" 위에서 액션)
   const crmRunLine = (crm && crm.running && crm.running.length)
