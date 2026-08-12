@@ -3060,19 +3060,10 @@ async function dailyReport() {
     dailyActions.push(`🗣 어제 부정 VOC ${voc.negCount}건${prods ? ` (${prods})` : ''} — 반복 패턴인지 확인, 상페·CS 대응`);
   }
 
-  // (1) ★공구·광고 캘린더 알림 전면 제거 (2026-07-27 은우 "공구 주마다 있는데 왜 자꾸 나와. 필요없어,
-  //     발행 안 된 링크만 체크"). 공구 시작/종료 D-N은 매주 반복되는 일정이지 액션이 아님.
-  //     대신 **은우가 실제로 해야 하는 것 = UTM 링크 미발행**만 남김.
-  try {
-    const missing = await getMissingUtmRows();
-    if (missing && missing.length) {
-      // action 형식: "🔗 UTM 만들기: {이름} ({유형} {시작일})" → 이름만 뽑아 축약
-      const names = missing.slice(0, 3)
-        .map(m => (String(m.action || '').match(/만들기:\s*([^(]+)/) || [, ''])[1].trim())
-        .filter(Boolean).join('·');
-      dailyActions.push(`🔗 UTM 링크 미발행 ${missing.length}건${names ? ` (${names}${missing.length > 3 ? ' 외' : ''})` : ''} — 시작 전 링크 만들기`);
-    }
-  } catch (e) { console.error('[UTM 미발행 체크]', e.message); }
+  // (1) ★공구·광고 캘린더 알림 전면 제거 (2026-07-27) → ★UTM 미발행 알림도 제거 (2026-08-06 은우
+  //     "utm 만들라고 왜 자꾸 올라와. 미주 쪽에서 자동화 해놨잖아"). 8/3부터 공구·광고 UTM은
+  //     미주 /공구일정 자동화가 시트·UTM·하트까지 만든다 — 은우가 만들 게 아니므로 알림 자체가 오탐.
+  //     은우 담당 UTM(인쇄QR·쓰레드·CRM·메타)은 이 시트(📢공구&광고) 기반이 아니라 여기서 못 잡음.
 
   // (2) 상품 과의존 — 구조 리스크라 매일 같음 → 주1회(월요일)만, 단 60%↑ 극단이면 즉시
   if (cafe24 && cafe24.byProduct) {
@@ -3625,9 +3616,12 @@ async function getButtonClickRows(start, end) {
   } catch (e) { console.error('[버튼클릭 주간 rows]', e.message); return []; }
 }
 
-// 🔗 UTM watchdog — 📢공구&광고의 "예정(start≥오늘)" 캠페인 중 🔗UTM링크 시트에 없는 것 → 콕핏 후보로.
-// 완료·진행중은 제외(예정만). 이름 정규화 매칭(공구/광고/특수문자 제거). 중복은 appendCxCandidates가 막음.
+// 🔗 UTM watchdog — ★무력화 (2026-08-06 은우 "미주 쪽에서 자동화 해놨잖아").
+// 8/3부터 공구·광고 UTM은 미주 /공구일정 자동화가 만들므로 "미발행" 감시 전제가 사라짐.
+// 함수는 exports에 물려 있어 껍데기만 남김 — 어디서 불려도 조용히 빈 배열.
 async function getMissingUtmRows() {
+  return [];
+  /* eslint-disable no-unreachable */
   try {
     const sched = await fetchPromoSchedule();
     if (!sched || !sched.length) return [];
@@ -3787,18 +3781,8 @@ async function weeklyReport() {
     const btnRows = await getButtonClickRows(thisStart, thisEnd);
     if (btnRows.length) { await postToAppsScript({ action: 'record_button_weekly', week: thisStart, rows: btnRows }, APPS_SCRIPT_URL); console.log('[주간 버튼클릭 적재]', btnRows.length, '행'); }
   } catch (e) { console.error('[주간 버튼클릭 적재]', e.message); }
-  // 🔗 UTM watchdog (주1회) — 예정 캠페인 중 UTM 없는 것 → 콕핏 후보 + 은우 개인 DM 알림
-  try {
-    const utmTodos = await getMissingUtmRows();
-    if (utmTodos.length) {
-      await postToAppsScript({ action: 'append_cx_candidates', rows: utmTodos }, APPS_SCRIPT_URL).catch(() => {});
-      const dm = '🔗 <b>UTM 만들 예정 캠페인</b> (' + utmTodos.length + '개)\n'
-        + utmTodos.map(t => '· ' + t.action.replace('🔗 UTM 만들기: ', '')).join('\n')
-        + '\n\n→ 콕핏 들어온것에도 추가됨. 만들고 /할거 or /삭제.';
-      await sendTelegram(dm, null);
-      console.log('[UTM watchdog]', utmTodos.length, '예정 캠페인 UTM 누락');
-    } else console.log('[UTM watchdog] 예정 캠페인 UTM 누락 없음');
-  } catch (e) { console.error('[UTM watchdog]', e.message); }
+  // 🔗 ~~UTM watchdog (주1회)~~ 제거 (2026-08-06 은우) — 공구·광고 UTM은 미주 /공구일정 자동화가
+  //     생성(8/3 이관)하므로 "만들어라" DM·콕핏 후보 적재가 전부 오탐이었음. getMissingUtmRows도 무력화.
 
   // 💰 스스 귀속매출 미입력 리마인드 (주1회) — 지난달 스마트스토어 행 G(매출) 비어있으면 DM (2026-07-02)
   try {
