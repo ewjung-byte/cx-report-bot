@@ -2200,7 +2200,8 @@ async function fetchPromoSchedule() {
       const who = String(row[4] || '').replace(/\s*공구\s*$/, '').trim();
       const prod = shortProduct(row[5]);
       const productNo = String(row[18] || '').trim(); // 🔢 상품번호 열
-      out.push({ type: isGongu ? '공구' : '광고', start, end, who, prod, productNo, title: `${who}${prod ? ' ' + prod : ''}`.trim() || (isGongu ? '공구' : '광고') });
+      const fee = parseFloat(String(row[8] || '').replace('%', '')) || 0; // 수수료% 열 (2026-08-13 — DM 순매출 표기용)
+      out.push({ type: isGongu ? '공구' : '광고', start, end, who, prod, productNo, fee, title: `${who}${prod ? ' ' + prod : ''}`.trim() || (isGongu ? '공구' : '광고') });
     });
     return out.length ? out : null;
   } catch (e) { console.error('[공구광고 시트] 읽기 실패:', e.message); return null; }
@@ -3086,7 +3087,49 @@ async function dailyReport() {
     dailyActions.push(`📱 인스타 인앱 ${inappPct}% · 데드클릭 ${inDead}%(임계 초과) — 그날 인앱 결제마찰 실측 신호, 녹화로 원인 확인`);
   }
 
-  // (4) ~~공구 임박 점검~~ 제거 — 위 (1)의 UTM 미발행 체크로 대체 (2026-07-27 은우 요청)
+  // (4) ~~공구 임박 점검~~ 제거 (2026-07-27) → ★공구 "현황 한 줄" 복원 (2026-08-12 은우 "공구 일정 나오던 것 어디 갔어").
+  //     7/27에 지운 건 매주 반복되는 D-N "알림"(액션 요구)이고, 이건 잔소리 없는 정보 한 줄.
+  //     UTM 미발행 줄이 사실상 공구 예고 역할을 겸했는데 8/12에 그것도 빠져(미주 이관) 가시성이 0이 됐던 것.
+  let gonguLine = '';
+  try {
+    const sched = await fetchPromoSchedule();
+    if (sched && sched.length) {
+      const t0 = new Date(dateStr(0) + 'T00:00:00');
+      const dd = (a, b) => Math.round((a - b) / 86400000);
+      const liveRows = sched.filter(p => new Date(p.start + 'T00:00:00') <= t0 && t0 <= new Date(p.end + 'T23:59:59'));
+      const live = [];
+      for (const p of liveRows) {
+        let s = `${p.type === '공구' ? '🟠' : '🔵'} ${p.who} ${dd(t0, new Date(p.start + 'T00:00:00')) + 1}일차(~${p.end.slice(5).replace('-', '/')})`;
+        // ★"이때까지의 매출"도 같이 (2026-08-13 은우) — 단톡방 진행중 캠페인과 같은 소스(cafe24 = 진실), 크로스셀 포함 장바구니 전체
+        if (p.productNo) {
+          try {
+            const sales = await getCafe24SalesByProduct(p.start, dateStr(0));
+            const bk = sales.basketBy ? sales.basketBy(p.productNo) : null;
+            const pd = sales.byProduct[String(p.productNo)] || { amount: 0 };
+            const amt = bk && bk.amount ? bk.amount : pd.amount;
+            const ord = bk && bk.orders ? `·${bk.orders}건` : '';
+            if (amt > 0) {
+              s += ` 누적 <b>${formatMoney(Math.round(amt))}</b>${ord}`;
+              // 순매출 = 누적 − 전용매출×수수료% (시트 수수료% 열). 크로스셀은 셀러 수수료 대상 아님 전제 —
+              // 정산 컨벤션이 다르면 여기 식만 고칠 것. 원가·배송비 반영한 "순이익"은 시트 수식(내순이익)이 정본.
+              if (p.fee > 0 && pd.amount > 0) {
+                const net = Math.round(amt - pd.amount * p.fee / 100);
+                s += ` · 순 ≈${formatMoney(net)}(수수료 ${p.fee}%)`;
+              }
+            }
+          } catch (e) { }
+        }
+        live.push(s);
+      }
+      // ★예정 전부 (2026-08-13 은우 "잡힌 것 다 보여줘 — 이 정도 예정돼 있다가 보여야 계획을 세우지")
+      const upcoming = sched.filter(p => new Date(p.start + 'T00:00:00') > t0)
+        .sort((a, b) => a.start.localeCompare(b.start))
+        .map(p => `▫️ ${p.type === '광고' ? '🔵 ' : ''}${p.who} ${p.start.slice(5).replace('-', '/')}~${p.end.slice(5).replace('-', '/')} (D-${dd(new Date(p.start + 'T00:00:00'), t0)})`);
+      const parts = [...live, ...upcoming];
+      // 세로 목록 (2026-08-13 은우 "공구 세로로 되어 있지 않았나") — 단톡방 일정 섹션과 같은 결
+      if (parts.length) gonguLine = `\n\n📅 <b>공구</b>\n${parts.join('\n')}`;
+    }
+  } catch (e) { console.error('[공구 현황 한 줄]', e.message); }
 
   // 오늘 액션 = 은우 개인 DM에만(단톡방 중복 제거). 번호 + 3버튼(오늘/나중에/패스)으로 콕핏 연결.
   const dmActions = dailyActions.slice(0, 4);
@@ -3258,8 +3301,8 @@ ${productSalesOnly}${activeFunnelSection}${promoScheduleSection}${wrapupSection}
     cockpitLine = `\n\n📍 <b>콕핏</b> 🥇 ${one && !one.startsWith('(미설정') ? one : '미설정 (/원씽)'} · 📌 진행중 ${wipM ? wipM[1] : '-'}`;
   }
 
-  // 개인 DM: CX 관리자 분석(은우 전용) + 오늘 액션(3버튼) + 데이터 점검 + 콕핏 한 줄
-  const personalMsg = `☀️ <b>CX 데일리</b> (${today})${cxManagerSection}${actionSection}${healthSectionDM}${cockpitLine}`;
+  // 개인 DM: CX 관리자 분석(은우 전용) + 오늘 액션(3버튼) + 공구 현황 한 줄 + 데이터 점검 + 콕핏 한 줄
+  const personalMsg = `☀️ <b>CX 데일리</b> (${today})${cxManagerSection}${actionSection}${gonguLine}${healthSectionDM}${cockpitLine}`;
   // 액션 목록을 GAS에 저장 → 버튼 콜백(cxa:T/L/P:N)이 인덱스로 조회
   if (!DRY_RUN && dmActions.length) {
     await postToAppsScript({ action: 'set_cx_today_actions', actions: dmActions }, APPS_SCRIPT_URL).catch(() => {});
@@ -3268,7 +3311,7 @@ ${productSalesOnly}${activeFunnelSection}${promoScheduleSection}${wrapupSection}
   const groupResult = await sendTelegramGroup(msgToSend);
   if (groupResult.ok) {
     // 🤖 CX 판단은 단톡방 본문(analysisSection)에. DM=은우 전용 분석+액션버튼.
-    if (cxManagerSection || actionSection || healthSectionDM) await sendTelegram(personalMsg, actionKeyboard);
+    if (cxManagerSection || actionSection || healthSectionDM || gonguLine) await sendTelegram(personalMsg, actionKeyboard);
     // 🎨 디자인 사례집 — 발송 전 재고 자동보충(미발송<1 브랜드는 Claude 생성·적재) → 매일 1개 개인 DM
     if (!DRY_RUN) { await autoRefillDesignCases().catch(() => {}); await postToAppsScript({ action: 'send_next_design_case' }, APPS_SCRIPT_URL).catch(() => {}); }
     console.log('일간 발송 완료 ✅');
