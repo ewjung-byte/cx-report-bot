@@ -1575,8 +1575,18 @@ const PRODUCT_NAME = {
   '100': '김하정 광고',
   '101': '슬기언니 광고',
   '102': '유나레시피 공구',
+  '103': '다노픽 공구',
+  '104': '차차식탁 공구',
+  '105': '나브런치 공구',
   '106': '구글 PMax 전용상품(유튜브)',
+  '111': '최만복 공구',
+  '112': '콩이네 공구',
+  '113': '마마브런치 공구',
 };
+// 맵에 없는 상품의 긴 관리용 이름 정리 — "[사포리 델 그라나이오] 파네 톤도" → "파네 톤도" (2026-08-14 가독)
+function shortName(name) {
+  return String(name || '제품').replace(/\[[^\]]*\]/g, '').replace(/X?이태리정미소/g, '').replace(/\s+/g, ' ').trim().slice(0, 16).trim() || '제품';
+}
 // 꿀동이 = #87 only (확정). 다른 채널별 공구 SKU는 별도 카운트.
 const KKUL_PRODUCT_NO = '87';
 const CHANNEL_KR = { 'Paid Social':'유료SNS', 'Organic Social':'자연SNS', 'Direct':'직접유입', 'Organic Search':'검색', 'Paid Other':'기타광고', 'Referral':'추천', 'Organic Shopping':'쇼핑', 'Unassigned':'미분류' };
@@ -3029,17 +3039,20 @@ async function dailyReport() {
       //   → 합계·비중 모두 전체 기준으로 바꾸고, 안 보여준 것은 "외 N종"으로 한 줄 남긴다.
       const totalAmt = all.reduce((s, p) => s + p.amount, 0);
       const topN = all.slice(0, 6);
+      // ★가독 개편 (2026-08-14 은우 "가독 너무 안 좋아"):
+      //   %를 맨 앞(집중도 스캔용, 한 자리면 공백 패딩) · 금액은 만 단위 · 이름은 맵→shortName ·
+      //   "외 N종"은 구성(이름×개수)을 나열 — "외 6종이 뭐야?"가 다시 안 나오게.
+      const fmtMan = a => a >= 10000 ? (Math.round(a / 1000) / 10).toFixed(1).replace(/\.0$/, '') + '만' : formatMoney(a);
+      const nameOf = p => PRODUCT_NAME[String(p.productNo)] || shortName(p.name);
       const lines = topN.map(p => {
-        const id = String(p.productNo);
-        const customNm = PRODUCT_NAME[id];
-        const label = customNm ? `${customNm} (#${id})` : `${(p.name || '제품').replace(/^\[.*?\]\s*/, '')} (#${id})`;
         const share = totalAmt > 0 ? Math.round(p.amount / totalAmt * 100) : 0;
-        return `· ${label}: ${formatMoney(p.amount)} · ${p.count}개 (${share}%)`;
+        return `· <b>${String(share).padStart(2, ' ')}%</b> ${nameOf(p)} #${p.productNo} — ${fmtMan(p.amount)} (${p.count}개)`;
       });
       const rest = all.slice(6);
       if (rest.length) {
         const restAmt = rest.reduce((s, p) => s + p.amount, 0);
-        lines.push(`· 외 ${rest.length}종: ${formatMoney(restAmt)} (${Math.round(restAmt / totalAmt * 100)}%)`);
+        const restList = rest.map(p => `${nameOf(p)} ${p.count}`).join('·');
+        lines.push(`· ${String(Math.round(restAmt / totalAmt * 100)).padStart(2, ' ')}% 외 ${rest.length}종 — ${fmtMan(restAmt)} (${restList})`);
       }
       const t0 = topN[0], t0id = String(t0.productNo);
       sumTop = { nm: PRODUCT_NAME[t0id] || `#${t0id}`, share: totalAmt > 0 ? Math.round(t0.amount / totalAmt * 100) : 0 };
