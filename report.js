@@ -3314,6 +3314,9 @@ ${productSalesOnly}${activeFunnelSection}${promoScheduleSection}${wrapupSection}
     cockpitLine = `\n\n📍 <b>콕핏</b> 🥇 ${one && !one.startsWith('(미설정') ? one : '미설정 (/원씽)'} · 📌 진행중 ${wipM ? wipM[1] : '-'}`;
   }
 
+  // ※금요일 "기한 지난 확인 닫기" 리마인드는 17시 일간보고(daily_perf_report.js)에 있다 —
+  //   기한 목록(pending)이 그쪽 로컬 상태파일에 있어서. 여기(클라우드)선 못 읽는다.
+
   // 개인 DM: CX 관리자 분석(은우 전용) + 오늘 액션(3버튼) + 공구 현황 한 줄 + 데이터 점검 + 콕핏 한 줄
   const personalMsg = `☀️ <b>CX 데일리</b> (${today})${cxManagerSection}${actionSection}${gonguLine}${healthSectionDM}${cockpitLine}`;
   // 액션 목록을 GAS에 저장 → 버튼 콜백(cxa:T/L/P:N)이 인덱스로 조회
