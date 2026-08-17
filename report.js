@@ -2754,13 +2754,21 @@ function escapeHtml(s) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 const DRY_RUN = process.env.DRY_RUN === '1';
+// ★스냅샷 전용 모드 (2026-08-17): 월요일엔 주간 모드가 일간을 통째 대체해서 **일요일의 일별 스냅샷과
+//   GA4 외부결제 push가 매주 빠졌다**(8/2·8/9·8/16 3주 실측 — 저매출일 누락으로 7일 기준선이 부풀려짐).
+//   이 모드에선 dailyReport가 데이터 수집·적재(스냅샷·GA4 push)만 하고, 텔레그램 발송과
+//   "하루 1회" 전제인 쓰기(경고 에이징·오늘 액션·디자인 사례집)는 전부 건너뛴다.
+//   ⚠️7/13에 디자인 사례집만 같은 병으로 따로 고쳤었다 — 근본(일간 전체 스킵)을 이제 고치는 것.
+let SNAPSHOT_ONLY = false;
 function sendTelegram(text, replyMarkup) {
+  if (SNAPSHOT_ONLY) { console.log('[snapshot-only] 개인 DM 발송 생략'); return Promise.resolve({ ok: true, skipped: true }); }
   if (DRY_RUN) { console.log('\n[DRY_RUN][개인 DM]\n' + text.replace(/<[^>]+>/g, '') + '\n'); return Promise.resolve({ ok: true, dry: true }); }
   const payload = { chat_id: TG_CHAT_ID, text, parse_mode: 'HTML' };
   if (replyMarkup) payload.reply_markup = replyMarkup;
   return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, payload);
 }
 function sendTelegramGroup(text, replyMarkup) {
+  if (SNAPSHOT_ONLY) { console.log('[snapshot-only] 단톡방 발송 생략'); return Promise.resolve({ ok: true, skipped: true }); }
   if (DRY_RUN) { console.log('\n[DRY_RUN][단톡방]\n' + text.replace(/<[^>]+>/g, '') + '\n'); return Promise.resolve({ ok: true, dry: true }); }
   const payload = { chat_id: GROUP_CHAT_ID, text, parse_mode: 'HTML' };
   if (replyMarkup) payload.reply_markup = replyMarkup;
@@ -3288,7 +3296,7 @@ ${productSalesOnly}${activeFunnelSection}${promoScheduleSection}${wrapupSection}
   // 해소되면 GAS가 🔔 경고_해소로그에 지속일 기록 (은우가 닫은 증거). DRY_RUN은 상태 오염 방지 위해 skip.
   const alertKey = (s) => String(s).replace(/<[^>]+>/g, '').replace(/[\d,.%]+/g, '#').replace(/\s+/g, ' ').trim().slice(0, 80);
   let alertAges = {};
-  if (!DRY_RUN) {
+  if (!DRY_RUN && !SNAPSHOT_ONLY) {   // snapshot-only: 하루 2회 세면 에이징이 이틀치로 부풀어 skip
     try {
       const ar = await postToAppsScript({ action: 'track_alert_ages', keys: warnings.map(alertKey) }, APPS_SCRIPT_URL);
       alertAges = ar?.ages || {};
@@ -3320,7 +3328,7 @@ ${productSalesOnly}${activeFunnelSection}${promoScheduleSection}${wrapupSection}
   // 개인 DM: CX 관리자 분석(은우 전용) + 오늘 액션(3버튼) + 공구 현황 한 줄 + 데이터 점검 + 콕핏 한 줄
   const personalMsg = `☀️ <b>CX 데일리</b> (${today})${cxManagerSection}${actionSection}${gonguLine}${healthSectionDM}${cockpitLine}`;
   // 액션 목록을 GAS에 저장 → 버튼 콜백(cxa:T/L/P:N)이 인덱스로 조회
-  if (!DRY_RUN && dmActions.length) {
+  if (!DRY_RUN && !SNAPSHOT_ONLY && dmActions.length) {   // snapshot-only: DM이 안 나가니 버튼용 액션 저장도 skip
     await postToAppsScript({ action: 'set_cx_today_actions', actions: dmActions }, APPS_SCRIPT_URL).catch(() => {});
   }
 
@@ -3329,7 +3337,8 @@ ${productSalesOnly}${activeFunnelSection}${promoScheduleSection}${wrapupSection}
     // 🤖 CX 판단은 단톡방 본문(analysisSection)에. DM=은우 전용 분석+액션버튼.
     if (cxManagerSection || actionSection || healthSectionDM || gonguLine) await sendTelegram(personalMsg, actionKeyboard);
     // 🎨 디자인 사례집 — 발송 전 재고 자동보충(미발송<1 브랜드는 Claude 생성·적재) → 매일 1개 개인 DM
-    if (!DRY_RUN) { await autoRefillDesignCases().catch(() => {}); await postToAppsScript({ action: 'send_next_design_case' }, APPS_SCRIPT_URL).catch(() => {}); }
+    //    snapshot-only: 주간 경로가 이미 발송했으므로 skip(안 하면 월요일에 2개 나감)
+    if (!DRY_RUN && !SNAPSHOT_ONLY) { await autoRefillDesignCases().catch(() => {}); await postToAppsScript({ action: 'send_next_design_case' }, APPS_SCRIPT_URL).catch(() => {}); }
     console.log('일간 발송 완료 ✅');
   } else {
     console.error('발송 실패 ❌:', JSON.stringify(groupResult));
@@ -4193,6 +4202,21 @@ async function main() {
       await postToAppsScript({ action: 'send_next_design_case' }, APPS_SCRIPT_URL).catch(() => {});
       console.log('[디자인 사례집] 주간모드에서도 발송 트리거 완료');
     }
+    // ★월요일에도 일요일 데이터는 남긴다 (2026-08-17): 위 디자인 사례집과 같은 병의 근본 —
+    //   주간 모드가 일간을 통째 대체해 일별 스냅샷·GA4 외부결제 push가 매주 일요일치만 빠졌다.
+    //   발송은 전부 끈 채(dailyReport 안의 sendTelegram이 no-op) 데이터 수집·적재만 한 번 더 돈다.
+    try {
+      SNAPSHOT_ONLY = true;
+      await dailyReport();
+      console.log('[snapshot-only] 일요일 스냅샷·GA4 push 적재 완료');
+    } catch (e) { console.error('[snapshot-only] 실패:', e.message); }
+    finally { SNAPSHOT_ONLY = false; }
+  }
+  else if (mode === 'snapshot_only') {
+    // 수동 백필용: 발송 없이 어제치 스냅샷·GA4 push만 (워크플로우 dispatch mode=snapshot_only)
+    SNAPSHOT_ONLY = true;
+    await dailyReport();
+    console.log('[snapshot-only] 수동 백필 완료');
   }
   else if (mode === 'ux_draft') await uxDraftFlow();
   else if (mode === 'ux_send') await uxSendFlow();

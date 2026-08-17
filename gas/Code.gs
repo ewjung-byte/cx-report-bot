@@ -518,7 +518,12 @@ function doPost(e) {
       for (var i = _d.length - 1; i >= 1; i--) { var ln = (_d[i] || []).join(' '); if (/엽서|pc-v1/.test(ln) && /qr/i.test(ln)) { _us.deleteRow(i + 1); _n++; } }
       return jsonOut({ ok: true, deleted: _n });
     }
-    if (action === 'backfill_cx_after') { // 완료인데 Before만 있고 After 빈 항목 → 현재 전환율로 채움(협상카드 빈칸 메움)
+    if (action === 'backfill_cx_after') {
+      // ★2026-08-15 폐기(은우 룰: 측정 불가·애매한 건 지표 칸에 넣지 않는다).
+      //   이건 "완료인데 After 빈 항목을 현재 전환율로 일괄로 채우는" 기능이었다 = 가짜 숫자 대량 생산기.
+      //   Before 쪽 '전환율 2.76%'가 9줄에 복사돼 있던 것과 같은 사고를 After에서 저지른다.
+      //   빈칸은 그대로 두고, `/실측 키워드 = 값`으로 진짜 잰 값만 채운다.
+      return jsonOut({ ok: false, disabled: true, reason: 'After 일괄 자동채움은 2026-08-15 폐기 — 가짜 지표 생산. /실측 으로 실제 값만 채울 것' });
       var _bs = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
       var _af = currentConvLabel_('(완료시점·자동backfill)');
       var _n = 0;
@@ -540,6 +545,14 @@ function doPost(e) {
       ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'remindNotSetCheck') ScriptApp.deleteTrigger(t); });
       ScriptApp.newTrigger('remindNotSetCheck').timeBased().at(new Date(2026, 5, 20, 10, 0, 0)).create();
       return jsonOut({ ok: true, at: '2026-06-20 10:00' });
+    }
+    if (action === 'mark_daily_perf_sent') { // 로컬 일간보고(17시)가 발송 성공 직후 찍는 도장 (2026-08-17)
+      // PC가 꺼져 보고가 안 나가면 이 도장도 안 찍힘 → 다음날 10:30 heartbeat가 공백을 알림.
+      // 8/15·16 발송 공백을 사흘간 아무도 몰랐던 사고가 근거. 도장 = 날짜 문자열 하나면 충분.
+      var _pd = String(contents.date || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(_pd)) return jsonOut({ ok: false, error: 'date 형식' });
+      PropertiesService.getScriptProperties().setProperty('LAST_DAILY_PERF_SENT', _pd);
+      return jsonOut({ ok: true, marked: _pd });
     }
     if (action === 'run_heartbeat') { return jsonOut(cxHeartbeat(true)); } // 수동 테스트(OK여도 발송)
     if (action === 'setup_heartbeat') { // 매일 10:30 헬스체크 트리거 등록 (중복 제거 후)
@@ -1838,7 +1851,12 @@ function saveDailySnapshot_(contents) {
   var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
   var data = sh.getDataRange().getValues();
   for (var i = data.length - 1; i >= 1; i--) {
-    if (String(data[i][0]) === date) sh.deleteRow(i + 1);
+    // ★2026-08-17: 셀이 날짜형이면 String(Date)="Sun Aug 13 ..."이라 비교가 빗나가 dedup이 헛돌았다
+    //   (재실행한 날마다 중복 적재: 7/27×4·8/12×3·8/13×3 실측 — 7일 이동평균 baseline을 왜곡).
+    //   협상카드 월 일련번호 사고(@132)와 같은 함정: 시트 날짜는 항상 정규화해서 비교한다.
+    var c0 = data[i][0];
+    var cs = (c0 instanceof Date) ? Utilities.formatDate(c0, 'Asia/Seoul', 'yyyy-MM-dd') : String(c0).slice(0, 10);
+    if (cs === date.slice(0, 10)) sh.deleteRow(i + 1);
   }
   var row = headers.map(function (h) {
     if (h === '일자') return date;
@@ -2312,7 +2330,14 @@ function cxAutoArea_(s) {
   // 그 외(전략·기획·브랜딩 등) = CX 관리자 기본값
   return 'CX 관리자';
 }
-// 텔레그램 한 줄로 개입기록에 추가 (Before=최신 주간_요약 전환율 자동). /적용·/개입·/백로그 공용. verdict 기본 착수.
+// 숫자로 잴 대상인가 — 물리 제작·인쇄·소싱·기획은 아니다 (2026-08-15).
+// 여기 걸리면 개입기록 측정단위(G)에 '정성'으로 표시되고, Before/After를 묻지도 채우지도 않는다.
+// ⚠️규칙 기반이라 완벽하지 않다. 틀리면 시트에서 G열만 고치면 된다(Before는 계속 비어 있어도 된다).
+function cxIsQualitative_(content) {
+  return /단박스|보냉팩|칼선|가인쇄|인쇄|색 정하기|손잡이|굿즈|레퍼 서치|레퍼런스|코브랜딩|기획|디자인 초안|미팅 자료|샘플|소싱|촬영|엽서|패키지/.test(String(content || ''));
+}
+// 텔레그램 한 줄로 개입기록에 추가. /적용·/개입·/백로그 공용. verdict 기본 착수.
+// ★Before는 자동으로 채우지 않는다(아래 주석 참조).
 function addCxStart_(content, area, verdict) {
   var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
   var t = ensureSheetWithHeaders_(ss, '🛠 개입기록', ['날짜', '영역', '개입내용', '맥락(휴무/공구/광고)', 'Before(지표)', 'After(지표)', '측정단위', '판정']);
@@ -2330,15 +2355,16 @@ function addCxStart_(content, area, verdict) {
     if (/완료|폐기|종료|효과없음/.test(String(ex[ri][7]))) continue;
     return { ok: true, dup: true, content: finalContent, area: String(ex[ri][1]) };
   }
+  // ★2026-08-15 은우 룰: "측정이 불가능한 거나 애매한 거는 Before로 하면 안 되."
+  //   이전엔 여기서 최신 주간_요약 전환율을 Before에 자동으로 박았다 → 단박스 인쇄·칼선·냄비받침 색 정하기까지
+  //   '전환율 2.76% (착수시점)'이 9줄에 똑같이 들어갔다. 상품 전환율과 인쇄 칼선은 아무 상관이 없다.
+  //   협상 자리에서 근거를 못 대는 숫자는 빈칸보다 나쁘다 → **Before는 비운다.**
+  //   대신 측정단위(G)로 성격만 밝히고, 측정 대상인데 비어 있으면 일간 DM '🔴 은우만 할 수 있는 것'이
+  //   매일 "뭘 잴지 한 마디만" 하고 물어본다(daily_perf_report.js). 정성으로 표시된 줄은 묻지 않는다.
   var before = '';
-  var ws = ss.getSheetByName('주간_요약');
-  if (ws && ws.getLastRow() > 1) {
-    var hdr = ws.getRange(1, 1, 1, ws.getLastColumn()).getValues()[0];
-    var ci = hdr.indexOf('전환율');
-    if (ci >= 0) { var last = ws.getRange(ws.getLastRow(), 1, 1, ws.getLastColumn()).getValues()[0]; before = '전환율 ' + last[ci] + '% (착수시점)'; }
-  }
+  var unit = cxIsQualitative_(finalContent) ? '정성(측정 대상 아님)' : '-';
   var d = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
-  t.appendRow([d, finalArea, finalContent, '', before, '', '-', verdict || '착수']);
+  t.appendRow([d, finalArea, finalContent, '', before, '', unit, verdict || '착수']);
   SpreadsheetApp.flush(); // 추가 직후 refreshCockpit이 이 줄을 바로 읽도록 커밋 (안 하면 옛 목록으로 콕핏 그림)
   return { ok: true, content: finalContent, area: finalArea };
 }
@@ -2415,8 +2441,10 @@ function setCxVerdictByKeyword_(keyword, verdict, after) {
   if (String(verdict) === '완료') iv.getRange(matches[0].row, 1).setValue(Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd'));
   var af = after;
   if (verdict === '완료') {
-    // After 미입력 → 완료시점 전환율 자동(Before와 동일 지표로 쌍 완성, 협상카드 빈칸 방지)
-    if (!af) af = currentConvLabel_('(완료시점·자동, 정확지표 권장)');
+    // ★2026-08-15: After 자동 스탬프 제거. 예전엔 완료 시 현재 전환율을 자동으로 박아 "쌍"을 만들었는데,
+    //   그건 Before 쪽 2.76% 사고의 거울상이다 — 인쇄물 완료에 사이트 전환율이 After로 박힌다.
+    //   협상카드도 이미 /자동|착수시점|backfill|정확지표|권장/ 를 "진짜 실측 아님"으로 걸러왔으니(⭐ 없음),
+    //   애초에 값어치가 없던 스탬프였다. 빈칸으로 두고 나중에 `/실측 키워드 = 값`으로 진짜만 채운다.
     if (af) iv.getRange(matches[0].row, 6).setValue(af);
   } else if (after) {
     iv.getRange(matches[0].row, 6).setValue(after);
@@ -3507,13 +3535,57 @@ function cxHeartbeat(force) {
   var ymd = function (off) { return Utilities.formatDate(new Date(Date.now() - off * 86400000), 'Asia/Seoul', 'yyyy-MM-dd'); };
   var yday = ymd(1);
   var issues = [];
+  // ⚠️이 체크는 "그날 아침 작업이 이미 끝났다"를 전제로 한다(리포트 09:07·클러리티 오전, 정규 실행은 10:30).
+  //   10시 전에 수동으로 돌리면 아직 안 돈 게 당연한데 경고가 뜬다 — 2026-08-15 새벽 1시에 실제로 헛경보를 봤다.
+  //   그래서 정규 시각 전 수동 실행이면 이 두 항목은 건너뛴다(결제 감시는 08:40이라 그대로 본다).
+  var hourKST = +Utilities.formatDate(new Date(), 'Asia/Seoul', 'H');
+  var morningDone = hourKST >= 10;
   var snapStr = lastRowDateStr_(ss.getSheetByName('일별_스냅샷'), 0);   // 리포트 성공 시 어제 날짜
-  if (!snapStr || snapStr < yday) issues.push('일간 리포트 미갱신 (일별_스냅샷 최근 ' + (snapStr || '없음') + ') → report.js GitHub Actions 점검');
+  if (morningDone && (!snapStr || snapStr < yday)) issues.push('일간 리포트 미갱신 (일별_스냅샷 최근 ' + (snapStr || '없음') + ') → report.js GitHub Actions 점검');
   var clrStr = lastRowDateStr_(ss.getSheetByName('📹 클러리티_일별'), 0); // 루틴 성공 시 오늘 날짜
-  if (!clrStr || clrStr < yday) issues.push('클러리티 자동수집 미갱신 (📹클러리티_일별 최근 ' + (clrStr || '없음') + ') → 데스크탑 스케줄러/Clarity토큰 점검');
+  if (morningDone && (!clrStr || clrStr < yday)) issues.push('클러리티 자동수집 미갱신 (📹클러리티_일별 최근 ' + (clrStr || '없음') + ') → 데스크탑 스케줄러/Clarity토큰 점검');
+  // 🩺 결제 흐름 감시(데스크탑 08:40, IJ Payment Watch) — 시트 날짜 구멍 = 그날 감시가 안 돈 것 (2026-08-15 추가).
+  //   ★왜 여기(클라우드)에 있어야 하나: 감시가 죽는 대표 원인이 "PC가 꺼져 있음"인데, 그러면 로컬 알림도 같이 죽는다.
+  //     감시의 죽음을 알려줄 수 있는 건 PC 밖에 있는 이 체크뿐이다. 안 그러면 결제가 막혀도 아무도 모르는 날이 생긴다.
+  //   ★알림 남발 금지(은우 브리프): 주말엔 PC를 끄는 날이 있으므로 "하루 빔"은 침묵하고,
+  //     평일 결번이거나 이틀 이상 연속으로 비면 그때 알린다.
+  // 🗞 일간보고(로컬 17시) 발송 공백 — 도장(mark_daily_perf_sent)이 어제까지 찍혔나 (2026-08-17).
+  //   heartbeat는 10:30이라 "오늘 도장 없음"은 정상. 어제 기준으로 며칠 비었는지 센다.
+  //   주말 PC 꺼짐은 봐주고(하루 빔+어제가 주말=침묵), 평일 결번이거나 이틀 이상이면 알림 — 결제감시와 같은 규칙.
+  var dpLast = PropertiesService.getScriptProperties().getProperty('LAST_DAILY_PERF_SENT') || '';
+  var dpMiss = null;
+  if (dpLast) {
+    dpMiss = Math.max(0, Math.round((new Date(yday) - new Date(dpLast)) / 86400000));
+    var yd = yday.split('-');
+    var ydayDow = new Date(Date.UTC(+yd[0], +yd[1] - 1, +yd[2])).getUTCDay();
+    if (dpMiss >= 2 || (dpMiss === 1 && ydayDow >= 1 && ydayDow <= 5)) {
+      issues.push('일간보고(17시)가 ' + dpMiss + '일 빔 (마지막 도장 ' + dpLast + ') → 데스크탑 전원·"IJ Daily Perf Report" 확인. 다시 켜면 공백은 자동으로 메워짐(발송 공백 메움 로직)');
+    }
+  } // 도장이 아예 없으면(첫 가동 전) 침묵 — 로컬이 한 번 발송하면 생긴다
+  var payLast = null, payMiss = null;
+  var pw = ss.getSheetByName('🩺 결제감시_일별');
+  if (pw && pw.getLastRow() > 1) {
+    var seen = {};
+    var pv = pw.getRange(2, 1, pw.getLastRow() - 1, 1).getValues();
+    for (var pi = 0; pi < pv.length; pi++) {
+      var c0 = pv[pi][0];
+      var ds = (c0 instanceof Date) ? Utilities.formatDate(c0, 'Asia/Seoul', 'yyyy-MM-dd') : String(c0 || '').slice(0, 10);
+      if (ds) seen[ds] = true;
+    }
+    var miss = 0;
+    while (miss < 14 && !seen[ymd(miss)]) miss++;
+    payMiss = miss; payLast = miss < 14 ? ymd(miss) : null;
+    var td = ymd(0).split('-');
+    var dow = new Date(Date.UTC(+td[0], +td[1] - 1, +td[2])).getUTCDay(); // 0=일 6=토 (문자열에서 뽑아 시간대 영향 없음)
+    if (miss >= 2 || (miss === 1 && dow >= 1 && dow <= 5)) {
+      issues.push('결제 흐름 감시가 ' + miss + '일째 안 돎 (마지막 기록 ' + (miss < 14 ? ymd(miss) : '2주 이상 전') + ') → 데스크탑 전원·작업스케줄러 "IJ Payment Watch" 확인. 그동안은 결제가 막혀도 아무도 모르는 상태');
+    }
+  }
   if (issues.length) sendTGMessage(EUNWOO_CHAT_ID, '🩺 <b>봇 헬스체크 경고</b>\n' + issues.map(function (x) { return '⚠️ ' + x; }).join('\n'));
-  else if (force) sendTGMessage(EUNWOO_CHAT_ID, '🩺 헬스체크 OK\n· 리포트 최근 ' + snapStr + '\n· 클러리티 최근 ' + clrStr);
-  return { ok: true, issues: issues, snap: snapStr, clr: clrStr };
+  else if (force) sendTGMessage(EUNWOO_CHAT_ID, '🩺 헬스체크 OK\n· 리포트 최근 ' + snapStr + '\n· 클러리티 최근 ' + clrStr
+    + '\n· 결제 감시 최근 ' + (payLast || '기록없음') + (payMiss ? ' (' + payMiss + '일째 안 돎)' : '')
+    + '\n· 일간보고 도장 ' + (dpLast || '아직 없음(첫 가동 전)'));
+  return { ok: true, issues: issues, snap: snapStr, clr: clrStr, payLast: payLast, payMiss: payMiss, dpLast: dpLast, dpMiss: dpMiss };
 }
 
 // ===== 외부 cron 핑거: GAS 시간 트리거 -> GitHub Actions 강제 실행 =====
