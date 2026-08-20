@@ -1203,12 +1203,47 @@ async function getDailySignals() {
       ad.rate = ad.v ? ad.a / ad.v * 100 : 0; og.rate = og.v ? og.a / og.v * 100 : 0;
       return { ad, og, un };
     };
+    // ★"뭐가 통했나"를 은우한테 묻지 말고 봇이 찾는다 (2026-08-20 은우 지적).
+    //   담기율이 뛰면 **착지페이지별로 두 구간을 비교**해 어디가 올렸는지 찍고, 못 찾으면 그렇다고 말한다.
+    //   실측(8/20): 오가닉 담기율 12.1%의 정체는 홈(10.7%→35.3%)이었고, 같은 기간 레시피는 154세션인데 3.9%였다.
+    const whatWorked = async (curS, curE, preS, preE, organicOnly) => {
+      try {
+        const flt = organicOnly ? { filter: { fieldName: 'sessionDefaultChannelGroup', stringFilter: { matchType: 'CONTAINS', value: 'Organic' } } }
+          : { filter: { fieldName: 'sessionDefaultChannelGroup', stringFilter: { matchType: 'PARTIAL_REGEXP', value: 'Paid|Cross-network|Display' } } };
+        const grab = async (a, b) => {
+          const r = await ga4Fetch(token, {
+            dateRanges: [{ startDate: a, endDate: b }], dimensions: [{ name: 'landingPagePlusQueryString' }],
+            metrics: [{ name: 'sessions' }, { name: 'addToCarts' }], dimensionFilter: flt, limit: 60,
+          });
+          const m = {};
+          (r.rows || []).forEach(x => {
+            const k = decodeURIComponent(x.dimensionValues[0].value).slice(0, 40);
+            const v = x.metricValues.map(z => +z.value);
+            m[k] = [(m[k] ? m[k][0] : 0) + v[0], (m[k] ? m[k][1] : 0) + v[1]];
+          });
+          return m;
+        };
+        const A = await grab(preS, preE), B = await grab(curS, curE);
+        const rows = Object.keys(B).filter(k => B[k][0] >= 15).map(k => {
+          const a = A[k] || [0, 0], b = B[k];
+          const ra = a[0] ? a[1] / a[0] * 100 : 0, rb = b[1] / b[0] * 100;
+          return { k, ra, rb, gain: b[1] - Math.round(a[1] / Math.max(a[0], 1) * b[0]) };  // 옛 비율이었다면 나왔을 담기 대비 증가분
+        }).sort((x, y) => y.gain - x.gain);
+        const top = rows[0];
+        if (!top || top.gain <= 0) return '';
+        // 같은 기간에 세션은 많은데 담기율이 낮은 페이지도 같이 짚는다 — 진짜 기회는 대개 거기다
+        const weak = rows.filter(r => r.rb < 5).sort((x, y) => y.rb === x.rb ? 0 : (B[y.k][0] - B[x.k][0]))[0];
+        let msg = `\n   ↳ 올린 건 ${top.k} (담기율 ${top.ra.toFixed(1)}%→${top.rb.toFixed(1)}%, 담기 +${top.gain}건)`;
+        if (weak && weak.k !== top.k) msg += `\n   ↳ 반대로 ${weak.k}는 ${B[weak.k][0]}세션인데 담기율 ${weak.rb.toFixed(1)}% — 여기 손보는 게 더 큼`;
+        return msg;
+      } catch (e) { return '\n   ↳ (착지페이지 분해 실패 — 수동 확인 필요)'; }
+    };
     // ① 광고 담기율 — 어제 vs 직전7일. 어제 조회 300건 미만이면 표본 부족으로 스킵.
     const yS = await splitRates(y, y), pS = await splitRates(p0, p1);
     if (yS.ad.v >= 300 && pS.ad.rate > 0 && yS.ad.rate > 0) {
       const rel = (yS.ad.rate - pS.ad.rate) / pS.ad.rate * 100;
       if (rel <= -15) out.push(`📉 광고 담기율 어제 ${yS.ad.rate.toFixed(1)}% (7일평균 ${pS.ad.rate.toFixed(1)}%) ↓${Math.abs(Math.round(rel))}% — 소재·랜딩 점검(대표·미주 영역)`);
-      else if (rel >= 25) out.push(`📈 광고 담기율 어제 ${yS.ad.rate.toFixed(1)}% (7일평균 ${pS.ad.rate.toFixed(1)}%) ↑${Math.round(rel)}% — 뭐가 통했나 확인해 복제`);
+      else if (rel >= 25) out.push(`📈 광고 담기율 어제 ${yS.ad.rate.toFixed(1)}% (7일평균 ${pS.ad.rate.toFixed(1)}%) ↑${Math.round(rel)}%` + await whatWorked(y, y, p0, p1, false));
     }
     // ② 소스분류 이상 먼저 — 미분류(Unassigned)가 2배 넘게 튀면 채널별 지표 자체를 못 믿음.
     //    이때 오가닉 알림은 띄우지 않는다(오진의 원인이었음).
@@ -1226,7 +1261,7 @@ async function getDailySignals() {
         const diluted = vRel >= 30;
         out.push(`📉 오가닉 담기율 최근3일 ${o3.og.rate.toFixed(1)}% (직전7일 ${oP.og.rate.toFixed(1)}%) ↓${Math.abs(Math.round(rel))}%\n   ↳ 오가닉 조회 ${Math.round(oP.og.v / 7)}→${Math.round(o3.og.v / 3)}/일 ${vRel >= 0 ? '↑' : '↓'}${Math.abs(Math.round(vRel))}% → ${diluted ? '유입 늘고 담기율만 하락 = 새 유입 희석(사이트 무죄). 어느 소스가 늘었나 확인' : '유입 그대로인데 담기율 하락 = 사이트 쪽 점검(은우)'}`);
       }
-      else if (rel >= 30) out.push(`📈 오가닉 담기율 최근3일 ${o3.og.rate.toFixed(1)}% (직전7일 ${oP.og.rate.toFixed(1)}%) ↑${Math.round(rel)}% — 뭐가 통했나 확인해 복제`);
+      else if (rel >= 30) out.push(`📈 오가닉 담기율 최근3일 ${o3.og.rate.toFixed(1)}% (직전7일 ${oP.og.rate.toFixed(1)}%) ↑${Math.round(rel)}%` + await whatWorked(dateStr(3), dateStr(1), dateStr(10), dateStr(4), true));
     }
     const chMap2 = async (s, e) => {
       const r = await ga4Fetch(token, { dateRanges: [{ startDate: s, endDate: e }], metrics: [{ name: 'sessions' }], dimensions: [{ name: 'sessionDefaultChannelGroup' }] });
@@ -1234,12 +1269,37 @@ async function getDailySignals() {
     };
     const yCh = await chMap2(y, y), pCh = await chMap2(p0, p1);
     const grp = (m, ks) => ks.reduce((a, k) => a + (m[k] || 0), 0);
-    [['메타', ['Paid Social']], ['구글', ['Paid Search', 'Cross-network']]].forEach(([nm, ks]) => {
+    // ★for...of 로 도는 이유: 안에서 GA4를 한 번 더 조회(await)해 "어느 소스가 늘었나"를 붙인다.
+    //   forEach 콜백에서는 await을 못 쓴다.
+    for (const [nm, ks] of [['메타', ['Paid Social']], ['구글', ['Paid Search', 'Cross-network']]]) {
       const yv = grp(yCh, ks), pAvg = grp(pCh, ks) / 7;
-      if (pAvg < 20) return;
+      if (pAvg < 20) continue;
       const rel = (yv - pAvg) / pAvg * 100;
-      if (Math.abs(rel) >= 35) out.push(`${rel > 0 ? '📈' : '📉'} ${nm} 유입 어제 ${yv} (7일평균 ${Math.round(pAvg)}/일) ${rel > 0 ? '↑' : '↓'}${Math.abs(Math.round(rel))}% — ${rel > 0 ? '소재/타이밍 뭐가 통했나' : '소재·노출 점검(대표)'}`);
-    });
+      if (Math.abs(rel) >= 35) {
+        // ★"뭐가 통했나"로 끝내지 않는다 — 유입 변동의 최대 원인은 광고 on/off다(8/13 실사고).
+        //   급감이면 확인 순서를 박아주고, 급증이면 어느 소스가 늘었는지 봇이 찾아 붙인다.
+        let why = '';
+        if (rel > 0) {
+          try {
+            const srcQ = async (a, b) => {
+              const r = await ga4Fetch(token, {
+                dateRanges: [{ startDate: a, endDate: b }], dimensions: [{ name: 'sessionSourceMedium' }],
+                metrics: [{ name: 'sessions' }],
+                dimensionFilter: { filter: { fieldName: 'sessionDefaultChannelGroup', stringFilter: { value: nm } } }, limit: 25,
+              });
+              const m = {}; (r.rows || []).forEach(x => m[x.dimensionValues[0].value] = +x.metricValues[0].value); return m;
+            };
+            const A = await srcQ(p0, p1), B = await srcQ(y, y);
+            const top = Object.keys(B).map(k => ({ k, up: B[k] - Math.round((A[k] || 0) / 7) })).sort((x, z) => z.up - x.up)[0];
+            if (top && top.up > 0) why = `\n   ↳ 늘어난 소스: ${top.k} (+${top.up}세션/일)`;
+          } catch (e) { }
+          out.push(`📈 ${nm} 유입 어제 ${yv} (7일평균 ${Math.round(pAvg)}/일) ↑${Math.abs(Math.round(rel))}%` + why);
+        } else {
+          out.push(`📉 ${nm} 유입 어제 ${yv} (7일평균 ${Math.round(pAvg)}/일) ↓${Math.abs(Math.round(rel))}%`
+            + '\n   ↳ 확인 순서: ①광고가 꺼졌나(메타·구글 대시보드) ②소재 심사 반려 ③그다음이 GA4 지연 — 8/13에 ↓90%가 광고 중단이었다');
+        }
+      }
+    }
   } catch (e) { console.error('[데일리 신호]', e.message); }
   return out;
 }
@@ -4012,8 +4072,30 @@ async function weeklyReport() {
     const rc = pvWoW.cur.레시피, rp = pvWoW.prev.레시피;
     if (rp) {
       const d = Math.round((rc - rp) / rp * 100);
-      if (d <= -25) weeklyActions.push(`📖 레시피 PV ↓${Math.abs(d)}% (${rp}→${rc}) — 재구매 입구 막힘. 상세→레시피 동선 점검`);
-      else if (d >= 25) weeklyActions.push(`📖 레시피 PV ↑${d}% (${rp}→${rc}) — 뭐가 통했는지 확인해 복제`);
+      // ★PV 증감만 말하면 "그래서 뭘 하라고?"가 된다(2026-08-20 은우 지적).
+      //   레시피 착지 세션의 담기율을 같이 재서, 낮으면 **무엇을 고칠지**까지 문장에 넣는다.
+      let recipeAct = '';
+      try {
+        const rr = await ga4Fetch(token, {
+          dateRanges: [{ startDate: dateStr(7), endDate: dateStr(1) }],
+          dimensions: [{ name: 'landingPagePlusQueryString' }],
+          metrics: [{ name: 'sessions' }, { name: 'addToCarts' }], limit: 100,
+        });
+        let se = 0, ca = 0;
+        (rr.rows || []).forEach(x => {
+          const p = decodeURIComponent(x.dimensionValues[0].value);
+          if (!/board/.test(p) || !/레시피|recipe/i.test(p)) return;
+          se += +x.metricValues[0].value; ca += +x.metricValues[1].value;
+        });
+        if (se >= 30) {
+          const rate = ca / se * 100;
+          recipeAct = rate < 5
+            ? `\n   ↳ 레시피 착지 ${se}세션인데 담기율 ${rate.toFixed(1)}% (사이트 평균의 절반 이하). 원인=레시피 글에 상품 링크가 없음\n   ↳ 할 일: 레시피 글 본문 끝에 "이 레시피에 쓴 바질페스토 →" 상품 링크 한 줄 추가(글당 1분, 게시판 에디터)`
+            : `\n   ↳ 레시피 착지 ${se}세션 · 담기율 ${rate.toFixed(1)}% (상품 연결은 살아 있음)`;
+        }
+      } catch (e) { }
+      if (d <= -25) weeklyActions.push(`📖 레시피 조회 ↓${Math.abs(d)}% (${rp}→${rc})` + recipeAct);
+      else if (d >= 25) weeklyActions.push(`📖 레시피 조회 ↑${d}% (${rp}→${rc})` + recipeAct);
     }
   }
   // 🎥 Clarity 세션리뷰 = Clarity의 유일한 진짜 인사이트원(수동, 자동화 불가). 주간 상시 루틴으로 액션화 (2026-07-23 은우 "A: 제대로 살린다").
@@ -4022,8 +4104,8 @@ async function weeklyReport() {
     const _dead = clarity && clarity.deadClickPct, _rage = clarity && clarity.rageClickPct;
     const _spike = (_dead != null && _dead >= 10) || (_rage != null && _rage >= 2);
     weeklyActions.push(_spike
-      ? `🎥 Clarity 마찰 신호↑ (데드 ${(_dead || 0).toFixed(1)}%·레이지 ${(_rage || 0).toFixed(2)}%) — go.italy-jungmiso.com/watch 최신 5개(1.5배속)로 막힘 1개 찾기 → /메모 클러리티`
-      : `🎥 주간 세션리뷰 10분 — go.italy-jungmiso.com/watch 열어 최신 5개만(1.5배속). 질문 하나: 나가기 직전에 뭘 했나 → /메모 클러리티 MMDD 한 줄. ※지금 지켜보는 페이지=광고랜딩 88(10%지점 이탈 53%·✕닫기 4위). 링크는 고정, 대상 바뀌면 3창이 목적지만 교체`);
+      ? `🎥 Clarity 마찰 신호↑ (데드 ${(_dead || 0).toFixed(1)}%·레이지 ${(_rage || 0).toFixed(2)}%) — ij-links.pages.dev/watch 최신 5개(1.5배속)로 막힘 1개 찾기 → /메모 클러리티`
+      : `🎥 주간 세션리뷰 10분 — ij-links.pages.dev/watch 열어 최신 5개만(1.5배속). 질문 하나: 나가기 직전에 뭘 했나 → /메모 클러리티 MMDD 한 줄. ※지금 지켜보는 페이지=광고랜딩 88(10%지점 이탈 53%·✕닫기 4위). 링크는 고정, 대상 바뀌면 3창이 목적지만 교체`);
   }
   // 🔔 운영 중 CRM 명시 (봇이 뭘 아는지 투명화 — "이미 하는 것" 위에서 액션)
   const crmRunLine = (crm && crm.running && crm.running.length)
