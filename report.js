@@ -1309,7 +1309,9 @@ async function getDailySignals() {
     const grp = (m, ks) => ks.reduce((a, k) => a + (m[k] || 0), 0);
     // ★for...of 로 도는 이유: 안에서 GA4를 한 번 더 조회(await)해 "어느 소스가 늘었나"를 붙인다.
     //   forEach 콜백에서는 await을 못 쓴다.
-    for (const [nm, ks] of [['메타', ['Paid Social']], ['구글', ['Paid Search', 'Cross-network']]]) {
+    // ★2026-08-21 — 직접유입(Direct)을 빼놓고 있었다. 8/20에 153→1,175세션(+669%)이 튀었는데 알림이 없었다.
+    //   그날 정체는 우리가 낸 작업용 스킨 미리보기였다. Direct는 광고가 아니라서 원인 갈래가 다르다.
+    for (const [nm, ks] of [['메타', ['Paid Social']], ['구글', ['Paid Search', 'Cross-network']], ['직접유입', ['Direct']]]) {
       const yv = grp(yCh, ks), pAvg = grp(pCh, ks) / 7;
       if (pAvg < 20) continue;
       const rel = (yv - pAvg) / pAvg * 100;
@@ -1317,6 +1319,16 @@ async function getDailySignals() {
         // ★"뭐가 통했나"로 끝내지 않는다 — 유입 변동의 최대 원인은 광고 on/off다(8/13 실사고).
         //   급감이면 확인 순서를 박아주고, 급증이면 어느 소스가 늘었는지 봇이 찾아 붙인다.
         let why = '';
+        // ★직접유입은 광고가 아니다 — 원인 갈래를 박아준다(8/20에 광고부터 의심하다 헤맸다).
+        //   알림톡·친구톡은 UTM이 없어 전부 여기로 잡힌다(KTN CRM 시각표: 재입고 19:00 · 등급쿠폰 매월 1일 19:00
+        //   · 레시피 격주 14:55 · 재구매 리마인더 D+21 20:00). 작업용 스킨 미리보기도 여기로 온다.
+        if (nm === '직접유입') {
+          out.push(`${rel > 0 ? '📈' : '📉'} 직접유입 어제 ${yv} (7일평균 ${Math.round(pAvg)}/일) ${rel > 0 ? '↑' : '↓'}${Math.abs(Math.round(rel))}%`
+            + (rel > 0
+              ? '\n   ↳ 광고가 아니다. 확인 순서: ①우리가 만든 트래픽인가(그날 발행·검수했으면 미리보기가 섞인다) ②CRM 발송인가(알림톡·친구톡은 UTM이 없어 전부 여기로 — 재입고 19:00·등급쿠폰 매월1일·레시피 격주 14:55) ③단톡방·인플루언서 링크'
+              : '\n   ↳ 직접유입 감소는 대개 CRM 발송이 없던 날이다. 광고와 무관하니 광고 대시보드 보지 말 것'));
+          continue;
+        }
         if (rel > 0) {
           try {
             const srcQ = async (a, b) => {
