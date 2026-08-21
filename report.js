@@ -1238,9 +1238,34 @@ async function getDailySignals() {
         return msg;
       } catch (e) { return '\n   ↳ (착지페이지 분해 실패 — 수동 확인 필요)'; }
     };
+    // ★2026-08-21 — 내부(작업) 트래픽이 비율 지표를 통째로 망가뜨린다.
+    //   8/20 실측: 전체 3,522세션 중 안산(회사 경기테크노파크·은우 집) 1,233 = 35%,
+    //   그중 /skin-skin* 작업용 미리보기 착지가 1,038. 바텀시트 발행하며 우리가 낸 트래픽이다.
+    //   → 분모가 부풀어 담기율이 9.0%→5.1%로 "무너진 것처럼" 보였지만 담기는 191건으로 정상이었다.
+    //   평소 내부 비중은 1~9%. 15%를 넘는 날은 비율 지표를 아예 쓰지 않는다(건수만 본다).
+    const internalShare = async (a, b) => {
+      const one = async (flt) => {
+        const body = { dateRanges: [{ startDate: a, endDate: b }], metrics: [{ name: 'sessions' }] };
+        if (flt) body.dimensionFilter = flt;
+        const r = await ga4Fetch(token, body);
+        return +((((r.rows || [])[0] || {}).metricValues || [{ value: 0 }])[0].value) || 0;
+      };
+      const skinFlt = { filter: { fieldName: 'landingPagePlusQueryString', stringFilter: { matchType: 'CONTAINS', value: '/skin-skin' } } };
+      const tot = await one(null);
+      const inner = await one({ orGroup: { expressions: [{ filter: { fieldName: 'city', stringFilter: { value: 'Ansan-si' } } }, skinFlt] } });
+      const skin = await one(skinFlt);
+      return { tot, inner, skin, pct: tot ? inner / tot * 100 : 0 };
+    };
+    let dirty = { pct: 0, tot: 0, inner: 0, skin: 0 };
+    try { dirty = await internalShare(y, y); } catch (e) { console.error('[내부트래픽]', e.message); }
+    const RATIO_OK = dirty.pct < 15;
+    if (!RATIO_OK) {
+      out.push(`📛 어제는 내부 트래픽 ${Math.round(dirty.pct)}% (${dirty.inner}/${dirty.tot}세션${dirty.skin ? ` · 작업용 스킨 미리보기 ${dirty.skin}` : ''})`
+        + `\n   ↳ 담기율·전환율 같은 **비율 지표는 오늘 근거로 쓰지 말 것** — 분모만 부풀어 하락처럼 보인다. 담기·구매 "건수"로 볼 것`);
+    }
     // ① 광고 담기율 — 어제 vs 직전7일. 어제 조회 300건 미만이면 표본 부족으로 스킵.
     const yS = await splitRates(y, y), pS = await splitRates(p0, p1);
-    if (yS.ad.v >= 300 && pS.ad.rate > 0 && yS.ad.rate > 0) {
+    if (RATIO_OK && yS.ad.v >= 300 && pS.ad.rate > 0 && yS.ad.rate > 0) {
       const rel = (yS.ad.rate - pS.ad.rate) / pS.ad.rate * 100;
       if (rel <= -15) out.push(`📉 광고 담기율 어제 ${yS.ad.rate.toFixed(1)}% (7일평균 ${pS.ad.rate.toFixed(1)}%) ↓${Math.abs(Math.round(rel))}% — 소재·랜딩 점검(대표·미주 영역)`);
       else if (rel >= 25) out.push(`📈 광고 담기율 어제 ${yS.ad.rate.toFixed(1)}% (7일평균 ${pS.ad.rate.toFixed(1)}%) ↑${Math.round(rel)}%` + await whatWorked(y, y, p0, p1, false));
@@ -1254,7 +1279,7 @@ async function getDailySignals() {
     // ③ 오가닉 담기율 — 최근3일 vs 직전7일. 3일 조회 500건 미만이면 스킵(하루치는 아예 안 봄).
     //    ★담기율만 보면 오진한다(7/29 실측): 조회량이 같이 늘었으면 담기율 하락은 사이트 회귀가 아니라
     //      담기율 낮은 새 유입(인플루언서 링크·direct)이 섞여 평균이 희석된 것. 조회량 증감을 반드시 같이 본다.
-    else if (o3.og.v >= 500 && oP.og.rate > 0 && o3.og.rate > 0) {
+    else if (RATIO_OK && o3.og.v >= 500 && oP.og.rate > 0 && o3.og.rate > 0) {
       const rel = (o3.og.rate - oP.og.rate) / oP.og.rate * 100;
       const vRel = ((o3.og.v / 3) - (oP.og.v / 7)) / (oP.og.v / 7) * 100; // 조회량 일평균 증감
       if (rel <= -20) {
@@ -1268,6 +1293,19 @@ async function getDailySignals() {
       const m = {}; (r.rows || []).forEach(x => m[x.dimensionValues[0].value] = +x.metricValues[0].value); return m;
     };
     const yCh = await chMap2(y, y), pCh = await chMap2(p0, p1);
+    // ★2026-08-21 은우 "2번은 뭐 어쩌라는거야? 미주 보고로도 보이는데" —
+    //   유입 증감 자체는 광고비를 쓴 결과라 미주 영역이다. **우리가 볼 것은 "그 유입이 담기로 이어졌나"**다.
+    //   그래서 유입 알림에 담기 건수를 동반한다(비율이 아니라 건수 — 분모 오염에 안 흔들린다).
+    const cartMap = async (s, e) => {
+      const r = await ga4Fetch(token, {
+        dateRanges: [{ startDate: s, endDate: e }], metrics: [{ name: 'eventCount' }],
+        dimensions: [{ name: 'sessionDefaultChannelGroup' }],
+        dimensionFilter: { filter: { fieldName: 'eventName', stringFilter: { value: 'add_to_cart' } } },
+      });
+      const m = {}; (r.rows || []).forEach(x => m[x.dimensionValues[0].value] = +x.metricValues[0].value); return m;
+    };
+    let yCart = {}, pCart = {};
+    try { yCart = await cartMap(y, y); pCart = await cartMap(p0, p1); } catch (e) { console.error('[채널담기]', e.message); }
     const grp = (m, ks) => ks.reduce((a, k) => a + (m[k] || 0), 0);
     // ★for...of 로 도는 이유: 안에서 GA4를 한 번 더 조회(await)해 "어느 소스가 늘었나"를 붙인다.
     //   forEach 콜백에서는 await을 못 쓴다.
@@ -1293,7 +1331,17 @@ async function getDailySignals() {
             const top = Object.keys(B).map(k => ({ k, up: B[k] - Math.round((A[k] || 0) / 7) })).sort((x, z) => z.up - x.up)[0];
             if (top && top.up > 0) why = `\n   ↳ 늘어난 소스: ${top.k} (+${top.up}세션/일)`;
           } catch (e) { }
-          out.push(`📈 ${nm} 유입 어제 ${yv} (7일평균 ${Math.round(pAvg)}/일) ↑${Math.abs(Math.round(rel))}%` + why);
+          // 유입만 늘고 담기가 안 따라오면 그게 우리 몫이다. 따라 늘었으면 미주 보고로 충분하니 짧게 끝낸다.
+          const yc = grp(yCart, ks), pc = grp(pCart, ks) / 7;
+          let cartTxt = '';
+          if (pc >= 1) {
+            const cRel = (yc - pc) / pc * 100;
+            cartTxt = `\n   ↳ 담기 ${yc}건 (평균 ${pc.toFixed(1)}건) — `
+              + (cRel >= rel * 0.6
+                ? '유입만큼 담기도 늘었다 (광고 쪽 성과, 우리가 볼 것 없음)'
+                : `유입은 ↑${Math.round(rel)}%인데 담기는 ${cRel >= 0 ? '↑' : '↓'}${Math.abs(Math.round(cRel))}% — **유입 질이 떨어졌다**. 어느 소재·랜딩인지 확인 필요`);
+          }
+          out.push(`📈 ${nm} 유입 어제 ${yv} (7일평균 ${Math.round(pAvg)}/일) ↑${Math.abs(Math.round(rel))}%` + why + cartTxt);
         } else {
           out.push(`📉 ${nm} 유입 어제 ${yv} (7일평균 ${Math.round(pAvg)}/일) ↓${Math.abs(Math.round(rel))}%`
             + '\n   ↳ 확인 순서: ①광고가 꺼졌나(메타·구글 대시보드) ②소재 심사 반려 ③그다음이 GA4 지연 — 8/13에 ↓90%가 광고 중단이었다');
