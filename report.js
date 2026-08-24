@@ -2823,7 +2823,7 @@ function buildDataHealthWarnings(d) {
   if (dailyOrders && dailyOrders.totalCount > 0) {
     if (dailyOrders.revenue === 0) w.push('매출 0원인데 주문 있음 → 금액 집계 오류 의심');
     if (dailyOrders.paidCount > dailyOrders.totalCount) w.push('결제건수 > 주문건수 (모순)');
-    if (cafe24 && cafe24.totalSales > dailyOrders.revenue + 1) w.push('상품별 합 > 총매출 (집계 불일치)');
+    if (cafe24 && (cafe24.totalSales - dailyOrders.revenue) > dailyOrders.revenue * 0.03) w.push('상품별 합 > 총매출 3%↑ (집계 불일치 의심)'); // ★2026-08-24: 임계값 1원→3%. 상품별 합=정가×수량(할인 전), 총매출=실수령이라 외부채널 할인만큼 늘 차이가 난다(8/22 실측 1.4%: 네이버페이 1.6%·모바일웹 0.9%). 1원 기준이면 매일 떠서 경고가 신호를 잃었다.
   }
   if (!segments) w.push('리텐션(세그먼트) 미수집');
   else if (segments.guest && (segments.guest.newCount + segments.guest.repeatCount) > 0 && (!segments.guestPhones || segments.guestPhones.length === 0)) {
