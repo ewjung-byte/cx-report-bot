@@ -3275,15 +3275,11 @@ async function dailyReport() {
   // 오늘 액션 = 은우 개인 DM에만(단톡방 중복 제거). 번호 + 3버튼(오늘/나중에/패스)으로 콕핏 연결.
   const dmActions = dailyActions.slice(0, 4);
   const actionSection = dmActions.length
-    ? `\n\n🎯 <b>오늘 액션</b> (버튼으로 콕핏에)\n${dmActions.map((a, i) => `${i + 1}. ${a}`).join('\n')}\n· (게스트→회원·휴면윈백 등 구조 레버는 콕핏 진행중 참조)`
+    ? `\n\n🎯 <b>오늘 확인거리</b> (클로드가 확인해 닫습니다)\n${dmActions.map((a, i) => `${i + 1}. ${a}`).join('\n')}\n· (게스트→회원·휴면윈백 등 구조 레버는 콕핏 진행중 참조)`
     : '';
-  const actionKeyboard = dmActions.length ? {
-    inline_keyboard: dmActions.map((a, i) => [
-      { text: `${i + 1} ✅오늘`, callback_data: `cxa:T:${i}` },
-      { text: '📋나중에', callback_data: `cxa:L:${i}` },
-      { text: '✕패스', callback_data: `cxa:P:${i}` },
-    ])
-  } : null;
+  // ★2026-08-25 은우 "오늘 액션 버튼 빼 — 너한테 던져주고 확인해보기로 했잖아"
+  //   액션은 클로드가 CX 데일리 원문을 읽고 숫자로 갈라 닫는다(cx_daily_check.js). 버튼은 이중 처리라 없앤다.
+  const actionKeyboard = null;
   // 🤖 CX 판단 — Claude 인사이트 1개를 본문에 통합 (별도 발송하면 묻힘). 실발송엔 채워지고 DRY_RUN(로컬 키 X)만 빔.
   const analysisSection = analysis ? `\n\n🤖 <b>CX 판단</b>\n${analysis}` : '';
 
