@@ -1224,7 +1224,7 @@ async function getDailySignals() {
           return m;
         };
         const A = await grab(preS, preE), B = await grab(curS, curE);
-        const rows = Object.keys(B).filter(k => B[k][0] >= 15).map(k => {
+        const rows = Object.keys(B).filter(k => B[k][0] >= 15 && k && k.charAt(0) === '/').map(k => {   // ★(not set)·빈 키 제외 — 페이지가 아니라 측정 공백이다(2026-08-25)
           const a = A[k] || [0, 0], b = B[k];
           const ra = a[0] ? a[1] / a[0] * 100 : 0, rb = b[1] / b[0] * 100;
           return { k, ra, rb, gain: b[1] - Math.round(a[1] / Math.max(a[0], 1) * b[0]) };  // 옛 비율이었다면 나왔을 담기 대비 증가분
