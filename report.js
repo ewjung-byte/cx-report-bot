@@ -1180,7 +1180,21 @@ async function getPromoWrapups(promoSchedule) {
 
 // ── 데일리 데이터 신호 (어제 vs 직전7일평균) — DM이 공구만/평이하지 않게 "변한 것"을 매일 ──
 // 2026-06-29: 은우 "개인DM 평이하고 공구만 옴". 담기율·채널 급변을 매일 다른 실데이터로.
-async function getDailySignals() {
+// ★2026-08-27 은우 결정 — 매일은 "끊김"만, 흔들림은 주간으로.
+//   근거(14일 실측): 확인거리 26건 중 알림 덕에 처음 안 사건이 0건이었다.
+//     · 직접유입 급락 3건 = 전부 같은 오탐(8/20 공구 시작일 1,247이 7일평균에 남아 계속 울림)
+//     · 오가닉 담기율 7건 = ↓64 ↓66 ↓54 ↑60 ↓51 ↓59 ↑92 로 며칠 간격 진동 = 신호 아님
+//     · 메타·구글 ↓93%(8/13)은 8/10~12 광고중단의 뒤늦은 반영이라 이미 알던 일
+//   ★이 파일에 이미 같은 교훈이 있었다(7/29 "하루 단위는 신호가 아니라 잡음") — 오가닉에만 적용돼 있던 걸 전체로 넓힌다.
+//   mode='daily'  : 데이터 신뢰성 경보(📛)와 끊김(0에 가까움)만. 사람이 매일 볼 값어치가 있는 것.
+//   mode='weekly' : 흔들림(±% 급변)까지.
+//   ⚠️지금 weekly 로 부르는 곳은 없다 — 일부러 그렇게 뒀다.
+//     이 함수의 비교는 "어제 vs 직전7일"로 박혀 있어서, 그대로 주간에 붙이면 같은 깨진 비교를 옮기는 것뿐이다.
+//     주간 보고엔 이미 채널별 매출·채널 퍼널이 있으니 추세는 거기서 본다(있는 걸 또 만들지 말 것).
+//     정말 주간 흔들림이 필요해지면 날짜를 인자로 빼서 "이번주 vs 지난주"로 바꾼 뒤에 켤 것.
+//   ⚠️매출·재고·결제는 여기서 다루지 않는다 — 각각 09:01 매출봇 · 18:01 재고봇 · 08:40 payment_watch 가 이미 본다.
+async function getDailySignals(mode) {
+  const SWING = (mode === 'weekly');   // 흔들림 알림을 낼 것인가
   const out = [];
   try {
     const token = await getGA4Token();
@@ -1265,7 +1279,7 @@ async function getDailySignals() {
     }
     // ① 광고 담기율 — 어제 vs 직전7일. 어제 조회 300건 미만이면 표본 부족으로 스킵.
     const yS = await splitRates(y, y), pS = await splitRates(p0, p1);
-    if (RATIO_OK && yS.ad.v >= 300 && pS.ad.rate > 0 && yS.ad.rate > 0) {
+    if (SWING && RATIO_OK && yS.ad.v >= 300 && pS.ad.rate > 0 && yS.ad.rate > 0) {
       const rel = (yS.ad.rate - pS.ad.rate) / pS.ad.rate * 100;
       if (rel <= -15) out.push(`📉 광고 담기율 어제 ${yS.ad.rate.toFixed(1)}% (7일평균 ${pS.ad.rate.toFixed(1)}%) ↓${Math.abs(Math.round(rel))}% — 소재·랜딩 점검(대표·미주 영역)`);
       else if (rel >= 25) out.push(`📈 광고 담기율 어제 ${yS.ad.rate.toFixed(1)}% (7일평균 ${pS.ad.rate.toFixed(1)}%) ↑${Math.round(rel)}%` + await whatWorked(y, y, p0, p1, false));
@@ -1279,7 +1293,7 @@ async function getDailySignals() {
     // ③ 오가닉 담기율 — 최근3일 vs 직전7일. 3일 조회 500건 미만이면 스킵(하루치는 아예 안 봄).
     //    ★담기율만 보면 오진한다(7/29 실측): 조회량이 같이 늘었으면 담기율 하락은 사이트 회귀가 아니라
     //      담기율 낮은 새 유입(인플루언서 링크·direct)이 섞여 평균이 희석된 것. 조회량 증감을 반드시 같이 본다.
-    else if (RATIO_OK && o3.og.v >= 500 && oP.og.rate > 0 && o3.og.rate > 0) {
+    else if (SWING && RATIO_OK && o3.og.v >= 500 && oP.og.rate > 0 && o3.og.rate > 0) {
       const rel = (o3.og.rate - oP.og.rate) / oP.og.rate * 100;
       const vRel = ((o3.og.v / 3) - (oP.og.v / 7)) / (oP.og.v / 7) * 100; // 조회량 일평균 증감
       if (rel <= -20) {
@@ -1315,6 +1329,16 @@ async function getDailySignals() {
       const yv = grp(yCh, ks), pAvg = grp(pCh, ks) / 7;
       if (pAvg < 20) continue;
       const rel = (yv - pAvg) / pAvg * 100;
+      // ★매일 볼 값어치가 있는 건 흔들림이 아니라 끊김이다(2026-08-27 은우).
+      //   광고가 꺼지거나 링크가 깨지면 유입이 0에 가깝게 떨어진다 — 그건 크기가 아니라 "죽었나"로 잡는다.
+      //   평균의 15%는 사실상 정지로 본다. 여기엔 요일·이상치 논쟁이 끼어들 여지가 없다.
+      if (!SWING) {
+        if (nm !== '직접유입' && (yv === 0 || yv < pAvg * 0.15)) {
+          out.push(`📛 ${nm} 유입이 끊겼다 — 어제 ${yv} (평소 ${Math.round(pAvg)}/일)`
+            + `\n   ↳ GA4를 의심하기 전에 광고 계정부터: 켜져 있나·소재 심사반려·예산 소진·랜딩 URL 깨짐 순으로`);
+        }
+        continue;   // 흔들림(±%)은 주간에서만 낸다
+      }
       if (Math.abs(rel) >= 35) {
         // ★"뭐가 통했나"로 끝내지 않는다 — 유입 변동의 최대 원인은 광고 on/off다(8/13 실사고).
         //   급감이면 확인 순서를 박아주고, 급증이면 어느 소스가 늘었는지 봇이 찾아 붙인다.
