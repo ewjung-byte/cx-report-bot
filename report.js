@@ -3204,7 +3204,9 @@ async function dailyReport() {
       //   %를 맨 앞(집중도 스캔용, 한 자리면 공백 패딩) · 금액은 만 단위 · 이름은 맵→shortName ·
       //   "외 N종"은 구성(이름×개수)을 나열 — "외 6종이 뭐야?"가 다시 안 나오게.
       const fmtMan = a => a >= 10000 ? (Math.round(a / 1000) / 10).toFixed(1).replace(/\.0$/, '') + '만' : formatMoney(a);
-      const nameOf = p => PRODUCT_NAME[String(p.productNo)] || shortName(p.name);
+      // ★가독(2026-08-28 은우): 광고 이름표가 길어 줄이 넘친다 — 표시만 축약("메타 광고 (본진)"→"메타 본진")
+      const nameOf = p => (PRODUCT_NAME[String(p.productNo)] || shortName(p.name))
+        .replace(/ 광고 \(/, ' ').replace(/\)$/, '');
       const lines = topN.map(p => {
         const share = totalAmt > 0 ? Math.round(p.amount / totalAmt * 100) : 0;
         return `· <b>${String(share).padStart(2, ' ')}%</b> ${nameOf(p)} #${p.productNo} — ${fmtMan(p.amount)} (${p.count}개)`;
@@ -3212,9 +3214,25 @@ async function dailyReport() {
       const rest = all.slice(6);
       if (rest.length) {
         const restAmt = rest.reduce((s, p) => s + p.amount, 0);
-        const restList = rest.map(p => `${nameOf(p)} ${p.count}`).join('·');
-        lines.push(`· ${String(Math.round(restAmt / totalAmt * 100)).padStart(2, ' ')}% 외 ${rest.length}종 — ${fmtMan(restAmt)} (${restList})`);
+        lines.push(`· ${String(Math.round(restAmt / totalAmt * 100)).padStart(2, ' ')}% 외 ${rest.length}종 — ${fmtMan(restAmt)}`);   // 꼬리 나열은 제품군 줄이 대신한다(2026-08-28)
       }
+      // ★제품군 합계(2026-08-28 은우 "바질페스토 몇 개, 룽고 몇 개 이런 식으로도")
+      //   분류는 표시 라벨이 아니라 원래 상품명으로 — 광고 전용상품(83·88·106·124…)도 실물은 클래식 바질페스토다
+      const famOf = (nm) => {
+        const s = String(nm || '');
+        if (/바질\s*페스토|아보카도\s*페스토/.test(s)) return '바질페스토';
+        if (/파네|룽고|톤도|치아바타/.test(s)) return '빵';
+        if (/EVOO|올리브|코라티나|프루타토|롤리오/i.test(s)) return '올리브오일';
+        if (/다니엘로|파스타|링귀네|스파게티|리가토네|오레키|탈리아|그라냐노/.test(s)) return '파스타';
+        if (/드립백|파사라쿠아|커피/.test(s)) return '커피';
+        return '기타';
+      };
+      const fam = {};
+      all.forEach(p => { const k = famOf(p.name); fam[k] = fam[k] || { c: 0, a: 0 }; fam[k].c += p.count; fam[k].a += p.amount; });
+      const famLine = Object.keys(fam).sort((a, b) => fam[b].a - fam[a].a)
+        .map(k => `${k} <b>${fam[k].c}개</b>·${fmtMan(fam[k].a)}(${totalAmt > 0 ? Math.round(fam[k].a / totalAmt * 100) : 0}%)`)
+        .join(' / ');
+      lines.push(`🧺 제품으로 묶으면: ${famLine}`);
       const t0 = topN[0], t0id = String(t0.productNo);
       sumTop = { nm: PRODUCT_NAME[t0id] || `#${t0id}`, share: totalAmt > 0 ? Math.round(t0.amount / totalAmt * 100) : 0 };
       productSalesOnly = `합계 <b>${formatMoney(totalAmt)}</b> (배송비 제외 · 전체 ${all.length}종)\n${lines.join('\n')}`;
