@@ -554,6 +554,14 @@ function doPost(e) {
       PropertiesService.getScriptProperties().setProperty('LAST_DAILY_PERF_SENT', _pd);
       return jsonOut({ ok: true, marked: _pd });
     }
+    if (action === 'delete_cx') { // 개입기록 항목 삭제 (클로드 대행용, 2026-08-18)
+      // ⚠️클라이언트 deleteDimension 금지 — 봇이 1분마다 시트를 건드려 행이 밀린다(6/25 엉뚱한 행 3개 삭제 사고).
+      //   여기서 handleCxDelete_ 를 쓰면 서버에서 읽기+삭제가 한 번에 끝나고 완료 항목 보호도 그대로 걸린다.
+      var _dk = String(contents.keyword || '').trim();
+      if (!_dk) return jsonOut({ ok: false, error: 'keyword 필요' });
+      handleCxDelete_(EUNWOO_CHAT_ID, _dk);   // 결과(성공·다중매칭·없음)는 텔레그램으로 통지됨
+      return jsonOut({ ok: true, requested: _dk });
+    }
     if (action === 'run_heartbeat') { return jsonOut(cxHeartbeat(true)); } // 수동 테스트(OK여도 발송)
     if (action === 'setup_heartbeat') { // 매일 10:30 헬스체크 트리거 등록 (중복 제거 후)
       ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'cxHeartbeat') ScriptApp.deleteTrigger(t); });
@@ -3620,7 +3628,8 @@ function setupCXTriggers() {
   ScriptApp.newTrigger('triggerDailyReport').timeBased().atHour(9).nearMinute(0).everyDays(1).create();
   ScriptApp.newTrigger('triggerCollector').timeBased().everyHours(2).create();
   ScriptApp.newTrigger('triggerUXDraftMon').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(9).nearMinute(0).create();
-  // 2026-08-05: 주 2회 → 주 1회(월요일만). 은우 '주 1회 밀도 높은 글로'. 목요일 트리거 제거.
+  ScriptApp.newTrigger('triggerUXDraftThu').timeBased().onWeekDay(ScriptApp.WeekDay.THURSDAY).atHour(9).nearMinute(0).create();
+  // 2026-08-05: 주 2회 → 주 1회(월). 2026-09-09: 은우 요청으로 월·목 2회 복원 (단톡방 → 개인 DM 아침 리뷰).
   console.log('트리거 등록 완료');
 }
 // ★2026-08-05 구조 변경: UX 사례 본문은 Claude API가 아니라 은우 클로드 세션에서 쓴다.
@@ -3635,4 +3644,11 @@ function triggerUXDraftMon() {
   }
   return triggerUXSend();
 }
-function triggerUXDraftThu()  { return { ok: true, skipped: '주 1회 전환(2026-08-05) — 목요일 발송 없음' }; }
+function triggerUXDraftThu() {   // 2026-09-09 월·목 복원 — 월요일과 동일 동작
+  var p = getUXPending_();
+  if (!p || !p.ok || !p.draft) {
+    sendTGMessage(EUNWOO_CHAT_ID, '📚 <b>UX 사례 발송 못함</b> — 대기 중 초안이 없습니다.' + String.fromCharCode(10) + '→ 클로드한테 "이번 주 UX 사례 써줘"');
+    return { ok: false, error: 'no draft' };
+  }
+  return triggerUXSend();
+}
