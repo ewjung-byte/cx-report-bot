@@ -2292,16 +2292,16 @@ async function uxDraftFlow() {
     status: 'sent',
   }, APPS_SCRIPT_URL);
 
-  // 단톡방 자동 발송 (월·목, 컨펌 없이 바로). 사용자가 /UX 발송 안 눌러도 됨.
-  const groupMsg = `📚 <b>UX 사례 — ${escapeHtml(technique)}</b>\n\n${escapeHtml(insight)}`;
-  await sendTelegramChunked(groupMsg, true);
-  // 큐레이션 버튼 — 단톡방에서 바로 채택(케이스북+콕핏 나중에)/패스
+  // 개인 DM 자동 발송 (컨펌 없이 바로). 2026-09-09 은우 요청으로 단톡방 → 개인 DM 변경.
+  const dmMsg = `📚 <b>UX 사례 — ${escapeHtml(technique)}</b>\n\n${escapeHtml(insight)}`;
+  await sendTelegramChunked(dmMsg, false);
+  // 큐레이션 버튼 — 개인 DM에서 바로 채택(케이스북+콕핏 나중에)/패스
   const uxKb = { inline_keyboard: [[
     { text: '✓ 케이스북에 추가', callback_data: 'uxc:add:' + date },
     { text: '✕ 패스', callback_data: 'uxc:pass:' + date },
   ]] };
-  await sendTelegramGroup('👆 이 UX 사례 큐레이션', uxKb);
-  console.log(`[UX auto-send] ${date} ${dowKR} ${technique} → 단톡방 직접 발송 + 버튼 + 시트 sent`);
+  await sendTelegram('👆 이 UX 사례 큐레이션', uxKb);
+  console.log(`[UX auto-send] ${date} ${dowKR} ${technique} → 개인 DM 직접 발송 + 버튼 + 시트 sent`);
 }
 
 async function uxSendFlow() {
@@ -2314,13 +2314,20 @@ async function uxSendFlow() {
 
   if (!draft) { console.log('대기 중 UX 초안 없음'); return; }
 
-  const groupMsg = `📚 <b>UX 사례 — ${escapeHtml(draft.technique)}</b>\n\n${escapeHtml(draft.body)}`;
-  const r = await sendTelegramChunked(groupMsg, true);
+  const dmMsg = `📚 <b>UX 사례 — ${escapeHtml(draft.technique)}</b>\n\n${escapeHtml(draft.body)}`;
+  const r = await sendTelegramChunked(dmMsg, false);   // 2026-09-09 은우 요청: 단톡방 → 개인 DM
   if (r && r.ok) {
     await postToAppsScript({ action: 'mark_ux_sent', date: draft.date }, APPS_SCRIPT_URL);
-    console.log(`[UX send] ${draft.date} ${draft.technique} → 단톡방 발송 완료`);
+    console.log(`[UX send] ${draft.date} ${draft.technique} → 개인 DM 발송 완료`);
+    // ★큐 소진 경고 (2026-09-09) — 8월 3주 공백 재발 방지. 방금 발송 후 다음 초안이 없으면 은우 DM에 알림.
+    try {
+      const nx = await postToAppsScript({ action: 'get_ux_pending' }, APPS_SCRIPT_URL);
+      if (!(nx && nx.ok && nx.draft)) {
+        await sendTelegram('⚠️ <b>UX 사례 큐 소진</b> — 방금 나간 게 마지막이라 다음 발송분이 없어요.\n3창 클로드한테 "UX 사례 채워줘" 하면 요즘 우리가 보는 데이터·고치는 것에 맞춰 보충합니다.');
+      }
+    } catch (e) { console.error('[UX 큐 경고] 실패:', e.message); }
   } else {
-    console.error('UX 단톡방 발송 실패:', JSON.stringify(r));
+    console.error('UX 개인 DM 발송 실패:', JSON.stringify(r));
   }
 }
 
