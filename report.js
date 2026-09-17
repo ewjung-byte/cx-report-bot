@@ -1066,14 +1066,31 @@ async function autoRefillDesignCases() {
     //   → 해결: 재고 3개 미만이면 미리 리필 + 1개씩 나눠 요청(짧아서 타임아웃 회피) + 부분 성공 인정
     const LOW = 3;      // 이 개수 미만이면 미리 채움(고갈 전에)
     const WANT = 2;     // 한 번 돌 때 목표 확보 수
+    // ★풀 방식 (2026-09-17) — 웹서치 생성이 Actions 에서 타임아웃·도메인검증 전멸을 반복해 "재고 고갈" 경고가 계속 떴다(9/13·9/17 수동 보충).
+    //   → 발송 경로에서 웹서치를 빼고, 미리 도메인 검증해 둔 design_pool.json 에서 꺼내 미발송으로 올린다.
+    //   채우기 = italy-jungmiso/cx-data/bot/_stock_pool.js (로컬). 웹서치는 그 브랜드 풀이 비었을 때만 마지막 수단(최대 2회).
+    //   풀 파일 저장은 시트 적재가 성공한 뒤에만(실패하면 후보 보존) — 줄어든 파일은 워크플로 "Save bot state" 가 커밋.
+    const { loadPool, savePool, takeFromPool, poolDepth } = require('./design_pool');
+    const pool = loadPool();
+    const srcs = rows.map(r => String(r[7] || ''));
+    let poolDirty = false;
     for (const b of brands) {
       const unsent = rows.filter(r => String(r[2] || '').trim() === b.kr && String(r[8] || '').trim() === '미발송').length;
       if (unsent >= LOW) continue; // 여유 있으면 skip
       const maxId = rows.filter(r => String(r[0]).charAt(0) === b.pre).reduce((mx, r) => Math.max(mx, parseInt(String(r[0]).slice(1)) || 0), 0);
-      // ★1개씩 요청 = 웹서치 짧아져 타임아웃 회피. 실패해도 다음 시도가 살아남음(부분 성공 누적).
-      let got = 0;
-      // AI OFF면 생성 시도 자체를 건너뜀 (400 재시도 6번 노이즈 제거). 큐는 클로드 창에서 수동 보충.
-      for (let attempt = 0; AI_ANALYSIS_ON && attempt < 3 && got < WANT; attempt++) {
+      let got = 0, pulled = 0;
+      // 풀에서 1개씩 꺼내 "지금" 살아있는 도메인만 적재 — 채울 때 검증했어도 몇 주 뒤 죽을 수 있다. 죽은 건 버리고 다음 것.
+      while (got < WANT && pulled < 6) {
+        const c = takeFromPool(pool, b.kr, 1, titles, srcs)[0];   // 제목·출처 중복은 안에서 걸러짐
+        if (!c) break;
+        pulled++; poolDirty = true;
+        const alive = await isLiveBrandSite(c.src).catch(() => false);
+        if (!alive) { console.warn('[디자인 풀] 도메인 안 살아있음, 버림:', c.title, c.src); continue; }
+        newRows.push([b.pre + (maxId + 1 + got), dateStr(0), b.kr, c.title, c.sub || '', c.point || '', c.apply || '', c.src || '', '미발송', '']);
+        got++;
+      }
+      // 풀에 아예 없을 때만 옛 웹서치(1개씩). AI OFF면 건너뜀.
+      for (let attempt = 0; pulled === 0 && AI_ANALYSIS_ON && attempt < 2 && got < WANT; attempt++) {
         const gen = await generateDesignCasesViaClaude(b.kr, 1, titles).catch(() => []);
         gen.forEach((c) => {
           newRows.push([b.pre + (maxId + 1 + got), dateStr(0), b.kr, c.title, c.sub || '', c.point || '', c.apply || '', c.src || '', '미발송', '']);
@@ -1081,15 +1098,21 @@ async function autoRefillDesignCases() {
           got++;
         });
       }
-      // 재고가 0인데 한 개도 못 건졌을 때만 "고갈" 경고 (여유 있는 선제 리필 실패는 조용히 넘어감)
+      // 재고가 0인데 한 개도 못 건졌을 때만 "고갈" 경고
       if (got === 0 && unsent === 0) starved.push(b.kr);
     }
+    const poolLow = brands.filter(b => (pool[b.kr] || []).length <= 2).map(b => b.kr + ' ' + (pool[b.kr] || []).length + '개');
     if (newRows.length) {
       // ★getGA4Token은 읽기전용(403) → 쓰기는 GAS(시트 소유) 통해서
       await postToAppsScript({ action: 'append_design_cases', rows: newRows }, APPS_SCRIPT_URL);
-      console.log('[디자인 케이스북 자동보충]', newRows.map(r => r[0] + ' ' + r[3]).join(' / '));
-    } else if (!starved.length) console.log('[디자인 케이스북] 재고 충분 — 보충 없음');
-    if (starved.length) console.warn('[디자인 재고 고갈]', starved.join('·'), '— 미발송 0 + 생성 전멸, DM 안 나감(수동 보충 필요)');
+      if (poolDirty) savePool(pool);   // 적재 성공 후에만 풀에서 제거 확정(GAS 실패 시 후보 보존)
+      console.log('[디자인 케이스북 자동보충]', newRows.map(r => r[0] + ' ' + r[3]).join(' / '), '| 풀 잔여:', poolDepth(pool));
+    } else {
+      if (poolDirty) savePool(pool);   // 꺼낸 게 전부 죽은 도메인이었을 때 — 버린 것만 반영
+      if (!starved.length) console.log('[디자인 케이스북] 재고 충분 — 보충 없음 | 풀 잔여:', poolDepth(pool));
+    }
+    if (poolLow.length) console.warn('[디자인 풀 부족]', poolLow.join(' · '), '— cx-data/bot/_stock_pool.js 로 채울 것');
+    if (starved.length) console.warn('[디자인 재고 고갈]', starved.join('·'), '— 미발송 0 + 풀 비어 있음, DM 안 나감(풀 채울 것)');
     return newRows.length;
   } catch (e) { console.error('[디자인 자동보충]', e.message); return 0; }
 }

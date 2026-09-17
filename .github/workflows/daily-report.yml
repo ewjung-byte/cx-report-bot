@@ -64,5 +64,6 @@ jobs:
           git config user.name "cx-bot"
           git config user.email "bot@songmamans.com"
           git add -f reminders.json 2>/dev/null || true
+          git add -f design_pool.json 2>/dev/null || true
           git diff --cached --quiet || git commit -m "chore: update bot state [skip ci]"
           git push || true
