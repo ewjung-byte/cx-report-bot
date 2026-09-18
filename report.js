@@ -4425,7 +4425,22 @@ ${dramaLine}
         const _pm = _wo && _wo.payMethods;
         const _ot = _pm ? (_pm.회원 + _pm.비회원) : 0;
         if (_ot) _rows.push([_label, thisStart, thisEnd, '비회원비율', '전체 주문', +(_pm.비회원 / _ot * 100).toFixed(1), _ot, `비회원 ${_pm.비회원}건`, '']);
-      } catch (e) { console.error('[개입 추적] 비회원비율', e.message); }
+        // 외부 주문형 결제 비율 — 네이버페이 주문형·톡체크아웃은 자사몰 밖에서 결제가 끝나 GA4 퍼널에 아예 안 잡힌다.
+        //   2026-09-18 실측 55.9%(749/1,339). 비회원 59%의 본체라, 이 비중이 곧 「우리가 못 보는 결제」의 크기다.
+        if (_ot) {
+          const _ext = (_pm.네이버_외부 || 0) + (_pm.카카오_외부 || 0);
+          _rows.push([_label, thisStart, thisEnd, '외부결제비율', '전체 주문', +(_ext / _ot * 100).toFixed(1), _ot, `외부 ${_ext}건(네이버 ${_pm.네이버_외부}·톡 ${_pm.카카오_외부})`, '']);
+        }
+      } catch (e) { console.error('[개입 추적] 비회원비율·외부결제', e.message); }
+      // 주문서 전환율 — 주문서까지 온 세션 중 몇이 샀나. UIUX·결제율 개선의 마지막 칸.
+      //   begin_checkout 은 주문서 도달의 33%만 찍는 고장 이벤트라 쓰지 않고 주문서 page_view 로 잰다(2026-09-18 검증).
+      //   분자 GA4 purchase 세션 600 ≈ 원장 결제창 경유 주문 590 → 외부 주문형은 여기 안 잡히는 게 정상이다.
+      try {
+        const _sessOf = async (f) => { const j = await ga4Fetch(_tk, { dateRanges: [{ startDate: thisStart, endDate: thisEnd }], dimensions: [{ name: f.d }], metrics: [{ name: 'sessions' }], dimensionFilter: { filter: { fieldName: f.d, stringFilter: { matchType: 'EXACT', value: f.v } } } }); return j.rows && j.rows[0] ? +j.rows[0].metricValues[0].value : 0; };
+        const _ofs = await _sessOf({ d: 'pagePath', v: '/order/orderform.html' });
+        const _pus = await _sessOf({ d: 'eventName', v: 'purchase' });
+        if (_ofs) _rows.push([_label, thisStart, thisEnd, '주문서전환율', '자사몰 결제창', +(_pus / _ofs * 100).toFixed(1), _ofs, `구매 세션 ${_pus}`, '']);
+      } catch (e) { console.error('[개입 추적] 주문서전환율', e.message); }
       // 신규 가입(구매까지 온 회원) — 같은 개입을 반대 방향에서 본다: 비회원비율은 내려가야, 이건 올라가야 한다.
       //   2026-09-18 실측: 회원으로 산 사람의 80~88%가 그 주 신규 가입자 = 회원 증가는 거의 전부 「처음 사면서 가입」.
       //   교체 전 8주 130·165·150·83·165·120·106·91명(폭이 커서 한 주로 판정 금지, 4주 평균으로 본다).
