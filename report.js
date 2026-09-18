@@ -1310,9 +1310,16 @@ async function getDailySignals(mode) {
     // ② 소스분류 이상 먼저 — 미분류(Unassigned)가 2배 넘게 튀면 채널별 지표 자체를 못 믿음.
     //    이때 오가닉 알림은 띄우지 않는다(오진의 원인이었음).
     const o3 = await splitRates(dateStr(3), dateStr(1)), oP = await splitRates(dateStr(10), dateStr(4));
-    const un3 = o3.un.v / 3, unP = oP.un.v / 7;
+    // ★2026-09-18 수정 — 미분류는 어제·그제가 「집계중」이라 항상 튄다. 그 구간으로 판정하면 매번 오탐이다.
+    //   실측(9/18 09:04 발송본 vs 같은 날 재측정): 기준 9/8~14 는 25/일로 정확히 같았는데
+    //   문제 구간 9/15~17 만 1,094/일 → 20/일(59건)로 떨어졌다 = GA4 가 그 사이 출처를 다시 붙인 것.
+    //   같은 함정이 이 파일 3368행에도 적혀 있다(6/18 42%→0%). 그래서 **이미 집계가 끝난 구간으로만** 판정한다.
+    //   조회량이 늘어난 진짜 이유는 미분류가 아니라 크리테오(Display) 유입이었다 — [[tool_ad_spend_sources]]
+    const uN = await splitRates(dateStr(6), dateStr(4));    // 최근이면서 집계 끝난 3일 (4~6일 전)
+    const uP = await splitRates(dateStr(13), dateStr(7));   // 그 직전 7일
+    const un3 = uN.un.v / 3, unP = uP.un.v / 7;
     const unBroken = unP >= 10 && un3 / unP >= 2 && un3 >= 80;
-    if (unBroken) out.push(`📛 GA4 소스분류 이상 — 출처 미분류 조회 ${Math.round(unP)}→${Math.round(un3)}/일 (${(un3 / unP).toFixed(1)}배). 광고 유입이 미분류로 새는 중이라 채널별 담기율은 이번 기간 판단 근거로 쓰지 말 것`);
+    if (unBroken) out.push(`📛 GA4 소스분류 이상 — 출처 미분류 조회 ${Math.round(unP)}→${Math.round(un3)}/일 (${(un3 / unP).toFixed(1)}배, 4~6일 전 기준). 광고 유입이 미분류로 새는 중이라 채널별 담기율은 이 기간 판단 근거로 쓰지 말 것`);
     // ③ 오가닉 담기율 — 최근3일 vs 직전7일. 3일 조회 500건 미만이면 스킵(하루치는 아예 안 봄).
     //    ★담기율만 보면 오진한다(7/29 실측): 조회량이 같이 늘었으면 담기율 하락은 사이트 회귀가 아니라
     //      담기율 낮은 새 유입(인플루언서 링크·direct)이 섞여 평균이 희석된 것. 조회량 증감을 반드시 같이 본다.
@@ -2933,7 +2940,7 @@ function escapeHtml(s) {
   str = str.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '');
   str = str.replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
   // Unicode replacement character·NULL 등 invisible 문자 strip
-  str = str.replace(/[� ]/g, '');
+  str = str.replace(/[\uFFFD\u0000]/g, '');
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 const DRY_RUN = process.env.DRY_RUN === '1';
