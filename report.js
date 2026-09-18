@@ -538,6 +538,39 @@ async function getCafe24SalesByProduct(startDate, endDate) {
   } catch(e) { console.error('Cafe24 상품별 오류:', e.message); return { totalSales: 0, count: 0, byProduct: {}, basketBy: () => ({ orders: 0, qty: 0, amount: 0 }) }; }
 }
 
+// ── 신규 가입 회원 수 (구매까지 온 회원) ──────────────────
+// 총 회원수는 우리 토큰으로 못 센다: /customers 는 member_id·cellphone 중 하나가 필수(422),
+//   /customersprivacy 는 403(insufficient_scope), /customers/count 는 없는 API(404), /customergroups 엔 회원수 필드가 없다.
+// 되는 길: /customers?member_id=a,b,c 는 200 이고 created_date(가입일)를 준다 — 2026-09-18 실측.
+//   → 그 주 주문에서 회원 아이디를 모아 가입일이 그 주인 사람을 센다.
+//   같은 날 실측: 가입자의 92.4%가 가입 당일 주문(7일 내 98%)이라 최근 주 과소집계는 무시 가능.
+//   빠지는 건 「가입만 하고 아직 안 산 사람」 → 이 숫자는 "구매까지 온 신규 회원"으로 읽어야 한다.
+async function getCafe24NewMembers(startDate, endDate) {
+  try {
+    const H = { 'Authorization': `Bearer ${CAFE24_ACCESS_TOKEN}`, 'X-Cafe24-Api-Version': CAFE24_API_VERSION };
+    let all = [], offset = 0;
+    while (true) {
+      const d = await fetchJson(`${CAFE24_BASE}orders?start_date=${startDate}&end_date=${endDate}&limit=100&offset=${offset}`, H);
+      if (!d.orders || !d.orders.length) break;
+      all = all.concat(d.orders);
+      if (d.orders.length < 100) break;
+      offset += 100; if (offset > 20000) break;
+    }
+    const paid = all.filter(o => o.paid === 'T' && o.canceled === 'F');   // 비회원비율과 같은 기준
+    const ids = [...new Set(paid.map(o => String(o.member_id || '').trim()).filter(Boolean))];
+    let neu = 0;
+    for (let i = 0; i < ids.length; i += 50) {                            // 콤마로 50명씩 — 호출 수를 1/50 로
+      const d = await fetchJson(`${CAFE24_BASE}customers?member_id=${encodeURIComponent(ids.slice(i, i + 50).join(','))}&limit=50`, H).catch(() => ({}));
+      (d.customers || []).forEach(c => {
+        const cd = String(c.created_date || '').slice(0, 10);
+        if (cd >= startDate && cd <= endDate) neu++;
+      });
+      await new Promise(r => setTimeout(r, 250));
+    }
+    return { newMembers: neu, buyingMembers: ids.length };
+  } catch (e) { console.error('Cafe24 신규가입 오류:', e.message); return null; }
+}
+
 // ── 일별 주문 요약 (매출 + 유입경로 + 결제수단) ──────────
 // order_place_name = 주문이 일어난 곳(모바일웹/네이버페이/톡체크아웃/PC). 광고소재별 X.
 async function getCafe24DailyOrders(startDate, endDate) {
@@ -4382,6 +4415,24 @@ ${dramaLine}
       const _bpq = (cafe24Products && cafe24Products.byProduct) || {};
       const _q = ['27', '88', '83'].reduce((t, n) => t + ((_bpq[n] || {}).count || 0), 0);
       if (_q) _rows.push([_label, thisStart, thisEnd, '실판매', '바페 3종', _q, 7, `일평균 ${(_q / 7).toFixed(1)}`, '']);
+      // 비회원 주문 비율 — 알파푸시 무료 한 칸을 「결제 직후 비회원에게 적립금 1% 회원가입 유도」로 교체(2026-09-18 은우).
+      //   가입은 결제 뒤에 일어나 그 주문은 그대로 비회원이므로, 효과는 그 사람의 다음 주문부터 = 주별 추세로만 보인다.
+      //   Before = 8/21~9/17 58.6%(784/1,337). 가입 수·적립금 원장은 우리 토큰 권한 밖(customers·points 403)이라 이 지표로 대신한다.
+      //   ⚠분모는 payMethods(결제완료+미취소) 기준. 소급분 track_weekly.js 와 같은 기준이어야 개입 시점에 가짜 계단이 안 생긴다.
+      //   교체 전 8주 실측: 평균 56.0% · 주별 48.4~61.7%(1σ 4.2pt) → 한 주 흔들림으로 판정 금지, 3주 평균으로 본다.
+      try {
+        const _wo = await getCafe24DailyOrders(thisStart, thisEnd);
+        const _pm = _wo && _wo.payMethods;
+        const _ot = _pm ? (_pm.회원 + _pm.비회원) : 0;
+        if (_ot) _rows.push([_label, thisStart, thisEnd, '비회원비율', '전체 주문', +(_pm.비회원 / _ot * 100).toFixed(1), _ot, `비회원 ${_pm.비회원}건`, '']);
+      } catch (e) { console.error('[개입 추적] 비회원비율', e.message); }
+      // 신규 가입(구매까지 온 회원) — 같은 개입을 반대 방향에서 본다: 비회원비율은 내려가야, 이건 올라가야 한다.
+      //   2026-09-18 실측: 회원으로 산 사람의 80~88%가 그 주 신규 가입자 = 회원 증가는 거의 전부 「처음 사면서 가입」.
+      //   교체 전 8주 130·165·150·83·165·120·106·91명(폭이 커서 한 주로 판정 금지, 4주 평균으로 본다).
+      try {
+        const _nm = await getCafe24NewMembers(thisStart, thisEnd);
+        if (_nm && _nm.buyingMembers) _rows.push([_label, thisStart, thisEnd, '신규가입', '구매까지 온 회원', _nm.newMembers, _nm.buyingMembers, `구매 회원 ${_nm.buyingMembers}명 중`, '']);
+      } catch (e) { console.error('[개입 추적] 신규가입', e.message); }
       if (_rows.length) {
         const _tr = await postToAppsScript({ action: 'track_weekly', rows: _rows }, APPS_SCRIPT_URL).catch(() => null);
         console.log('[개입 추적]', _tr && _tr.ok ? `+${_tr.added}·갱신${_tr.updated}` : '실패');
