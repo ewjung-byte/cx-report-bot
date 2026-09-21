@@ -4592,6 +4592,21 @@ async function main() {
   if (!tokenOk && DRY_RUN) console.warn('[DRY_RUN] 토큰 갱신 실패 — 진행 (메시지 미리보기 목적)');
   const mode = process.argv[2] || (isMonday() ? 'weekly' : 'daily');
   console.log(`모드: ${mode}`);
+  // ★pooltest — 디자인 풀 자동보충이 진짜 되는지만 확인한다. 보고서·DM·시트 쓰기 전부 안 한다.
+  //   왜 필요: 풀이 기준(12) 위에 있으면 한 달 뒤에나 처음 돌아서, 그때까지 되는지 알 수 없다.
+  //   Claude 호출 1회 + 도메인 확인만 하고 끝낸다(저장 안 함).
+  if (mode === 'pooltest') {
+    console.log('POOL_AI_ON =', process.env.POOL_AI_ON === '1' ? '켜짐' : '꺼짐', '· 키', (process.env.CLAUDE_API_KEY || '').length ? '있음' : '없음');
+    const gen = await refillPoolViaClaude('D 홈페이지', 5, [], []);
+    console.log('생성 결과', gen.length, '건');
+    for (const g of gen.slice(0, 5)) {
+      const dom = String(g.src || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase();
+      const ok = await isLiveBrandSite(dom).catch(() => false);
+      console.log(`  ${ok ? 'O' : 'X'} ${String(g.title).slice(0, 44).padEnd(46)} ${dom}`);
+    }
+    console.log('pooltest 끝 — 아무것도 저장하지 않았다');
+    return;
+  }
   if (mode === 'weekly') {
     await weeklyReport();
     // ★디자인 사례집은 일간 경로에만 있어서 월요일(주간 모드)마다 빠지던 것 — 주간에도 발송 (2026-07-13)
