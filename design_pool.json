@@ -1,34 +1,6 @@
 {
  "A 식품": [
   {
-   "title": "Jeni's Splendid Ice Creams",
-   "sub": "미국 아이스크림 D2C — 향미 하나하나를 장인 서사로 풀어 프리미엄을 정당화",
-   "point": "맛을 나열하지 않고 향미마다 이야기를 붙여 고가를 납득시킨다",
-   "apply": "이태리정미소가 제품마다 향미·원료 서사를 붙여 프리미엄을 설득한다",
-   "src": "jenis.com"
-  },
-  {
-   "title": "Recess",
-   "sub": "미국 \"진정\" 컨셉 음료 — 기능(이완)을 무드·색·일러스트로 번역",
-   "point": "기능성을 딱딱한 성분이 아니라 감성 무드로 전달",
-   "apply": "이태리정미소가 품질·기능을 무드·비주얼로 번역한다",
-   "src": "takearecess.com"
-  },
-  {
-   "title": "Trade Coffee",
-   "sub": "미국 커피 큐레이션 D2C — 취향 매칭 퀴즈로 초심자 진입 장벽을 낮춤",
-   "point": "\"뭘 골라야 할지 모름\"을 취향 매칭으로 해결",
-   "apply": "이태리정미소가 취향·용도 가이드로 초심자 선택을 돕는다",
-   "src": "drinktrade.com"
-  },
-  {
-   "title": "De Soi",
-   "sub": "미국 논알콜 아페리티프 — 유명인 공동창업 + 무드로 \"안 마시는 어른 음료\" 포지션",
-   "point": "없는 것(알콜)을 결핍이 아니라 새 취향으로 재정의",
-   "apply": "이태리정미소가 \"무엇이 없다\"를 선택 이유로 뒤집는다",
-   "src": "drinkdesoi.com"
-  },
-  {
    "title": "Chamberlain Coffee",
    "sub": "크리에이터 커피 브랜드 — 캐릭터·톤으로 팬을 고객으로 전환",
    "point": "창작자 정체성·캐릭터를 브랜드 자산으로 쓴다",
@@ -43,18 +15,25 @@
    "src": "drinkcann.com"
   },
   {
-   "title": "Fly by Jing",
-   "sub": "쓰촨 칠리크리스프 — 창업자 서사·강한 톤으로 소스를 프리미엄화",
-   "point": "흔한 소스를 창업자 정체성으로 대체 불가 브랜드로",
-   "apply": "이태리정미소가 소스를 \"누가 왜 만들었나\"로 프리미엄화",
-   "src": "flybyjing.com"
-  },
-  {
    "title": "Seed + Mill",
    "sub": "할바·타히니 — 단일 카테고리를 깊게 파 전문성을 만든다",
    "point": "좁게 파면 전문가로 보인다",
    "apply": "페스토 한 카테고리를 더 깊게 파는 구성",
    "src": "seedandmill.com"
+  },
+  {
+   "title": "De Soi",
+   "sub": "미국 논알콜 아페리티프 — 유명인 공동창업 + 무드로 \"안 마시는 어른 음료\" 포지션",
+   "point": "없는 것(알콜)을 결핍이 아니라 새 취향으로 재정의",
+   "apply": "이태리정미소가 \"무엇이 없다\"를 선택 이유로 뒤집는다",
+   "src": "drinkdesoi.com"
+  },
+  {
+   "title": "Fly by Jing",
+   "sub": "쓰촨 칠리크리스프 — 창업자 서사·강한 톤으로 소스를 프리미엄화",
+   "point": "흔한 소스를 창업자 정체성으로 대체 불가 브랜드로",
+   "apply": "이태리정미소가 소스를 \"누가 왜 만들었나\"로 프리미엄화",
+   "src": "flybyjing.com"
   },
   {
    "title": "Jacobsen Salt Co.",
@@ -69,29 +48,106 @@
    "point": "흔한 재료도 품종을 나누면 고를 이유가 생긴다",
    "apply": "바질 품종·올리브 품종을 나눠 고를 이유를 만든다",
    "src": "ranchogordo.com"
+  },
+  {
+   "title": "Wildgrain",
+   "sub": "빵·파스타 정기배송 — 굽는 과정을 영상으로 보여줌",
+   "point": "완제품이 아니라 과정을 팔아 기대를 만든다",
+   "apply": "조리 과정·발효 장면을 상세에",
+   "src": "wildgrain.com"
+  },
+  {
+   "title": "El Yucateco",
+   "sub": "핫소스 노포 — 오랜 라벨을 그대로 유지해 신뢰",
+   "point": "바꾸지 않는 것도 전략이 된다",
+   "apply": "오래된 라벨·서체를 자산으로",
+   "src": "elyucateco.com"
+  },
+  {
+   "title": "Maldon Salt",
+   "sub": "소금 결정 모양 하나로 브랜드를 각인",
+   "point": "제품의 물리적 형태가 기억장치",
+   "apply": "페스토 질감·입자를 접사로",
+   "src": "maldonsalt.com"
+  },
+  {
+   "title": "Cento",
+   "sub": "이탈리아 식재료 — 산 마르자노 인증을 전면에",
+   "point": "인증·원산지 표기를 크게 쓴다",
+   "apply": "IGP·DOP 인증을 상단에",
+   "src": "cento.com"
+  },
+  {
+   "title": "Mutti",
+   "sub": "이탈리아 토마토 — 수확부터 가공까지 시간을 숫자로",
+   "point": "신선도를 시간 숫자로 증명",
+   "apply": "수확 후 가공까지 시간을 명시",
+   "src": "mutti-parma.com"
+  },
+  {
+   "title": "Colavita",
+   "sub": "올리브유 노포 — 가문 연혁을 타임라인으로",
+   "point": "연혁 타임라인이 신뢰를 누적시킨다",
+   "apply": "브랜드 연혁을 타임라인으로",
+   "src": "colavita.com"
+  },
+  {
+   "title": "Big Night",
+   "sub": "파티용 식품 큐레이션 — 장면(호스팅)으로 묶어 판다",
+   "point": "상황으로 묶으면 객단가가 오른다",
+   "apply": "손님상·선물 장면으로 세트 구성",
+   "src": "bignightbk.com"
+  },
+  {
+   "title": "Zingerman's",
+   "sub": "미국 델리 — 상품 설명이 편지처럼 길다",
+   "point": "긴 설명도 목소리가 좋으면 읽힌다",
+   "apply": "상세 카피를 편지 톤으로",
+   "src": "zingermans.com"
+  },
+  {
+   "title": "Belazu",
+   "sub": "영국 지중해 식재료 — 셰프 협업을 신뢰 축으로",
+   "point": "셰프 채택을 근거로 쓴다",
+   "apply": "셰프 사용처를 근거로",
+   "src": "belazu.com"
+  },
+  {
+   "title": "Nuts.com",
+   "sub": "견과 D2C — 대량 SKU를 필터로 정리",
+   "point": "SKU가 많으면 필터가 상품이다",
+   "apply": "분류·필터 설계를 정리",
+   "src": "nuts.com"
+  },
+  {
+   "title": "Haven's Kitchen",
+   "sub": "소스 파우치 — 사용 장면을 3단계로",
+   "point": "쓰는 법을 3단계로 줄인다",
+   "apply": "페스토 활용법을 3단계로",
+   "src": "havenskitchen.com"
+  },
+  {
+   "title": "Yellowbird",
+   "sub": "핫소스 — 원물 사진으로 성분을 보여줌",
+   "point": "성분표 대신 원물 사진",
+   "apply": "바질·잣 원물 사진으로",
+   "src": "yellowbirdfoods.com"
   }
  ],
  "B 주방기기": [
   {
-   "title": "Dalstrong",
-   "sub": "나이프 D2C — 강종·경도·각도를 상세하게 보여주는 덕후형 상세",
-   "point": "스펙을 숨기지 않고 깊게 보여줘 마니아 신뢰를 얻는다",
-   "apply": "카마솥 상세에 재질·두께·열전도 스펙을 깊게",
-   "src": "dalstrong.com"
+   "title": "Kitchen Aid",
+   "sub": "상징적 형태 하나로 카테고리를 대표",
+   "point": "형태 자체가 브랜드 기억장치가 된다",
+   "apply": "카마솥 실루엣을 브랜드 기억장치로 다듬는다",
+   "src": "kitchenaid.com"
   },
   {
-   "title": "Food52",
-   "sub": "레시피 콘텐츠와 주방용품 쇼핑이 한 몸인 사이트",
-   "point": "콘텐츠에서 바로 도구 구매로 이어지는 동선",
-   "apply": "이태리정미소 레시피에서 카마솥·재료 구매로 바로 연결",
-   "src": "food52.com"
-  },
-  {
-   "title": "Fellow",
-   "sub": "커피 기구 D2C — 도구를 오브제로 만드는 디자인·상세",
-   "point": "기능 도구를 소장하고 싶은 오브제로 격상",
-   "apply": "카마솥이 팬을 걸어두고 싶은 오브제로 보여준다",
-   "src": "fellowproducts.com"
+   "title": "Crate & Barrel Kitchen",
+   "sub": "주방용품을 \"완성된 식탁\" 장면으로 묶어 판다",
+   "point": "단품이 아니라 장면으로 묶으면 객단가가 오른다",
+   "apply": "팬·홀더·식재료를 한 장면으로 묶어 제안",
+   "src": "crateandbarrel.com"
   },
   {
    "title": "Anyday",
@@ -129,42 +185,77 @@
    "src": "zwilling.com"
   },
   {
-   "title": "Kitchen Aid",
-   "sub": "상징적 형태 하나로 카테고리를 대표",
-   "point": "형태 자체가 브랜드 기억장치가 된다",
-   "apply": "카마솥 실루엣을 브랜드 기억장치로 다듬는다",
-   "src": "kitchenaid.com"
+   "title": "Williams Sonoma",
+   "sub": "주방 리테일 — 레시피와 도구를 붙여 판다",
+   "point": "콘텐츠 옆에 도구를 둔다",
+   "apply": "레시피에서 도구로 연결",
+   "src": "williams-sonoma.com"
   },
   {
-   "title": "Crate & Barrel Kitchen",
-   "sub": "주방용품을 \"완성된 식탁\" 장면으로 묶어 판다",
-   "point": "단품이 아니라 장면으로 묶으면 객단가가 오른다",
-   "apply": "팬·홀더·식재료를 한 장면으로 묶어 제안",
-   "src": "crateandbarrel.com"
+   "title": "All-Clad",
+   "sub": "미국 다층 스테인리스 — 층 구조를 단면도로",
+   "point": "보이지 않는 구조를 단면도로",
+   "apply": "팬 단면 구조를 도해로",
+   "src": "all-clad.com"
+  },
+  {
+   "title": "Opinel",
+   "sub": "프랑스 칼 — 사이즈 번호 체계가 곧 언어",
+   "point": "번호 체계가 브랜드 언어가 된다",
+   "apply": "사이즈·용량 체계 정리",
+   "src": "opinel.com"
+  },
+  {
+   "title": "Global Knives",
+   "sub": "일본 칼 — 일체형 디자인을 한 컷으로",
+   "point": "한 컷으로 설명이 끝나는 형태",
+   "apply": "형태로 설명을 대신",
+   "src": "global-knife.com"
+  },
+  {
+   "title": "Shun Cutlery",
+   "sub": "일본 칼 — 다마스커스 무늬를 접사로",
+   "point": "무늬 접사가 장인성을 말한다",
+   "apply": "표면 무늬 접사",
+   "src": "shun.kaiusa.com"
+  },
+  {
+   "title": "Emile Henry",
+   "sub": "프랑스 세라믹 — 오븐→식탁 그대로 쓰는 장면",
+   "point": "조리도구를 식기로 쓰는 장면",
+   "apply": "조리→식탁 연결 장면",
+   "src": "emilehenryusa.com"
+  },
+  {
+   "title": "Falk Culinair",
+   "sub": "벨기에 구리 — 구리·스테인리스 결합을 단면으로",
+   "point": "결합 구조를 단면으로 설명",
+   "apply": "접합부 구조 설명",
+   "src": "falkculinair.com"
+  },
+  {
+   "title": "Riess",
+   "sub": "오스트리아 법랑 — 100년 공장 사진",
+   "point": "공장 사진이 신뢰가 된다",
+   "apply": "제조 현장 사진",
+   "src": "riess.at"
+  },
+  {
+   "title": "Borough Kitchen",
+   "sub": "영국 주방 편집숍 — 비교 가이드 콘텐츠",
+   "point": "비교 콘텐츠가 판매로 이어진다",
+   "apply": "제품 비교 가이드",
+   "src": "boroughkitchen.com"
+  },
+  {
+   "title": "Cookware Brands",
+   "sub": "호주 쿡웨어 편집 — 소재별 정리",
+   "point": "소재별 정리가 탐색을 쉽게",
+   "apply": "소재별 분류 정리",
+   "src": "cookwarebrands.com.au"
   }
  ],
  "D 홈페이지": [
-  {
-   "title": "Allbirds · 제품 한 컷 + 지속가능 메시지",
-   "sub": "[홈] 미니멀 배경에 제품 한 컷, 소재·지속가능성을 짧게",
-   "point": "제품 하나를 크게 + 가치 한 줄로 첫인상을 잡는다",
-   "apply": "자사몰 홈 첫 화면=대표 제품 한 컷 + 가치 한 줄",
-   "src": "allbirds.com"
-  },
-  {
-   "title": "Headspace · 색·일러스트로 무드부터",
-   "sub": "[홈] 부드러운 색·일러스트로 브랜드 감정을 먼저 전달",
-   "point": "제품 노출보다 무드·색으로 온도를 먼저 만든다",
-   "apply": "이태리정미소 홈이 색·일러로 브랜드 온도를 먼저",
-   "src": "headspace.com"
-  },
-  {
-   "title": "Patagonia · 첫 화면이 제품이 아니라 태도",
-   "sub": "[홈] 상품보다 환경 메시지를 먼저 세워 신념으로 고객을 고른다",
-   "point": "무엇을 파는가보다 왜 파는가를 먼저 말하는 배치",
-   "apply": "무농약·산지 같은 신념을 구매 버튼보다 위에 둘지 실험",
-   "src": "patagonia.com"
-  },
   {
    "title": "Glossier · 고객 사진이 곧 히어로",
    "sub": "[홈] 모델컷 대신 실사용자 사진을 전면에 써 신뢰를 만든다",
@@ -194,6 +285,13 @@
    "src": "notion.com"
   },
   {
+   "title": "Ollie · 개인화 퀴즈가 첫 화면",
+   "sub": "[홈] 바로 팔지 않고 질문으로 시작해 맞춤 제안으로 넘긴다",
+   "point": "선택지가 많을수록 묻는 것이 파는 것보다 빠르다",
+   "apply": "어떤 페스토·파스타가 맞는지 묻는 짧은 퀴즈 실험",
+   "src": "ollie.com"
+  },
+  {
    "title": "Stripe · 그라디언트 히어로 + 코드 데모",
    "sub": "[홈] 컬러 그라디언트 히어로 아래 실제 코드/제품 데모를 바로 보여줌",
    "point": "추상적 설명 대신 첫 화면에서 \"이렇게 된다\"를 보여준다",
@@ -208,13 +306,6 @@
    "src": "graza.co"
   },
   {
-   "title": "Wildgrain · 정기배송을 첫 화면에서 설명",
-   "sub": "[홈] 구독 구조를 그림 3단계로 먼저 풀어 진입 장벽을 낮춤",
-   "point": "낯선 구매 방식은 사기 전에 그림으로 설명한다",
-   "apply": "정기배송·세트 구성을 3단계 그림으로 상단 설명",
-   "src": "wildgrain.com"
-  },
-  {
    "title": "Magic Spoon · 비교표를 히어로 가까이",
    "sub": "[홈] 경쟁 시리얼과의 숫자 비교를 위쪽에 배치해 근거를 빨리 준다",
    "point": "설득 근거를 아래가 아니라 결정 직전에 둔다",
@@ -222,11 +313,116 @@
    "src": "magicspoon.com"
   },
   {
-   "title": "Ollie · 개인화 퀴즈가 첫 화면",
-   "sub": "[홈] 바로 팔지 않고 질문으로 시작해 맞춤 제안으로 넘긴다",
-   "point": "선택지가 많을수록 묻는 것이 파는 것보다 빠르다",
-   "apply": "어떤 페스토·파스타가 맞는지 묻는 짧은 퀴즈 실험",
-   "src": "ollie.com"
+   "title": "Figma · 실제 캔버스를 홈에 띄움",
+   "sub": "[홈] 방문자가 바로 만져보는 캔버스",
+   "point": "설명 대신 만지게 한다",
+   "apply": "핵심 행동을 첫 화면에",
+   "src": "figma.com"
+  },
+  {
+   "title": "Superhuman · 속도를 숫자로",
+   "sub": "[홈] 몇 밀리초라는 수치를 히어로에",
+   "point": "추상적 강점을 숫자로",
+   "apply": "강점을 숫자로 바꿔 상단에",
+   "src": "superhuman.com"
+  },
+  {
+   "title": "Airbnb · 검색창이 히어로",
+   "sub": "[홈] 첫 화면이 곧 검색 입력",
+   "point": "행동을 첫 화면에 둔다",
+   "apply": "검색·분류를 첫 화면에",
+   "src": "airbnb.com"
+  },
+  {
+   "title": "Apple · 스크롤에 맞춘 제품 회전",
+   "sub": "[홈] 스크롤 위치에 제품이 반응",
+   "point": "스크롤을 조작 장치로 쓴다",
+   "apply": "상세에서 스크롤 연동 연출",
+   "src": "apple.com"
+  },
+  {
+   "title": "Basecamp · 긴 글이 곧 홈",
+   "sub": "[홈] 장문 에세이로 철학을 판다",
+   "point": "긴 글도 관점이 있으면 읽힌다",
+   "apply": "브랜드 스토리를 장문으로",
+   "src": "basecamp.com"
+  },
+  {
+   "title": "Gumroad · 색 블록으로 구역을 나눔",
+   "sub": "[홈] 섹션마다 색을 바꿔 리듬",
+   "point": "색으로 스크롤 리듬을 만든다",
+   "apply": "섹션별 색 리듬",
+   "src": "gumroad.com"
+  },
+  {
+   "title": "Tally · 무료를 전면에",
+   "sub": "[홈] 가격 정책을 히어로에 박음",
+   "point": "가격이 강점이면 맨 위로",
+   "apply": "무료배송 조건을 상단에",
+   "src": "tally.so"
+  },
+  {
+   "title": "Pitch · 실제 결과물 갤러리",
+   "sub": "[홈] 만들어진 결과물을 먼저 보여줌",
+   "point": "결과물이 최고의 설명",
+   "apply": "고객 활용 사례를 먼저",
+   "src": "pitch.com"
+  },
+  {
+   "title": "Webflow · 좌우 분할 비교",
+   "sub": "[홈] 코드와 화면을 나란히",
+   "point": "나란히 두면 차이가 보인다",
+   "apply": "Before/After 나란히",
+   "src": "webflow.com"
+  },
+  {
+   "title": "Loom · 3초 영상이 히어로",
+   "sub": "[홈] 짧은 루프 영상 하나",
+   "point": "짧은 루프가 설명을 대신",
+   "apply": "짧은 조리 루프 영상",
+   "src": "loom.com"
+  },
+  {
+   "title": "Typeform · 한 번에 한 질문",
+   "sub": "[홈] 한 화면에 질문 하나씩",
+   "point": "한 번에 하나만 묻는다",
+   "apply": "옵션 선택을 한 단계씩",
+   "src": "typeform.com"
+  },
+  {
+   "title": "Mailchimp · 일러스트로 톤을 잡음",
+   "sub": "[홈] 손그림으로 친근한 온도",
+   "point": "일러스트가 브랜드 온도",
+   "apply": "일러스트로 온도 조절",
+   "src": "mailchimp.com"
+  },
+  {
+   "title": "Slack · 고객 로고를 신뢰 벽으로",
+   "sub": "[홈] 로고 줄로 신뢰를 빠르게",
+   "point": "로고 줄이 신뢰 지름길",
+   "apply": "납품처·매체 로고 줄",
+   "src": "slack.com"
+  },
+  {
+   "title": "Intercom · 스크린샷에 주석",
+   "sub": "[홈] 제품 화면에 화살표·설명",
+   "point": "주석이 이해를 빠르게",
+   "apply": "상세 이미지에 주석",
+   "src": "intercom.com"
+  },
+  {
+   "title": "Wise · 숫자 비교를 계산기로",
+   "sub": "[홈] 직접 넣어보는 계산기",
+   "point": "직접 계산하면 설득된다",
+   "apply": "용량당 가격 계산기",
+   "src": "wise.com"
+  },
+  {
+   "title": "Monzo · 앱 화면을 손에 든 컷",
+   "sub": "[홈] 실제 손에 든 기기 사진",
+   "point": "손에 든 컷이 현실감",
+   "apply": "실사용 손 컷",
+   "src": "monzo.com"
   }
  ]
 }

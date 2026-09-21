@@ -1078,6 +1078,61 @@ async function isLiveBrandSite(src) {
   return true;
 }
 
+// ── 풀 자동 보충 (2026-09-21) ────────────────────────────────────────────────
+// 왜: 3개월간 큐 보충을 손으로 6번 했고(8/4·8/20·8/28·9/7·9/13·9/17) 매번 은우가 먼저 말해서 시작됐다.
+//     9/17에 「웹서치 생성 → 검증된 풀에서 꺼내기」로 바꿨지만 풀 채우기가 수동이라 병을 옮긴 것뿐이었다.
+//     이제 풀도 봇이 채운다. 은우가 큐를 신경 쓸 일이 없어야 한다.
+// 웹서치를 쓰지 않는 이유: Actions 에서 330s 스트림 초과로 반복 실패했다(그게 풀 방식으로 바꾼 계기).
+//     대신 모델이 아는 브랜드로 후보를 뽑고 **도메인 생존 확인**으로 거른다. 죽었거나 중복이면 버린다.
+const POOL_LOW = 12;        // 풀이 이 개수 밑이면 채운다
+const POOL_TARGET = 24;     // 채울 때 목표치
+// ★별도 스위치 — AI_ANALYSIS_ON(전역)은 2026-07-28 은우가 크레딧 소진으로 끈 것이고, 켜면 CX 판단·관리자 분석까지
+//   같이 살아난다(은우는 그 분석을 직접 하기로 했다). 풀 보충만 쓰려면 POOL_AI_ON=1 만 켜면 된다.
+//   비용: 브랜드당 짧은 호출 1회 × 풀이 12개 밑일 때만(대략 2주에 한 번) — 1회 수 센트 수준.
+const POOL_AI_ON  = process.env.POOL_AI_ON === '1';
+const POOL_AI_KEY = POOL_AI_ON ? (process.env.CLAUDE_API_KEY || _cl.api_key || '').trim() : '';
+function poolAiMessage(payload) {          // 스트림 없이 짧게 — 웹서치를 안 쓰므로 빨리 끝난다
+  return new Promise((resolve, reject) => {
+    const s = JSON.stringify(payload);
+    const req = https.request({
+      hostname: 'api.anthropic.com', path: '/v1/messages', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(s), 'x-api-key': POOL_AI_KEY, 'anthropic-version': '2023-06-01' },
+      timeout: 90000,
+    }, (res) => {
+      res.setEncoding('utf8'); let d = '';
+      res.on('data', (c) => d += c);
+      res.on('end', () => { if (res.statusCode >= 400) return reject(new Error('HTTP ' + res.statusCode + ' ' + d.slice(0, 200))); try { resolve(JSON.parse(d)); } catch (e) { reject(e); } });
+    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('90s 초과')); });
+    req.on('error', reject); req.write(s); req.end();
+  });
+}
+async function refillPoolViaClaude(brandKr, n, excludeTitles, excludeDomains) {
+  if (!POOL_AI_KEY) return [];
+  const subject = brandKr === 'A 식품'
+    ? '식품·음료 D2C 브랜드(이태리정미소 = 이탈리아 프리미엄 식품 레퍼런스용)'
+    : brandKr === 'B 주방기기'
+      ? '주방기기·쿡웨어·식기 D2C 브랜드(카마솥 = 프리미엄 주방기기 레퍼런스용)'
+      : '홈페이지 1페이지의 UI·UX 가 뛰어난 사이트(업종 무관)';
+  const shape = brandKr === 'D 홈페이지'
+    ? `{"title":"사이트명 · 화면 위 장치 한 줄","sub":"[홈] 그 장치가 화면에서 하는 일","point":"그래서 뭐가 달라지는가","apply":"이태리정미소/카마솥에 어떻게 적용","src":"도메인만(예: stripe.com)"}`
+    : `{"title":"브랜드명","sub":"어떤 브랜드인지 한 줄","point":"홈/상세에서 배울 점 한 줄","apply":"이태리정미소/카마솥에 어떻게 적용","src":"도메인만(예: graza.co)"}`;
+  const prompt = `${subject} ${n}개를 골라 JSON 배열로만 답해.
+★실재하는 브랜드·사이트만. 도메인은 www 없이 소문자로, 실제로 살아있는 것만(확실하지 않으면 넣지 마).
+★아래 제목·도메인은 이미 쓴 것이라 절대 중복 금지.
+이미 쓴 제목: ${(excludeTitles || []).slice(-140).join(', ')}
+이미 쓴 도메인: ${(excludeDomains || []).slice(-140).join(', ')}
+각 원소 = ${shape}
+설명·마크다운·코드펜스 없이 JSON 배열만 출력.`;
+  try {
+    const res = await poolAiMessage({ model: CLAUDE_MODEL, max_tokens: 4000, messages: [{ role: 'user', content: prompt }] });
+    const txt = (res.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
+    const m = txt.match(/\[[\s\S]*\]/);
+    if (!m) return [];
+    return JSON.parse(m[0]).filter(x => x && x.title && x.src);
+  } catch (e) { console.error('[디자인 풀 생성]', brandKr, e.message); return []; }
+}
+
 async function autoRefillDesignCases() {
   try {
     const token = await getGA4Token();
@@ -1099,8 +1154,11 @@ async function autoRefillDesignCases() {
     //   → 해결: 재고 3개 미만이면 미리 리필 + 1개씩 나눠 요청(짧아서 타임아웃 회피) + 부분 성공 인정
     // ★3 → 5 (2026-09-21). 3 이면 재고가 1~3 사이를 오가서 하루만 실패해도 바로 바닥이었다.
     //   실제로 9/9~21 발송이 끊긴 동안 B 가 1개까지 내려가 있었다. 5로 두면 4~6에서 논다.
-    const LOW = 5;      // 이 개수 미만이면 미리 채움(고갈 전에)
-    const WANT = 2;     // 한 번 돌 때 목표 확보 수
+    // ★3 → 8 (2026-09-21). 3 이면 재고가 1~3 을 오가서 하루만 실패해도 바닥이고,
+    //   GAS 큐 경고(남은 2개 이하)가 은우 DM 으로 계속 나갔다. 8 이면 7~10 에서 놀아 경고가 안 뜬다.
+    //   9/21 실측: A 6 · B 1 · D 2 까지 내려가 있었고 그날 아침에도 「주방기기 2일치」 경고가 갔다.
+    const LOW = 8;      // 이 개수 미만이면 미리 채움(고갈 전에)
+    const WANT = 3;     // 한 번 돌 때 목표 확보 수
     // ★풀 방식 (2026-09-17) — 웹서치 생성이 Actions 에서 타임아웃·도메인검증 전멸을 반복해 "재고 고갈" 경고가 계속 떴다(9/13·9/17 수동 보충).
     //   → 발송 경로에서 웹서치를 빼고, 미리 도메인 검증해 둔 design_pool.json 에서 꺼내 미발송으로 올린다.
     //   채우기 = italy-jungmiso/cx-data/bot/_stock_pool.js (로컬). 웹서치는 그 브랜드 풀이 비었을 때만 마지막 수단(최대 2회).
@@ -1135,6 +1193,30 @@ async function autoRefillDesignCases() {
       }
       // 재고가 0인데 한 개도 못 건졌을 때만 "고갈" 경고
       if (got === 0 && unsent === 0) starved.push(b.kr);
+    }
+    // ★풀이 얕으면 봇이 직접 채운다 — 이게 수동이라 3개월간 같은 일을 반복했다(2026-09-21).
+    //   시트 적재와 별개라 여기서 바로 저장한다(시트에 올릴 게 없어도 풀은 채워져야 한다).
+    for (const b of brands) {
+      const have = (pool[b.kr] || []).length;
+      if (have >= POOL_LOW) continue;
+      const want = POOL_TARGET - have;
+      if (!POOL_AI_ON) { console.warn('[디자인 풀 부족]', b.kr, have + '개 — POOL_AI_ON=1 이 아니라 자동 생성 안 함(수동: cx-data/bot/_stock_pool.js)'); continue; }
+      const gen = await refillPoolViaClaude(b.kr, want + 6, titles, srcs);   // 죽은 도메인·중복 감안해 넉넉히
+      if (!gen.length) { console.warn('[디자인 풀 보충] 생성 0건:', b.kr); continue; }
+      let added = 0;
+      for (const g of gen) {
+        if (added >= want) break;
+        const dom = String(g.src || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase();
+        if (!dom) continue;
+        if (titles.includes(g.title) || srcs.some(x => String(x).toLowerCase().includes(dom))) continue;
+        if ((pool[b.kr] || []).some(x => x.title === g.title || String(x.src).toLowerCase() === dom)) continue;
+        const ok = await isLiveBrandSite(dom).catch(() => false);
+        if (!ok) continue;
+        (pool[b.kr] = pool[b.kr] || []).push({ title: g.title, sub: g.sub || '', point: g.point || '', apply: g.apply || '', src: dom });
+        titles.push(g.title); srcs.push(dom);
+        added++; poolDirty = true;
+      }
+      console.log('[디자인 풀 보충]', b.kr, have + '→' + (pool[b.kr] || []).length + '개 (생성 ' + gen.length + ' 중 ' + added + '건 통과)');
     }
     const poolLow = brands.filter(b => (pool[b.kr] || []).length <= 2).map(b => b.kr + ' ' + (pool[b.kr] || []).length + '개');
     if (newRows.length) {
