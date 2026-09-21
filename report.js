@@ -1097,7 +1097,9 @@ async function autoRefillDesignCases() {
     //   ①재고 0일 때만 리필 = 매번 벼랑 끝. 한 번 실패하면 바로 발송 끊김
     //   ②한 요청에 3개를 웹서치로 찾아 330s 초과 (2026-07-27 로그: "웹서치 stream 전체 330s 초과" → 1개만 건짐)
     //   → 해결: 재고 3개 미만이면 미리 리필 + 1개씩 나눠 요청(짧아서 타임아웃 회피) + 부분 성공 인정
-    const LOW = 3;      // 이 개수 미만이면 미리 채움(고갈 전에)
+    // ★3 → 5 (2026-09-21). 3 이면 재고가 1~3 사이를 오가서 하루만 실패해도 바로 바닥이었다.
+    //   실제로 9/9~21 발송이 끊긴 동안 B 가 1개까지 내려가 있었다. 5로 두면 4~6에서 논다.
+    const LOW = 5;      // 이 개수 미만이면 미리 채움(고갈 전에)
     const WANT = 2;     // 한 번 돌 때 목표 확보 수
     // ★풀 방식 (2026-09-17) — 웹서치 생성이 Actions 에서 타임아웃·도메인검증 전멸을 반복해 "재고 고갈" 경고가 계속 떴다(9/13·9/17 수동 보충).
     //   → 발송 경로에서 웹서치를 빼고, 미리 도메인 검증해 둔 design_pool.json 에서 꺼내 미발송으로 올린다.
@@ -3575,7 +3577,13 @@ ${productSalesOnly}${activeFunnelSection}${promoScheduleSection}${wrapupSection}
     if (cxManagerSection || actionSection || healthSectionDM || gonguLine) await sendTelegram(personalMsg, actionKeyboard);
     // 🎨 디자인 사례집 — 발송 전 재고 자동보충(미발송<1 브랜드는 Claude 생성·적재) → 매일 1개 개인 DM
     //    snapshot-only: 주간 경로가 이미 발송했으므로 skip(안 하면 월요일에 2개 나감)
-    if (!DRY_RUN && !SNAPSHOT_ONLY) { await autoRefillDesignCases().catch(() => {}); await postToAppsScript({ action: 'send_next_design_case' }, APPS_SCRIPT_URL).catch(() => {}); }
+    //    ★응답을 반드시 찍는다 — 예전엔 `.catch(() => {})` 로 삼키고 로그도 없어서 2026-09-09~21 12일간
+    //      발송이 끊겼는데도 아무 흔적이 없었다(은우가 "디자인큐 남은 것" 물어서 발견). 조용한 실패 금지.
+    if (!DRY_RUN && !SNAPSHOT_ONLY) {
+      await autoRefillDesignCases().catch(() => {});
+      const _dz = await postToAppsScript({ action: 'send_next_design_case' }, APPS_SCRIPT_URL).catch((e) => ({ ok: false, error: String(e && e.message || e) }));
+      console.log('[디자인 사례집] 발송 응답:', JSON.stringify(_dz).slice(0, 400));
+    }
     console.log('일간 발송 완료 ✅');
   } else {
     console.error('발송 실패 ❌:', JSON.stringify(groupResult));
@@ -4441,6 +4449,22 @@ ${dramaLine}
         const _pus = await _sessOf({ d: 'eventName', v: 'purchase' });
         if (_ofs) _rows.push([_label, thisStart, thisEnd, '주문서전환율', '자사몰 결제창', +(_pus / _ofs * 100).toFixed(1), _ofs, `구매 세션 ${_pus}`, '']);
       } catch (e) { console.error('[개입 추적] 주문서전환율', e.message); }
+      // 띠배너 클릭률 — 2026-09-18 발행. 상단 띠 전체가 회원가입으로 가는데 표시가 없어 헤더 사람아이콘 클릭과 한 덩어리였다.
+      //   `?from=topbar` 로 갈랐다(내부 링크라 UTM 금지 — 세션·유입출처를 덮어써 광고 측정이 망가진다).
+      //   분모는 페이지뷰가 아니라 세션: 띠를 X 로 닫아도 페이지뷰는 계속 늘어 클릭률이 낮게 나온다.
+      try {
+        const _tj = await ga4Fetch(_tk, {
+          dateRanges: [{ startDate: thisStart, endDate: thisEnd }],
+          dimensions: [{ name: 'pagePathPlusQueryString' }], metrics: [{ name: 'sessions' }],
+          dimensionFilter: { filter: { fieldName: 'pagePathPlusQueryString', stringFilter: { matchType: 'EXACT', value: '/member/join.html?from=topbar' } } },
+        });
+        const _tb = _tj.rows && _tj.rows[0] ? +_tj.rows[0].metricValues[0].value : 0;
+        if (_tb) {
+          const _sj = await ga4Fetch(_tk, { dateRanges: [{ startDate: thisStart, endDate: thisEnd }], dimensions: [{ name: 'date' }], metrics: [{ name: 'sessions' }], limit: 14 });
+          const _ts = (_sj.rows || []).reduce((t, x) => t + +x.metricValues[0].value, 0);
+          if (_ts) _rows.push([_label, thisStart, thisEnd, '띠배너클릭률', '회원가입 유도', +(_tb / _ts * 100).toFixed(2), _ts, `띠배너 세션 ${_tb}`, '']);
+        }
+      } catch (e) { console.error('[개입 추적] 띠배너클릭률', e.message); }
       // 신규 가입(구매까지 온 회원) — 같은 개입을 반대 방향에서 본다: 비회원비율은 내려가야, 이건 올라가야 한다.
       //   2026-09-18 실측: 회원으로 산 사람의 80~88%가 그 주 신규 가입자 = 회원 증가는 거의 전부 「처음 사면서 가입」.
       //   교체 전 8주 130·165·150·83·165·120·106·91명(폭이 커서 한 주로 판정 금지, 4주 평균으로 본다).
@@ -4491,8 +4515,9 @@ async function main() {
     // ★디자인 사례집은 일간 경로에만 있어서 월요일(주간 모드)마다 빠지던 것 — 주간에도 발송 (2026-07-13)
     if (!DRY_RUN) {
       await autoRefillDesignCases().catch(() => {});
-      await postToAppsScript({ action: 'send_next_design_case' }, APPS_SCRIPT_URL).catch(() => {});
-      console.log('[디자인 사례집] 주간모드에서도 발송 트리거 완료');
+      // ★"트리거 완료"만 찍던 줄 — 응답을 안 봐서 12일 끊긴 걸 못 잡았다(2026-09-21). 이제 응답 그대로 남긴다.
+      const _dzw = await postToAppsScript({ action: 'send_next_design_case' }, APPS_SCRIPT_URL).catch((e) => ({ ok: false, error: String(e && e.message || e) }));
+      console.log('[디자인 사례집] 주간모드 발송 응답:', JSON.stringify(_dzw).slice(0, 400));
     }
     // ★월요일에도 일요일 데이터는 남긴다 (2026-08-17): 위 디자인 사례집과 같은 병의 근본 —
     //   주간 모드가 일간을 통째 대체해 일별 스냅샷·GA4 외부결제 push가 매주 일요일치만 빠졌다.
