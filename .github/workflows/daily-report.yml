@@ -47,6 +47,9 @@ jobs:
           TG_GROUP_CHAT_ID:     ${{ secrets.TG_GROUP_CHAT_ID }}
           CLAUDE_API_KEY:       ${{ secrets.CLAUDE_API_KEY }}
           CLAUDE_MODEL:         ${{ secrets.CLAUDE_MODEL }}
+          # 디자인 풀 자동보충만 켜는 스위치(2026-09-21). AI_ANALYSIS_ON 과 별개 —
+          # 그건 7/28 크레딧 소진으로 끈 전역 스위치라 켜면 CX 판단·관리자 분석까지 살아난다.
+          POOL_AI_ON:           ${{ secrets.POOL_AI_ON }}
           CLARITY_TOKEN:        ${{ secrets.CLARITY_TOKEN }}
           GA4_CLIENT_ID:        ${{ secrets.GA4_CLIENT_ID }}
           GA4_CLIENT_SECRET:    ${{ secrets.GA4_CLIENT_SECRET }}
