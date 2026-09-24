@@ -1129,12 +1129,17 @@ async function refillPoolViaClaude(brandKr, n, excludeTitles, excludeDomains) {
     : brandKr === 'B 주방기기'
       ? '주방기기·쿡웨어·식기 D2C 브랜드(카마솥 = 프리미엄 주방기기 레퍼런스용)'
       : '홈페이지 1페이지의 UI·UX 가 뛰어난 사이트(업종 무관)';
+  // ★「한 줄」을 요구하면 진짜 한 줄이 온다 (2026-09-24 실측) — A111 「좁게 파면 전문가로 보인다」 14자,
+  //   B141 「레시피에서 도구로 연결」 12자. 그런 카드는 읽어도 남는 게 없어 은우가 매주 「제대로 좀」이라고 했다.
+  //   그래서 길이와 「무엇을 쓰라」를 못 박는다. 손으로 쓴 좋은 카드는 핵심·적용이 각 100~200자다.
   const shape = brandKr === 'D 홈페이지'
-    ? `{"title":"사이트명 · 화면 위 장치 한 줄","sub":"[홈] 그 장치가 화면에서 하는 일","point":"그래서 뭐가 달라지는가","apply":"이태리정미소/카마솥에 어떻게 적용","src":"도메인만(예: stripe.com)"}`
-    : `{"title":"브랜드명","sub":"어떤 브랜드인지 한 줄","point":"홈/상세에서 배울 점 한 줄","apply":"이태리정미소/카마솥에 어떻게 적용","src":"도메인만(예: graza.co)"}`;
+    ? `{"title":"사이트명 · 첫 화면의 장치 한 줄","sub":"그 장치가 화면에서 하는 일(30~60자)","point":"그 화면에서 실제로 확인되는 것을 구체적으로 — 무엇이 어디에 몇 개 있고 그래서 뭐가 달라지는가 (100자 이상, 2~3문장)","apply":"이태리정미소 또는 카마솥의 어느 화면을 어떻게 바꿀지 (80자 이상, 2문장)","src":"도메인만(예: stripe.com)"}`
+    : `{"title":"브랜드명 · 이 브랜드가 하는 한 가지","sub":"어떤 브랜드인지(30~60자)","point":"그 브랜드가 실제로 쓰는 장치를 구체적으로 — 무엇을 어디에 어떻게 두는가, 그래서 뭐가 달라지는가 (100자 이상, 2~3문장)","apply":"이태리정미소 또는 카마솥의 어느 화면을 어떻게 바꿀지 (80자 이상, 2문장)","src":"도메인만(예: graza.co)"}`;
   const prompt = `${subject} ${n}개를 골라 JSON 배열로만 답해.
 ★실재하는 브랜드·사이트만. 도메인은 www 없이 소문자로, 실제로 살아있는 것만(확실하지 않으면 넣지 마).
 ★아래 제목·도메인은 이미 쓴 것이라 절대 중복 금지.
+★point 와 apply 가 짧으면 쓸모가 없다. point 는 100자 이상, apply 는 80자 이상으로 구체적으로 써라.
+  「좁게 파면 전문가로 보인다」 같은 한 줄 요약은 안 된다 — 화면에서 확인되는 것을 적어라.
 이미 쓴 제목: ${(excludeTitles || []).slice(-140).join(', ')}
 이미 쓴 도메인: ${dedupDomains(excludeDomains).join(', ')}
 각 원소 = ${shape}
@@ -1225,6 +1230,12 @@ async function autoRefillDesignCases() {
         if (!dom) continue;
         if (titles.includes(g.title) || srcs.some(x => String(x).toLowerCase().includes(dom))) continue;
         if ((pool[b.kr] || []).some(x => x.title === g.title || String(x.src).toLowerCase() === dom)) continue;
+        // ★얇은 카드는 아예 안 들인다 (2026-09-24) — 「좁게 파면 전문가로 보인다」 14자 같은 게 실제로 발송됐다.
+        //   읽어도 남는 게 없는 카드가 쌓이는 게 「제대로 안 된다」의 실체였다. 문을 여기서 막는다.
+        if (String(g.point || '').length < 60 || String(g.apply || '').length < 50) {
+          console.warn('[디자인 풀] 내용이 얇아 버림:', g.title, `(핵심 ${String(g.point || '').length}자 · 적용 ${String(g.apply || '').length}자)`);
+          continue;
+        }
         const ok = await isLiveBrandSite(dom).catch(() => false);
         if (!ok) continue;
         (pool[b.kr] = pool[b.kr] || []).push({ title: g.title, sub: g.sub || '', point: g.point || '', apply: g.apply || '', src: dom });
