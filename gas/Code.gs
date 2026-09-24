@@ -48,6 +48,19 @@ function doGet(e) {
     if (cb) return ContentService.createTextOutput(cb + '(' + out + ')').setMimeType(ContentService.MimeType.JAVASCRIPT);
     return ContentService.createTextOutput(out).setMimeType(ContentService.MimeType.JSON);
   }
+  // ★베스트 — 사례집이 JSONP 로 읽고 쓴다 (2026-09-21). 기기가 달라도 같은 별을 본다.
+  if (page === 'bestlist' || page === 'bestset' || page === 'bestmerge') {
+    var r;
+    try {
+      if (page === 'bestlist') r = { ok: true, keys: bestListWeb_() };
+      else if (page === 'bestset') r = bestSetWeb_(e.parameter.key, String(e.parameter.v || '1') === '1');
+      else r = bestMergeWeb_(String(e.parameter.keys || '').split('\n'));
+    } catch (err) { r = { ok: false, err: String(err).slice(0, 160) }; }
+    var js = JSON.stringify(r);
+    var cb2 = e && e.parameter && e.parameter.callback;
+    if (cb2) return ContentService.createTextOutput(cb2 + '(' + js + ')').setMimeType(ContentService.MimeType.JAVASCRIPT);
+    return ContentService.createTextOutput(js).setMimeType(ContentService.MimeType.JSON);
+  }
   return ContentService.createTextOutput('CX Bot OK');
 }
 
@@ -3033,6 +3046,55 @@ function markUXSkip_(date) {
 // ===== 🎨 디자인 사례집 (매일 1개 개인 DM, 채택=시트표시만) =====
 // 시트 🎨디자인_사례 [ID,추가일,브랜드,제목,부제,핵심,적용,출처,상태,발송일시]. 상태=미발송→발송→채택/패스.
 function getDesignTab_() { return SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID).getSheetByName('🎨 디자인_사례'); }
+
+// ===== ★베스트(은우가 채택 중에서 고른 것) 시트 저장 — 2026-09-21 =====
+// 왜 시트인가: 원래 localStorage(dcb_best_v1) 라 PC 에서 찍은 별이 폰에 안 왔다(은우 「모바일에서 베스트 안 뜬다」).
+// 왜 🎨디자인_사례 에 열을 더하지 않았나: 사례집 카드 339장 중 상당수가 **정적 HTML 카드**라 시트에 아예 없다.
+//   그래서 카드 제목(keyOf)을 키로 쓰는 별도 칸을 둔다. 시트 카드·정적 카드 둘 다 덮는다.
+function getBestTab_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ss.getSheetByName('⭐ 사례집_베스트');
+  if (!sh) {
+    sh = ss.insertSheet('⭐ 사례집_베스트');
+    sh.appendRow(['키(카드 제목)', '지정시각']);
+    sh.setFrozenRows(1);
+    sh.setColumnWidth(1, 460);
+  }
+  return sh;
+}
+function bestListWeb_() {
+  var sh = getBestTab_();
+  if (sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues()
+    .map(function (r) { return String(r[0]).trim(); }).filter(function (k) { return !!k; });
+}
+// v=1 지정 / v=0 해제. 이미 있으면 안 넣고, 없으면 안 지운다(멱등).
+function bestSetWeb_(key, on) {
+  key = String(key || '').trim();
+  if (!key) return { ok: false, err: 'key 없음' };
+  var sh = getBestTab_();
+  var last = sh.getLastRow();
+  var keys = last >= 2 ? sh.getRange(2, 1, last - 1, 1).getValues().map(function (r) { return String(r[0]).trim(); }) : [];
+  var i = keys.indexOf(key);
+  if (on) {
+    if (i < 0) sh.appendRow([key, Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd HH:mm')]);
+  } else if (i >= 0) {
+    sh.deleteRow(i + 2);
+  }
+  return { ok: true, key: key, on: !!on, n: bestListWeb_().length };
+}
+// 여러 개를 한 번에 올린다 — PC localStorage 에 쌓여 있던 별을 처음 한 번 옮길 때 쓴다.
+function bestMergeWeb_(keys) {
+  var have = bestListWeb_(), sh = getBestTab_(), added = 0;
+  var now = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd HH:mm');
+  var rows = [];
+  (keys || []).forEach(function (k) {
+    k = String(k || '').trim();
+    if (k && have.indexOf(k) < 0 && rows.map(function (r) { return r[0]; }).indexOf(k) < 0) { rows.push([k, now]); added++; }
+  });
+  if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, 2).setValues(rows);
+  return { ok: true, added: added, n: bestListWeb_().length };
+}
 // 📈 개입_추적 (2026-08-03) — 개입 효과를 주별로 쌓는다. 키 = 주차|지표|대상 upsert.
 //   한 주 Before/After로는 그 주의 흔들림(광고비·유입량)에 속는다. 바페 상단 측정에서 실제로 겪음:
 //   11.1→17.5%를 "개선"으로 읽었으나 8주로 보니 원래 14~17%대였고 11.1%가 예외적 저점이었다.

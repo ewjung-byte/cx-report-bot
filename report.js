@@ -1107,6 +1107,21 @@ function poolAiMessage(payload) {          // 스트림 없이 짧게 — 웹서
     req.on('error', reject); req.write(s); req.end();
   });
 }
+// ★도메인 제외 목록은 「전부」 보낸다 (2026-09-23) — 예전엔 마지막 140개만 보냈다.
+//   사례집 도메인이 279개라 오래된 139개를 AI 가 자유롭게 다시 추천했고, 그래서 풀 60건 중 16건(27%)이
+//   이미 있는 사이트였다. 같은 사이트가 8월·9월에 두 번 발송된 5쌍(linear·family·teenage·arc·superlist)의 뿌리.
+//   도메인은 짧아서 279개를 다 보내도 4KB 남짓이다. 제목은 길어 최근 140개만 유지.
+function dedupDomains(list) {
+  const seen = new Set();
+  (list || []).forEach((u) => {
+    let x = String(u || '').trim().toLowerCase();
+    const i = x.indexOf('://'); if (i >= 0) x = x.slice(i + 3);
+    x = x.split('/')[0].split('?')[0];
+    if (x.slice(0, 4) === 'www.') x = x.slice(4);
+    if (x) seen.add(x);
+  });
+  return [...seen].sort();
+}
 async function refillPoolViaClaude(brandKr, n, excludeTitles, excludeDomains) {
   if (!POOL_AI_KEY) return [];
   const subject = brandKr === 'A 식품'
@@ -1121,7 +1136,7 @@ async function refillPoolViaClaude(brandKr, n, excludeTitles, excludeDomains) {
 ★실재하는 브랜드·사이트만. 도메인은 www 없이 소문자로, 실제로 살아있는 것만(확실하지 않으면 넣지 마).
 ★아래 제목·도메인은 이미 쓴 것이라 절대 중복 금지.
 이미 쓴 제목: ${(excludeTitles || []).slice(-140).join(', ')}
-이미 쓴 도메인: ${(excludeDomains || []).slice(-140).join(', ')}
+이미 쓴 도메인: ${dedupDomains(excludeDomains).join(', ')}
 각 원소 = ${shape}
 설명·마크다운·코드펜스 없이 JSON 배열만 출력.`;
   try {
@@ -1230,6 +1245,45 @@ async function autoRefillDesignCases() {
     }
     if (poolLow.length) console.warn('[디자인 풀 부족]', poolLow.join(' · '), '— cx-data/bot/_stock_pool.js 로 채울 것');
     if (starved.length) console.warn('[디자인 재고 고갈]', starved.join('·'), '— 미발송 0 + 풀 비어 있음, DM 안 나감(풀 채울 것)');
+
+    // ★자가점검 (2026-09-23) — 은우 「주마다 같은 말을 반복하고 싶지 않다」.
+    //   같은 사이트가 8월·9월에 두 번 나간 게 5쌍이었는데(linear·family·teenage·arc·superlist)
+    //   아무도 몰랐고 은우가 발견했다. 매일 세어서 숫자로 남긴다 — 다시 생기면 로그에 바로 뜬다.
+    //   0 이 아니면 은우 DM 으로도 알린다(조용히 쌓이는 게 제일 나쁘다).
+    try {
+      // 판정 규칙 — 헛알림을 막으려고 좁게 잡는다(2026-09-23 실측으로 조정):
+      //   ①같은 칸 안에서만 본다. 칸이 다르면 일부러 겹치는 것(A=브랜드 얘기, D=그 브랜드 첫 화면 얘기).
+      //   ②C 상세페이지는 한 브랜드의 여러 상품을 보는 칸이라 같은 도메인이 여러 번인 게 정상.
+      //   ③마켓플레이스도 같은 이유로 제외.
+      //   ④이미 나간 것은 되돌릴 수 없으니 세기만 하고, 알림은 「아직 안 나간 중복」에만.
+      //   이 네 가지를 안 걸면 43건이 떠서 매일 헛알림이 간다(처음 만들 때 실제로 그랬다).
+      const dOf = (u) => { let x = String(u || '').trim().toLowerCase(); const i = x.indexOf('://'); if (i >= 0) x = x.slice(i + 3); x = x.split('/')[0].split('?')[0]; return x.slice(0, 4) === 'www.' ? x.slice(4) : x; };
+      const MARKET = ['kurly.com', 'smartstore.naver.com', 'coupang.com', 'gmarket.co.kr', '11st.co.kr', 'ohou.se', 'naver.com'];
+      const firstSeen = new Map(); const dupOpen = []; let dupSent = 0; const thin = [];
+      rows.forEach((r) => {
+        const id = String(r[0] || ''); const d = dOf(r[7]); if (!id || !d) return;
+        const cat = id.charAt(0), unsent = String(r[8] || '').trim() === '미발송';
+        if (cat !== 'C' && !MARKET.some((m) => d.endsWith(m))) {
+          const key = cat + '|' + d;
+          if (firstSeen.has(key)) { if (unsent) dupOpen.push(`${id}=${firstSeen.get(key)}(${d})`); else dupSent++; }
+          else firstSeen.set(key, id);
+        }
+        if (unsent && (String(r[5] || '').length < 20 || String(r[6] || '').length < 20)) thin.push(id);
+      });
+      const unsentAll = rows.filter((r) => String(r[8] || '').trim() === '미발송').length;
+      console.log(`[사례집 점검] 미발송 ${unsentAll} · 중복(안 나간 것) ${dupOpen.length} · 중복(이미 나감) ${dupSent} · 얇음 ${thin.length} · 풀 ${poolDepth(pool)}`);
+      if (dupOpen.length || thin.length) {
+        const dupRows = dupOpen;
+        console.warn('[사례집 점검] 중복:', dupRows.slice(0, 8).join(' '), '| 얇음:', thin.slice(0, 8).join(' '));
+        await sendTelegram([
+          '🎨 <b>사례집 점검에서 걸린 게 있습니다</b>',
+          dupRows.length ? `· 같은 사이트가 두 번: <b>${dupRows.length}건</b> — ${dupRows.slice(0, 5).join(', ')}` : '',
+          thin.length ? `· 내용이 너무 얇음(미발송): <b>${thin.length}건</b> — ${thin.slice(0, 5).join(', ')}` : '',
+          '',
+          '고치는 법: <code>node cx-data/bot/_case_dedup_d.js --run</code> (중복을 지우지 않고 상태만 「중복」으로)',
+        ].filter(Boolean).join('\n')).catch(() => {});
+      }
+    } catch (e) { console.warn('[사례집 점검] 실패:', e.message); }
     return newRows.length;
   } catch (e) { console.error('[디자인 자동보충]', e.message); return 0; }
 }
@@ -3840,7 +3894,10 @@ async function getDramaMetrics(thisStart, thisEnd) {
     const isWknd = d => [0, 6].includes(dow(d));
     const base = { start: dateStr(35), end: dateStr(8) };                  // 직전 4주(이번주 제외)
     const ymdOf = v => `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}`;
-
+    // ⚠️2026-09-22에 크리테오 제외 필터를 넣었다가 9/23 은우 「1번은 의미 없」으로 되돌렸다.
+    //   숫자를 다듬어도 드라마 효과 신호 자체가 없어서(브랜드 검색 7월 55 → 9월 35) 지표를 손볼 값어치가 없다.
+    //   ⚠️그래서 `드라마_방영시간대배수` 는 9/9 이후 크리테오가 섞인 값이다. 해석할 때 빼고 봐야 한다.
+    //   빼고 재는 도구는 `cx-data/bot/_drama_spike.js`. 상세 memory/project_drama_sponsorship
     // ① 30분 슬롯 (20:00~23:30) — 주말만
     const hm = await ga4Fetch(token, {
       dateRanges: [{ startDate: base.start, endDate: thisEnd }],
