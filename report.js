@@ -4665,13 +4665,18 @@ async function main() {
   //   Claude 호출 1회 + 도메인 확인만 하고 끝낸다(저장 안 함).
   if (mode === 'pooltest') {
     console.log('POOL_AI_ON =', process.env.POOL_AI_ON === '1' ? '켜짐' : '꺼짐', '· 키', (process.env.CLAUDE_API_KEY || '').length ? '있음' : '없음');
+    // ⚠️제외 목록을 빈 채로 부른다(호출 1번으로 가볍게) — 그래서 이미 있는 사이트가 나와도 정상이다.
+    //   여기서 보는 건 「두꺼운 카드가 오나」다(2026-09-24 틀 수정 확인용). 길이 문(60/50)도 같이 찍는다.
     const gen = await refillPoolViaClaude('D 홈페이지', 5, [], []);
     console.log('생성 결과', gen.length, '건');
     for (const g of gen.slice(0, 5)) {
       const dom = String(g.src || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase();
       const ok = await isLiveBrandSite(dom).catch(() => false);
-      console.log(`  ${ok ? 'O' : 'X'} ${String(g.title).slice(0, 44).padEnd(46)} ${dom}`);
+      const pl = String(g.point || '').length, al = String(g.apply || '').length;
+      const pass = pl >= 60 && al >= 50;
+      console.log(`  ${ok ? 'O' : 'X'} ${pass ? '두꺼움' : '얇음  '} 핵심${String(pl).padStart(4)}자 적용${String(al).padStart(4)}자  ${String(g.title).slice(0, 40).padEnd(42)} ${dom}`);
     }
+    if (gen[0]) console.log('  예시 핵심:', String(gen[0].point || '').slice(0, 200), '\n  예시 적용:', String(gen[0].apply || '').slice(0, 200));
     console.log('pooltest 끝 — 아무것도 저장하지 않았다');
     return;
   }
