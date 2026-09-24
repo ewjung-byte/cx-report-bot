@@ -4550,11 +4550,24 @@ ${dramaLine}
     //   지표는 GA4 view_item/add_to_cart(페이지 기준)와 cafe24 실판매. 시트 쓰기는 GAS 경유.
     try {
       const _tk = await getGA4Token();
+      // ★크리테오 무료광고를 뺀다 (2026-09-24) — 9/9부터 상품조회의 52~64% 가 크리테오였고 그 사람들은 거의 안 담는다.
+      //   그래서 담기율이 8~9.7% → 2.8~4.1% 로 「반토막」처럼 적혔다. 빼고 재면 7.2~8.6% — 조금 내려온 정도다.
+      //   (드라마 지표의 크리테오 제외는 9/23 은우 「의미 없」으로 되돌렸지만, 담기율은 결제율 판단의 핵심이라 다르다)
       const _ga = await ga4Fetch(_tk, {
         dateRanges: [{ startDate: thisStart, endDate: thisEnd }],
         dimensions: [{ name: 'pagePathPlusQueryString' }, { name: 'eventName' }], metrics: [{ name: 'eventCount' }],
-        dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: ['view_item', 'add_to_cart'] } } }, limit: 3000,
+        dimensionFilter: { andGroup: { expressions: [
+          { filter: { fieldName: 'eventName', inListFilter: { values: ['view_item', 'add_to_cart'] } } },
+          { notExpression: { filter: { fieldName: 'sessionSource', stringFilter: { matchType: 'CONTAINS', value: 'criteo', caseSensitive: false } } } },
+        ] } }, limit: 100000,
       });
+      // ★줄 제한 3000 → 100000 (2026-09-24) — 주소(물음표 뒤 광고 꼬리표까지)별로 세서 줄이 폭증한다.
+      //   8/31주 5,052줄 중 3,000줄만 받아 41% 가 조용히 버려졌고, 9/14주는 18,291줄 중 84% 가 버려졌다.
+      //   즉 크리테오 이전 값부터 부정확했다. 상품번호 칸(itemId)은 비어 있어(담기 이벤트가 items 를 안 보냄) 못 쓴다.
+      //   다시는 조용히 잘리지 않게, 잘리면 로그에 남긴다.
+      if (_ga.rowCount && (_ga.rows || []).length < _ga.rowCount) {
+        console.warn(`[개입추적 담기율] ⚠️GA4 결과가 잘림 — ${_ga.rowCount}줄 중 ${(_ga.rows || []).length}줄만 받음. 담기율이 실제보다 틀릴 수 있다`);
+      }
       const _bp = {};
       (_ga.rows || []).forEach(x => {
         const p = x.dimensionValues[0].value, ev = x.dimensionValues[1].value, n = +x.metricValues[0].value;
