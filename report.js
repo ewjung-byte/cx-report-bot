@@ -237,8 +237,8 @@ const ga4Config = {
 // 2순위(fallback): 기존 Secret 기반 refresh API 호출.
 // → refresh_token 회전 시 Secret이 옛 거가 되어 깨지는 문제 영구 해결.
 // Drive 파일 객체 통째로 가져옴 (access_token + refresh_token 둘 다)
-async function loadCafe24FromDrive() {
-  const fileId = process.env.CAFE24_TOKEN_DRIVE_FILE_ID;
+async function loadCafe24FromDrive(fileIdOverride) {
+  const fileId = fileIdOverride || process.env.CAFE24_TOKEN_DRIVE_FILE_ID;
   if (!fileId) return null;
   if (!ga4Config.client_id || !ga4Config.refresh_token) return null;
   try {
@@ -447,6 +447,31 @@ function cafe24OrderRevenue(o) {
   // cafe24에 payment_amount=0(네이버가 결제처리)이라 주문가(상품+배송)로 폴백. 둘 섞인 하이브리드가 가장 정확.
   const pay = parseFloat(a.payment_amount || 0);
   return pay > 0 ? pay : (parseFloat(a.order_price_amount || 0) + parseFloat(a.shipping_fee || 0));
+}
+
+// ── 카마솥 어제 매출·주문 (2026-09-28 은우 OK) ─────────────
+// 토큰 = 버팀이 공유 드라이브에 30분마다 올리는 kamasot.token.json(9/25~). ★읽기만 한다 — 우리 쪽에서 갱신하면
+//   refresh_token 이 회전해 그쪽 자동화가 멈춘다(이태리 토큰과 같은 규칙). 토큰이 안 먹으면 조용히 빠진다(보고는 그대로).
+// 로컬 = 마운트된 G: 파일 · 클라우드 = Drive API(파일 번호는 비밀이 아님 — 읽으려면 구글 인증이 필요).
+const KAMASOT_TOKEN_DRIVE_FILE_ID = process.env.KAMASOT_TOKEN_DRIVE_FILE_ID || '1rYO1lJ965zNUzHBjI8KUaf88TgzTndwC';
+async function getKamasotDaily(date) {
+  try {
+    let tok = tryReadJson('G:/공유 드라이브/4. 이태리정미소-자동화/tokens/kamasot.token.json');
+    if (!tok || !tok.access_token) tok = await loadCafe24FromDrive(KAMASOT_TOKEN_DRIVE_FILE_ID);
+    if (!tok || !tok.access_token) return null;
+    const mall = tok.mall_id || 'kamasot92';
+    const all = [];
+    for (let offset = 0; offset <= 2000; offset += 100) {
+      // ⚠️버전 머리말을 붙이지 않는다 — 카마솥 앱은 기본 2026-03-01 이라 이태리용 2025-12-01 을 붙이면 400 으로 거절된다(9/28 실측)
+      const data = await fetchJson(`https://${mall}.cafe24api.com/api/v2/admin/orders?start_date=${date}&end_date=${date}&limit=100&offset=${offset}`,
+        { 'Authorization': `Bearer ${tok.access_token}` });
+      if (!data || !Array.isArray(data.orders)) { if (offset === 0) { console.warn('[카마솥] 주문 조회 실패 — 토큰·권한 확인 필요'); return null; } break; }
+      all.push(...data.orders);
+      if (data.orders.length < 100) break;
+    }
+    const valid = all.filter(o => o.canceled === 'F');
+    return { count: valid.length, revenue: valid.reduce((s, o) => s + cafe24OrderRevenue(o), 0), canceled: all.length - valid.length };
+  } catch (e) { console.warn('[카마솥] 매출 조회 오류:', e.message); return null; }
 }
 
 // 게스트 전화번호 추출 (게스트→회원 매칭 키). ★top-level buyer_cellular/buyer_phone은 항상 빈값 —
@@ -1802,9 +1827,25 @@ async function getGA4Token() {
 function ga4Fetch(token, body) {
   return new Promise((resolve, reject) => {
     const s = JSON.stringify(body);
-    const req = https.request({ hostname:'analyticsdata.googleapis.com', path:`/v1beta/properties/${ga4Config.property_id}:runReport`, method:'POST', headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json','Content-Length':Buffer.byteLength(s)} }, (res)=>{ res.setEncoding('utf8'); let d=''; res.on('data',c=>d+=c); res.on('end',()=>resolve(JSON.parse(d))); });
+    const req = https.request({ hostname:'analyticsdata.googleapis.com', path:`/v1beta/properties/${ga4Config.property_id}:runReport`, method:'POST', headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json','Content-Length':Buffer.byteLength(s)} }, (res)=>{ res.setEncoding('utf8'); let d=''; res.on('data',c=>d+=c); res.on('end',()=>{ const j = JSON.parse(d); warnIfTruncated(body, j); resolve(j); }); });
     req.on('error', reject); req.write(s); req.end();
   });
+}
+// ★GA4 결과가 줄 제한에서 조용히 잘리면 알린다 (2026-09-28, 재발 방지 P2)
+//   9/24 실측: 주간 담기율이 3,000줄 제한에 걸려 41~84% 를 버리고 있었다. 에러가 안 나서 몇 주를 몰랐다.
+//   「상위 N개」 조회(orderBys 있음)는 일부러 자르는 것이라 뺀다 — 전부 받아야 하는 조회만 본다.
+//   로그에만 남긴다(보고 본문엔 안 섞음). 한 번 돌 때 같은 모양은 한 번만.
+const _ga4TruncSeen = new Set();
+function warnIfTruncated(body, j) {
+  try {
+    if (!j || !j.rowCount || !Array.isArray(j.rows) || j.rows.length >= j.rowCount) return;
+    if (body && Array.isArray(body.orderBys) && body.orderBys.length) return;
+    const dims = ((body && body.dimensions) || []).map(x => x.name).join(',');
+    const key = dims + '|' + (body && body.limit);
+    if (_ga4TruncSeen.has(key)) return;
+    _ga4TruncSeen.add(key);
+    console.warn(`[GA4] ⚠️결과가 잘림 — ${j.rowCount}줄 중 ${j.rows.length}줄만 받음 (차원 ${dims || '없음'} · limit ${body && body.limit}). 이 숫자로 만든 값은 틀릴 수 있다`);
+  } catch (e) { }
 }
 
 // GA4 주간 비교 데이터
@@ -3587,6 +3628,9 @@ async function dailyReport() {
     const ordN = dailyOrders.validCount != null ? dailyOrders.validCount : dailyOrders.totalCount;
     concl.push(`💰 매출 <b>${formatMoney(dailyOrders.revenue)}</b> · 🛒 ${ordN}건${sumFlow?.cvr ? ` · ⚡ 전환 <b>${sumFlow.cvr}%</b>` : ''}`);
   }
+  // 🍳 카마솥 — 같은 날 카페24 주문(취소 제외). 조회가 안 되면 줄을 안 넣는다(2026-09-28)
+  const kmDaily = await getKamasotDaily(today);
+  if (kmDaily) concl.push(`🍳 카마솥 <b>${formatMoney(kmDaily.revenue)}</b> · ${kmDaily.count}건${kmDaily.canceled ? ` (취소 ${kmDaily.canceled})` : ''}`);
   if (sumFlow) concl.push(`🚪 유입 <b>${sumFlow.tot.toLocaleString()}세션</b>${sumFlow.arrow}`);
   // ⏱ 체류·페이지뎁스 — 사이트가 좋아지는지 나쁜지 추세 비교용 (2026-08-04 은우 요청)
   if (ga4Daily?.engagement?.durSec > 0) {
@@ -4747,6 +4791,7 @@ module.exports = {
   getCafe24Sales,
   getCafe24SalesByProduct,
   getCafe24DailyOrders,
+  getKamasotDaily, loadCafe24FromDrive, KAMASOT_TOKEN_DRIVE_FILE_ID,
   getCafe24Reviews,
   getRepurchaseStats,
   getCafe24CustomerSegments,
