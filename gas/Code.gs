@@ -61,6 +61,18 @@ function doGet(e) {
     if (cb2) return ContentService.createTextOutput(cb2 + '(' + js + ')').setMimeType(ContentService.MimeType.JAVASCRIPT);
     return ContentService.createTextOutput(js).setMimeType(ContentService.MimeType.JSON);
   }
+  // ✅ 적용 — 사례집 카드 「우리 페이지에 실제 반영함」 표시 (2026-09-29, 베스트 패턴 미러)
+  if (page === 'appliedlist' || page === 'appliedset') {
+    var ra;
+    try {
+      if (page === 'appliedlist') ra = { ok: true, items: appliedListWeb_() };
+      else ra = appliedSetWeb_(e.parameter.key, String(e.parameter.v || '1') === '1', e.parameter.url);
+    } catch (err3) { ra = { ok: false, err: String(err3).slice(0, 160) }; }
+    var js3 = JSON.stringify(ra);
+    var cb3 = e && e.parameter && e.parameter.callback;
+    if (cb3) return ContentService.createTextOutput(cb3 + '(' + js3 + ')').setMimeType(ContentService.MimeType.JAVASCRIPT);
+    return ContentService.createTextOutput(js3).setMimeType(ContentService.MimeType.JSON);
+  }
   return ContentService.createTextOutput('CX Bot OK');
 }
 
@@ -3041,6 +3053,42 @@ function markUXSkip_(date) {
     }
   }
   return { ok: false, error: 'no draft for date' };
+}
+
+// ===== ✅ 사례집_적용 (2026-09-29) — 채택에서 끝나지 않고 「우리 페이지에 옮겼다」를 기록 =====
+// 왜 별도 시트: ★베스트와 같은 이유 — 카드 상당수가 정적 HTML 이라 🎨디자인_사례 시트에 없다. 키 = 카드 제목.
+function getAppliedTab_() {
+  var ss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+  var sh = ss.getSheetByName('✅ 사례집_적용');
+  if (!sh) {
+    sh = ss.insertSheet('✅ 사례집_적용');
+    sh.appendRow(['키(카드 제목)', '적용시각', '우리 페이지 링크']);
+    sh.setFrozenRows(1);
+    sh.setColumnWidth(1, 460); sh.setColumnWidth(3, 320);
+  }
+  return sh;
+}
+function appliedListWeb_() {
+  var sh = getAppliedTab_();
+  if (sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues()
+    .map(function (r) { return { k: String(r[0]).trim(), at: String(r[1]), url: String(r[2] || '').trim() }; })
+    .filter(function (o) { return !!o.k; });
+}
+// v=1 표시 / v=0 해제. 이미 있으면 링크만 갱신(멱등).
+function appliedSetWeb_(key, on, url) {
+  key = String(key || '').trim();
+  if (!key) return { ok: false, err: 'key 없음' };
+  url = String(url || '').trim().slice(0, 300);
+  var sh = getAppliedTab_();
+  var last = sh.getLastRow();
+  var keys = last >= 2 ? sh.getRange(2, 1, last - 1, 1).getValues().map(function (r) { return String(r[0]).trim(); }) : [];
+  var i = keys.indexOf(key);
+  if (on) {
+    if (i < 0) sh.appendRow([key, Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd HH:mm'), url]);
+    else if (url) sh.getRange(i + 2, 3).setValue(url);
+  } else if (i >= 0) sh.deleteRow(i + 2);
+  return { ok: true, n: Math.max(0, sh.getLastRow() - 1) };
 }
 
 // ===== 🎨 디자인 사례집 (매일 1개 개인 DM, 채택=시트표시만) =====

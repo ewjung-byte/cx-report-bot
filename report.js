@@ -1320,6 +1320,28 @@ async function autoRefillDesignCases() {
         ].filter(Boolean).join('\n')).catch(() => {});
       }
     } catch (e) { console.warn('[사례집 점검] 실패:', e.message); }
+    // ── 채택 → 적용 회수 점검 (2026-09-29 은우 「참고 많이 하는 스타일」 — 채택에서 끝나면 남는 게 없다) ──
+    //    「✅ 사례집_적용」(사례집 카드의 ✓ 단추가 기록) 과 대조해, 채택인데 적용 표시가 없는 카드를 센다.
+    //    매일은 로그만, 월요일에만 DM 1통(개인). 키 = 카드 제목이라 정규화해서 비교한다.
+    try {
+      const apUrl = `https://sheets.googleapis.com/v4/spreadsheets/${DESIGN_SHEET_ID}/values/${encodeURIComponent("'✅ 사례집_적용'!A2:A2000")}`;
+      const apData = await fetchJson(apUrl, auth).catch(() => null);   // 탭이 아직 없으면(첫 표시 전) 조용히 넘어간다
+      if (apData) {
+        const normT = (t) => String(t || '').toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9가-힣]/g, '');
+        const apSet = new Set((apData.values || []).map((r) => normT(r[0])).filter(Boolean));
+        const adopted = rows.filter((r) => String(r[8] || '').trim() === '채택');
+        const wait = adopted.filter((r) => !apSet.has(normT(r[3])));
+        console.log(`[사례집 적용 점검] 채택 ${adopted.length} · 적용 표시 ${apSet.size} · 아직 안 옮김 ${wait.length}`);
+        if (new Date().getDay() === 1 && wait.length) {
+          await sendTelegram([
+            `🎨 <b>채택했는데 아직 우리 페이지에 안 옮긴 사례 ${wait.length}장</b> (월요일 점검)`,
+            '· 오래된 것: ' + wait.slice(0, 5).map((r) => String(r[3] || '').slice(0, 30)).join(' · '),
+            '',
+            '옮긴 카드는 사례집에서 ✓ 를 눌러 주세요 — design-casebook.vercel.app',
+          ].join('\n')).catch(() => {});
+        }
+      }
+    } catch (e) { console.warn('[사례집 적용 점검] 실패:', e.message); }
     return newRows.length;
   } catch (e) { console.error('[디자인 자동보충]', e.message); return 0; }
 }
