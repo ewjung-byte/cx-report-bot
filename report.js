@@ -1160,22 +1160,118 @@ async function refillPoolViaClaude(brandKr, n, excludeTitles, excludeDomains) {
   const shape = brandKr === 'D 홈페이지'
     ? `{"title":"사이트명 · 첫 화면의 장치 한 줄","sub":"그 장치가 화면에서 하는 일(30~60자)","point":"그 화면에서 실제로 확인되는 것을 구체적으로 — 무엇이 어디에 몇 개 있고 그래서 뭐가 달라지는가 (100자 이상, 2~3문장)","apply":"이태리정미소 또는 카마솥의 어느 화면을 어떻게 바꿀지 (80자 이상, 2문장)","src":"도메인만(예: stripe.com)"}`
     : `{"title":"브랜드명 · 이 브랜드가 하는 한 가지","sub":"어떤 브랜드인지(30~60자)","point":"그 브랜드가 실제로 쓰는 장치를 구체적으로 — 무엇을 어디에 어떻게 두는가, 그래서 뭐가 달라지는가 (100자 이상, 2~3문장)","apply":"이태리정미소 또는 카마솥의 어느 화면을 어떻게 바꿀지 (80자 이상, 2문장)","src":"도메인만(예: graza.co)"}`;
-  const prompt = `${subject} ${n}개를 골라 JSON 배열로만 답해.
+  // ★나눠서 달라고 한다 (2026-09-30) — 9/24 「두꺼운 카드」(핵심 100자·적용 80자) 규칙 뒤로 한 번에 30개를 달라고 하니
+  //   답이 max_tokens 4000 에서 잘려 JSON 이 깨졌다(9/28 A 2506자·9/30 B 3779자 「Unterminated string」, 나머지 날은 조용히 0건).
+  //   9/24~30 풀 보충이 매일 0건 → 풀 0 → 큐 경고(은우 「디자인큐 경고라는데」). 이제 한 번에 6개씩, 최대 6번, 잘려도 완성된 카드는 살린다.
+  // ★매번 다른 갈래로 묻는다 (2026-09-30 실측) — 사례집이 330장이라 「유명 D2C」로만 물으면 이미 쓴 브랜드를 되풀이한다
+  //   (A 식품: 받은 19개 중 17개가 이미 있는 것). 나라·분야를 바꿔 가며 묻고, 이미 있는 건 여기서 바로 걸러 개수에 안 친다.
+  const ANGLES = brandKr === 'A 식품'
+    ? ['일본 식품·음료', '한국 식품 스타트업·로컬 브랜드', '이탈리아 식품(파스타·오일·소스·치즈)', '스페인·포르투갈·그리스 식품', '프랑스·벨기에 식품·제과', '북유럽 식품·음료', '영국·아일랜드 식품', '호주·뉴질랜드 식품', '차(茶)·커피 로스터', '초콜릿·과자·디저트', '발효식품·장류·식초', '베이커리·곡물']
+    : brandKr === 'B 주방기기'
+      ? ['일본 주방도구·식기', '한국 주방·생활 브랜드', '북유럽 주방·식기', '독일·오스트리아 주방기기', '이탈리아 주방도구·에스프레소 기구', '프랑스 조리도구', '영국 주방·식기', '커피·차 도구', '칼·도마·손도구', '보관용기·수납', '도자기·유리 식기', '주방 소형가전']
+      : ['식품·음료 브랜드 홈', '패션·잡화 브랜드 홈', '가구·인테리어 브랜드 홈', '화장품·생활용품 브랜드 홈', '호텔·레스토랑·공간 홈', '일본 브랜드 홈', '한국 브랜드 홈', '북유럽 브랜드 홈', '소프트웨어·앱 랜딩', '출판·매거진·문화 기관 홈', '가전·하드웨어 브랜드 홈', '여행·아웃도어 브랜드 홈'];
+  const day0 = Math.floor(Date.now() / 86400000);
+  const normD = (u) => dedupDomains([u])[0] || '';
+  const usedD = new Set(dedupDomains(excludeDomains));
+  const usedT = new Set((excludeTitles || []).map((t) => String(t).trim()));
+  const CHUNK = 6;
+  const out = [];
+  const exT = (excludeTitles || []).slice(-140);
+  const exD = [...(excludeDomains || [])];
+  for (let call = 0; call < 6 && out.length < n; call++) {
+    const k = Math.min(CHUNK, n - out.length);
+    const angle = ANGLES[(day0 + call) % ANGLES.length];
+    const prompt = `${subject} 중에서 이번엔 「${angle}」 쪽에서만 ${k}개를 골라 JSON 배열로만 답해.
+${BRAND_FACTS}
 ★실재하는 브랜드·사이트만. 도메인은 www 없이 소문자로, 실제로 살아있는 것만(확실하지 않으면 넣지 마).
 ★아래 제목·도메인은 이미 쓴 것이라 절대 중복 금지.
 ★point 와 apply 가 짧으면 쓸모가 없다. point 는 100자 이상, apply 는 80자 이상으로 구체적으로 써라.
   「좁게 파면 전문가로 보인다」 같은 한 줄 요약은 안 된다 — 화면에서 확인되는 것을 적어라.
-이미 쓴 제목: ${(excludeTitles || []).slice(-140).join(', ')}
-이미 쓴 도메인: ${dedupDomains(excludeDomains).join(', ')}
+이미 쓴 제목: ${exT.concat(out.map(x => x.title)).join(', ')}
+이미 쓴 도메인: ${dedupDomains(exD.concat(out.map(x => x.src))).join(', ')}
 각 원소 = ${shape}
 설명·마크다운·코드펜스 없이 JSON 배열만 출력.`;
-  try {
-    const res = await poolAiMessage({ model: CLAUDE_MODEL, max_tokens: 4000, messages: [{ role: 'user', content: prompt }] });
-    const txt = (res.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
-    const m = txt.match(/\[[\s\S]*\]/);
-    if (!m) return [];
-    return JSON.parse(m[0]).filter(x => x && x.title && x.src);
-  } catch (e) { console.error('[디자인 풀 생성]', brandKr, e.message); return []; }
+    try {
+      const res = await poolAiMessage({ model: CLAUDE_MODEL, max_tokens: 8000, messages: [{ role: 'user', content: prompt }] });
+      const txt = (res.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
+      const got = parsePoolCards(txt);
+      let fresh = 0;
+      got.forEach(x => {
+        const d = normD(x.src);
+        if (!d || usedD.has(d) || usedT.has(String(x.title).trim())) return;   // 이미 사례집에 있는 것 — 개수에 안 친다
+        if (out.some(y => y.title === x.title || normD(y.src) === d)) return;
+        out.push(x); fresh++;
+      });
+      console.log('[디자인 풀 생성]', brandKr, `${call + 1}번째 「${angle}」 ${k}개 → ${got.length}개 중 새것 ${fresh}`, res.stop_reason === 'max_tokens' ? '(길이 한도에서 잘림 — 완성된 카드만 살림)' : '');
+      if (!got.length) break;   // 한 번 빈손이면 더 불러도 같다
+    } catch (e) { console.error('[디자인 풀 생성]', brandKr, e.message); break; }
+  }
+  return out;
+}
+// ★우리 가게가 뭘 파는지 못 박는다 (2026-09-30 실측) — 이름의 「정미소」만 보고 AI 가 쌀가게로 알아,
+//   풀 56장 중 29장의 「적용」이 쌀 품종·도정·햅쌀 얘기였다. 이태리정미소는 쌀을 안 판다.
+const BRAND_FACTS = '★우리 브랜드(적용 칸은 이 사실에 맞게만 써라): 이태리정미소 = 이탈리아 식품 자사몰(바질페스토·엑스트라버진 올리브오일·파스타·빵·커피 드립백). 이름만 「정미소」일 뿐 쌀·도정·곡물과 무관 — 쌀 얘기 금지. 카마솥 = 한국 무쇠·주물 조리도구 브랜드(가마솥·냄비·후라이팬·그리들·뚜껑 홀더).';
+const RICE_WORDS = /쌀|도정|정미기|햅쌀|고시히카리|현미|쌀알|밥맛|밥 식감|밥 짓기|벼|논에서/;
+// 적용 칸에 「이태리정미소」가 나오는데, 카마솥 얘기가 아닌 문장에 쌀 얘기가 있으면 틀린 카드.
+//   (둘째 문장에 「당일 도정」을 슬쩍 붙인 카드 3장이 첫 판(같은 문장만 보기)을 빠져나갔다 — 9/30)
+//   카마솥 문장의 「밥 짓기」는 가마솥이라 맞다 — 건드리지 않는다.
+function wrongBrandCard(g) {
+  const a = String((g && g.apply) || '');
+  if (!a.includes('이태리정미소')) return false;
+  return a.split(/(?<=[.!?。])\s+|\n/).some((s) => !s.includes('카마솥') && RICE_WORDS.test(s.replace(/이태리정미소/g, '')));
+}
+// JSON 배열 전체가 멀쩡하면 그대로, 잘렸으면 완성된 {…} 만 하나씩 건진다.
+function parsePoolCards(txt) {
+  const ok = (x) => x && x.title && x.src;
+  const s = String(txt || '');
+  const m = s.match(/\[[\s\S]*\]/);
+  if (m) { try { return JSON.parse(m[0]).filter(ok); } catch (e) { /* 아래로 */ } }
+  const cards = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{') { if (depth === 0) start = i; depth++; }
+    else if (ch === '}' && depth > 0) { depth--; if (depth === 0 && start >= 0) { try { const o = JSON.parse(s.slice(start, i + 1)); if (ok(o)) cards.push(o); } catch (e) { } start = -1; } }
+  }
+  return cards;
+}
+
+// 풀 AI 보충 — 풀이 POOL_LOW 밑인 칸만 채운다. 바꿨으면 true.
+// (2026-09-30 autoRefillDesignCases 안에서 떼어냄 — 수동 채우기 모드 poolfill 도 같은 길을 쓰게)
+async function fillPoolViaAI(pool, brands, titles, srcs) {
+  let dirty = false;
+  for (const b of brands) {
+    const have = (pool[b.kr] || []).length;
+    if (have >= POOL_LOW) continue;
+    const want = POOL_TARGET - have;
+    if (!POOL_AI_ON) { console.warn('[디자인 풀 부족]', b.kr, have + '개 — POOL_AI_ON=1 이 아니라 자동 생성 안 함(수동: cx-data/bot/_stock_pool.js)'); continue; }
+    const gen = await refillPoolViaClaude(b.kr, want + 6, titles, srcs);   // 죽은 도메인·중복 감안해 넉넉히
+    if (!gen.length) { console.warn('[디자인 풀 보충] 생성 0건:', b.kr); continue; }
+    let added = 0, thinN = 0, deadN = 0, dupN = 0;
+    for (const g of gen) {
+      if (added >= want) break;
+      const dom = String(g.src || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase();
+      if (!dom) continue;
+      if (titles.includes(g.title) || srcs.some(x => String(x).toLowerCase().includes(dom))) { dupN++; continue; }
+      if ((pool[b.kr] || []).some(x => x.title === g.title || String(x.src).toLowerCase() === dom)) { dupN++; continue; }
+      // ★얇은 카드는 아예 안 들인다 (2026-09-24) — 「좁게 파면 전문가로 보인다」 14자 같은 게 실제로 발송됐다.
+      //   읽어도 남는 게 없는 카드가 쌓이는 게 「제대로 안 된다」의 실체였다. 문을 여기서 막는다.
+      if (String(g.point || '').length < 60 || String(g.apply || '').length < 50) {
+        console.warn('[디자인 풀] 내용이 얇아 버림:', g.title, `(핵심 ${String(g.point || '').length}자 · 적용 ${String(g.apply || '').length}자)`);
+        thinN++; continue;
+      }
+      if (wrongBrandCard(g)) { console.warn('[디자인 풀] 이태리정미소를 쌀가게로 씀, 버림:', g.title); thinN++; continue; }
+      const ok = await isLiveBrandSite(dom).catch(() => false);
+      if (!ok) { deadN++; continue; }
+      (pool[b.kr] = pool[b.kr] || []).push({ title: g.title, sub: g.sub || '', point: g.point || '', apply: g.apply || '', src: dom });
+      titles.push(g.title); srcs.push(dom);
+      added++; dirty = true;
+    }
+    console.log('[디자인 풀 보충]', b.kr, have + '→' + (pool[b.kr] || []).length + '개 (생성 ' + gen.length + ' 중 ' + added + '건 통과 · 중복 ' + dupN + ' · 얇음 ' + thinN + ' · 죽은 도메인 ' + deadN + ')');
+  }
+  return dirty;
 }
 
 async function autoRefillDesignCases() {
@@ -1241,34 +1337,7 @@ async function autoRefillDesignCases() {
     }
     // ★풀이 얕으면 봇이 직접 채운다 — 이게 수동이라 3개월간 같은 일을 반복했다(2026-09-21).
     //   시트 적재와 별개라 여기서 바로 저장한다(시트에 올릴 게 없어도 풀은 채워져야 한다).
-    for (const b of brands) {
-      const have = (pool[b.kr] || []).length;
-      if (have >= POOL_LOW) continue;
-      const want = POOL_TARGET - have;
-      if (!POOL_AI_ON) { console.warn('[디자인 풀 부족]', b.kr, have + '개 — POOL_AI_ON=1 이 아니라 자동 생성 안 함(수동: cx-data/bot/_stock_pool.js)'); continue; }
-      const gen = await refillPoolViaClaude(b.kr, want + 6, titles, srcs);   // 죽은 도메인·중복 감안해 넉넉히
-      if (!gen.length) { console.warn('[디자인 풀 보충] 생성 0건:', b.kr); continue; }
-      let added = 0;
-      for (const g of gen) {
-        if (added >= want) break;
-        const dom = String(g.src || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase();
-        if (!dom) continue;
-        if (titles.includes(g.title) || srcs.some(x => String(x).toLowerCase().includes(dom))) continue;
-        if ((pool[b.kr] || []).some(x => x.title === g.title || String(x.src).toLowerCase() === dom)) continue;
-        // ★얇은 카드는 아예 안 들인다 (2026-09-24) — 「좁게 파면 전문가로 보인다」 14자 같은 게 실제로 발송됐다.
-        //   읽어도 남는 게 없는 카드가 쌓이는 게 「제대로 안 된다」의 실체였다. 문을 여기서 막는다.
-        if (String(g.point || '').length < 60 || String(g.apply || '').length < 50) {
-          console.warn('[디자인 풀] 내용이 얇아 버림:', g.title, `(핵심 ${String(g.point || '').length}자 · 적용 ${String(g.apply || '').length}자)`);
-          continue;
-        }
-        const ok = await isLiveBrandSite(dom).catch(() => false);
-        if (!ok) continue;
-        (pool[b.kr] = pool[b.kr] || []).push({ title: g.title, sub: g.sub || '', point: g.point || '', apply: g.apply || '', src: dom });
-        titles.push(g.title); srcs.push(dom);
-        added++; poolDirty = true;
-      }
-      console.log('[디자인 풀 보충]', b.kr, have + '→' + (pool[b.kr] || []).length + '개 (생성 ' + gen.length + ' 중 ' + added + '건 통과)');
-    }
+    if (await fillPoolViaAI(pool, brands, titles, srcs)) poolDirty = true;
     const poolLow = brands.filter(b => (pool[b.kr] || []).length <= 2).map(b => b.kr + ' ' + (pool[b.kr] || []).length + '개');
     if (newRows.length) {
       // ★getGA4Token은 읽기전용(403) → 쓰기는 GAS(시트 소유) 통해서
@@ -4786,6 +4855,28 @@ async function main() {
   }
   else if (mode === 'ux_draft') await uxDraftFlow();
   else if (mode === 'ux_send') await uxSendFlow();
+  else if (mode === 'poolfill') {
+    // ★후보 풀만 채운다 (2026-09-30) — 시트 적재·발송·DM 없음. 풀 보충이 고장 났을 때 로컬에서 고친 걸 바로 확인하며 채우는 용.
+    //   POOL_AI_ON=1 node report.js poolfill → design_pool.json 저장(커밋은 사람 확인 뒤).
+    const token = await getGA4Token();
+    const data = await fetchJson(`https://sheets.googleapis.com/v4/spreadsheets/${DESIGN_SHEET_ID}/values/${encodeURIComponent('🎨 디자인_사례!A2:J2000')}`, { 'Authorization': `Bearer ${token}` });
+    const rows = (data.values || []).filter(r => r[0]);
+    const { loadPool, savePool, poolDepth } = require('./design_pool');
+    const pool = loadPool();
+    console.log('풀 전:', poolDepth(pool), '· 시트', rows.length, '행 · POOL_AI_ON', POOL_AI_ON ? '켜짐' : '꺼짐');
+    const brands = [{ kr: 'A 식품', pre: 'A' }, { kr: 'B 주방기기', pre: 'B' }, { kr: 'D 홈페이지', pre: 'D' }];
+    const titles = rows.map(r => String(r[3] || '')), srcs = rows.map(r => String(r[7] || ''));
+    // 이미 풀에 들어간 틀린 카드(이태리정미소 = 쌀) 먼저 걷어낸다
+    let purged = 0;
+    Object.keys(pool).forEach((k) => { const before = (pool[k] || []).length; pool[k] = (pool[k] || []).filter((x) => !wrongBrandCard(x)); purged += before - pool[k].length; });
+    if (purged) { savePool(pool); console.log('  쌀가게로 쓴 카드 걷어냄:', purged, '장 →', poolDepth(pool)); }
+    const only = process.argv[3];   // 예: poolfill B — 한 칸만
+    for (const b of brands) {       // 칸마다 저장 — 중간에 끊겨도 채운 칸은 남게
+      if (only && b.pre !== only) continue;
+      if (await fillPoolViaAI(pool, [b], titles, srcs)) { savePool(pool); console.log('  저장:', b.kr, '→', poolDepth(pool)); }
+    }
+    console.log('풀 뒤:', poolDepth(pool));
+  }
   else if (mode === 'design_refill') {
     // 디자인 사례집만 보충+발송 (미발송 사고 수동 복구용 — 리포트 중복 발송 없음)
     const added = await autoRefillDesignCases();
