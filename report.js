@@ -2758,26 +2758,36 @@ async function getClarityPageStats(daysBack = 1) {
     const url = `https://www.clarity.ms/export-data/api/v1/project-live-insights?projectId=${CLARITY_PROJECT_ID}&numOfDays=${daysBack}&dimension1=URL`;
     const data = await fetchJson(url, { 'Authorization': `Bearer ${clarityToken}` });
     if (!Array.isArray(data)) return null;
-    const pick = (n) => data.find(m => m.metricName === n);
-    const dead = pick('DeadClickCount')?.information || [];
-    const quick = pick('QuickbackClick')?.information || [];
-    const scroll = pick('ScrollDepth')?.information || [];
-    const norm = (u) => String(u || '').replace(/^https?:\/\/[^/]+/, '').slice(0, 80);
-    const byUrl = {};
-    const upsert = (raw, sessions) => {
-      const u = norm(raw); if (!u) return null;
-      if (!byUrl[u]) byUrl[u] = { url: u, sessions };
-      else if (sessions > byUrl[u].sessions) byUrl[u].sessions = sessions;
-      return byUrl[u];
+    const pick = (n) => (data.find(m => m.metricName === n) || {}).information || [];
+    const dead = pick('DeadClickCount'), quick = pick('QuickbackClick'), scroll = pick('ScrollDepth');
+    // ★2026-10-08: 클래리티는 주소를 `Url` 키로 준다 — 예전 코드는 URL/url/name 만 읽어 6월부터 페이지별 14칸(결제 6 · 상품 8)이 전부 0 이었다.
+    //   주소마다 꼬리표(크리테오 cto_pld·utm 등)가 달라 같은 페이지가 수백 줄로 쪼개져 온다 → 경로(+상품번호)로 묶고 세션 가중 평균.
+    //   크리테오 무료 배너 손님(cafe_mkt=criteo · 평균 4~5초 · 구매 0.01%)과 카마솥(ka-masot.com)은 뺀다.
+    //   ⚠️응답은 지표마다 1,000줄까지라(크리테오 한 줄짜리 주소가 절반 넘게 차지) 결제 페이지는 표본이 작거나 빠질 수 있다.
+    const rawUrl = (x) => x.Url || x.URL || x.url || x.name;
+    const keyOf = (raw) => {
+      const s = String(raw || ''); if (!s || /ka-masot\.com/i.test(s) || /criteo/i.test(s)) return null;
+      const path = s.replace(/^https?:\/\/[^/]+/i, '').split('#')[0];
+      const i = path.indexOf('?'); const p = i < 0 ? path : path.slice(0, i); const qs = i < 0 ? '' : path.slice(i + 1);
+      const pno = qs.match(/(?:^|&)product_no=(\d+)/);
+      return (p.toLowerCase() + (pno ? '?product_no=' + pno[1] : '')).slice(0, 80);
     };
-    dead.forEach(x => { const o = upsert(x.URL || x.url || x.name, parseInt(x.sessionsCount || 0)); if (o) o.dead = x.sessionsWithMetricPercentage || 0; });
-    quick.forEach(x => { const o = upsert(x.URL || x.url || x.name, parseInt(x.sessionsCount || 0)); if (o) o.quick = x.sessionsWithMetricPercentage || 0; });
-    scroll.forEach(x => { const o = upsert(x.URL || x.url || x.name, parseInt(x.sessionsCount || 0)); if (o) o.scroll = x.averageScrollDepth || 0; });
+    const rawSess = {}; dead.forEach(x => { rawSess[rawUrl(x)] = parseInt(x.sessionsCount || 0) || 0; });
+    const byUrl = {};
+    const add = (arr, field) => arr.forEach(x => {
+      const raw = rawUrl(x), k = keyOf(raw); if (!k) return;
+      const o = byUrl[k] = byUrl[k] || { url: k, sessions: 0, _w: {} };
+      const w = o._w[field] = o._w[field] || { n: 0, s: 0 };
+      if (field === 'scroll') { const n = rawSess[raw] || 1; w.n += n; w.s += n * (x.averageScrollDepth || 0); }
+      else { const n = parseInt(x.sessionsCount || 0) || 0; w.n += n; w.s += n * (x.sessionsWithMetricPercentage || 0); if (field === 'dead') o.sessions += n; }
+    });
+    add(dead, 'dead'); add(quick, 'quick'); add(scroll, 'scroll');
+    Object.values(byUrl).forEach(o => { Object.entries(o._w).forEach(([fl, w]) => { o[fl] = w.n ? Math.round(w.s / w.n * 100) / 100 : 0; }); delete o._w; });
     const all = Object.values(byUrl);
-    // 자동 마찰(결제·상품 페이지 제외 = 그 외 페이지에서 폭증한 것): 데드 ≥10% 또는 뒤로 ≥50%, 세션 10+
+    // 자동 마찰(결제·상품 페이지 제외 = 그 외 페이지에서 폭증한 것): 데드 ≥10%, 세션 10+ (10/8 뒤로 ≥50% 조건 뺌)
     const isCheckout = (u) => /\/(order\/basket|order\/orderform|member\/login)/.test(u);
     const isProduct = (u) => /(product_no=|surl\/p\/)/.test(u);
-    const friction = all.filter(x => x.sessions >= 10 && !isCheckout(x.url) && !isProduct(x.url) && ((x.dead || 0) >= 10 || (x.quick || 0) >= 50))
+    const friction = all.filter(x => x.sessions >= 10 && !isCheckout(x.url) && !isProduct(x.url) && (x.dead || 0) >= 10)   /* 10/8: 뒤로가기 단독(≥50%)은 인앱 노이즈라 뺌 */
       .sort((a, b) => ((b.dead || 0) + (b.quick || 0) * 0.3) - ((a.dead || 0) + (a.quick || 0) * 0.3))
       .slice(0, 1);
     return { byUrl, friction };
