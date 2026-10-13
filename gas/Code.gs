@@ -73,6 +73,20 @@ function doGet(e) {
     if (cb3) return ContentService.createTextOutput(cb3 + '(' + js3 + ')').setMimeType(ContentService.MimeType.JAVASCRIPT);
     return ContentService.createTextOutput(js3).setMimeType(ContentService.MimeType.JSON);
   }
+  // 📄 C 상세페이지 — 사례집에서 「주소 + 분류(식품·주방기기…) + 한 줄 메모」로 은우가 직접 쌓는다 (2026-09-30)
+  if (page === 'detailadd' || page === 'detailset' || page === 'detaildel') {
+    var rd;
+    try {
+      var P = e.parameter || {};
+      if (page === 'detailadd') rd = detailAddWeb_(P.url, P.cat, P.memo, P.title);
+      else if (page === 'detailset') rd = detailSetWeb_(P.id, P.cat, P.memo);
+      else rd = detailDelWeb_(P.id);
+    } catch (err4) { rd = { ok: false, err: String(err4).slice(0, 160) }; }
+    var js4 = JSON.stringify(rd);
+    var cb4 = e && e.parameter && e.parameter.callback;
+    if (cb4) return ContentService.createTextOutput(cb4 + '(' + js4 + ')').setMimeType(ContentService.MimeType.JAVASCRIPT);
+    return ContentService.createTextOutput(js4).setMimeType(ContentService.MimeType.JSON);
+  }
   return ContentService.createTextOutput('CX Bot OK');
 }
 
@@ -699,6 +713,15 @@ function doPost(e) {
     }
     if (action === 'refresh_cockpit') {
       return jsonOut(refreshCockpit_());
+    }
+    if (action === 'cx_command') { // 자비스가 은우봇 콕핏 명령을 대신(10/12 은우 「콕핏 명령은 자비스로」) — handleEunwooDM 그대로(중복 막기·영역 분류·메모·ONE THING), 나갈 글은 돌려줌
+      var cxText = String(contents.text || '').trim();
+      if (!/^\/(할거|개입|적용|백로그|나중에?|진행|끝|보류|실측|삭제|원씽|메모|메모목록|메모삭제|메모비우기|성과|성과요약|정리|완료정리|콕핏|현황)(\s|$)/.test(cxText)) return jsonOut({ ok: false, error: '콕핏 명령만 받음' });
+      __CX_CAPTURE = [];
+      try { handleEunwooDM({ text: cxText, chat: { id: EUNWOO_CHAT_ID }, date: Math.floor(Date.now() / 1000) }); }
+      catch (eCx) { var capErr = __CX_CAPTURE; __CX_CAPTURE = null; return jsonOut({ ok: false, error: String(eCx).slice(0, 200), replies: capErr }); }
+      var capOk = __CX_CAPTURE; __CX_CAPTURE = null;
+      return jsonOut({ ok: true, replies: capOk });
     }
     if (action === 'set_one_thing') { // ONE THING 설정(빈값이면 클리어)
       var ot = String(contents.text || '').trim();
@@ -2860,7 +2883,10 @@ function getMemosData() {
   return { ok: true, memos: out };
 }
 
+// 자비스(은우 텔레 DM 허브)가 은우봇 콕핏 명령을 대신 처리할 때(doPost cx_command, 2026-10-12) 은우에게 나갈 글을 여기 모은다 — 답은 자비스가 DM 으로
+var __CX_CAPTURE = null;
 function sendTGMessage(chatId, text, replyMarkup) {
+  if (__CX_CAPTURE && String(chatId) === String(EUNWOO_CHAT_ID)) { __CX_CAPTURE.push(String(text)); return; }
   var payload = { chat_id: chatId, text: text, parse_mode: 'HTML' };
   if (replyMarkup) payload.reply_markup = replyMarkup;
   UrlFetchApp.fetch('https://api.telegram.org/bot' + _botToken() + '/sendMessage', {
@@ -3327,9 +3353,85 @@ function getDesignCasesForWeb_() {
     return {
       id: String(r[0]), brand: String(r[2]), title: String(r[3]), sub: String(r[4]),
       point: String(r[5]), apply: String(r[6]), src: String(r[7]), status: String(r[8]).trim(),
-      date: (Object.prototype.toString.call(r[9]) === '[object Date]') ? Utilities.formatDate(r[9], 'Asia/Seoul', 'yyyy-MM-dd') : String(r[9]).slice(0, 10)
+      date: (Object.prototype.toString.call(r[9]) === '[object Date]') ? Utilities.formatDate(r[9], 'Asia/Seoul', 'yyyy-MM-dd') : String(r[9]).slice(0, 10),
+      // K 분류 · L 대표이미지 — C 상세페이지 전용(2026-09-30). 다른 칸은 빈 값.
+      cat: String(r[10] == null ? '' : r[10]).trim(), img: String(r[11] == null ? '' : r[11]).trim(),
+      added: (Object.prototype.toString.call(r[1]) === '[object Date]') ? Utilities.formatDate(r[1], 'Asia/Seoul', 'yyyy-MM-dd') : String(r[1]).slice(0, 10)
     };
   });
+}
+
+// ===== 📄 C 상세페이지 직접 추가 (2026-09-30 은우 「상세페이지 용도 하나, 주소 위주, 내가 수동 추가」 · 「분류는 주방기기·식품 이런 식」) =====
+// 🎨디자인_사례 시트에 C 행으로 넣는다(봇 DM·중복검사는 C 를 원래 안 본다). K=분류, L=대표이미지(og:image).
+function detailEnsureHead_(sh) {
+  if (!String(sh.getRange(1, 11).getValue()).trim()) sh.getRange(1, 11).setValue('분류(C 상세)');
+  if (!String(sh.getRange(1, 12).getValue()).trim()) sh.getRange(1, 12).setValue('대표이미지(C 상세)');
+}
+function detailMeta_(url) {
+  var out = { title: '', img: '' };
+  try {
+    var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true, validateHttpsCertificates: false,
+      headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' } });
+    var h = res.getContentText().slice(0, 400000);
+    var meta = function (prop) {
+      var re1 = new RegExp('<meta[^>]+(?:property|name)=["\']' + prop + '["\'][^>]*content=["\']([^"\']+)', 'i');
+      var re2 = new RegExp('<meta[^>]+content=["\']([^"\']+)["\'][^>]*(?:property|name)=["\']' + prop + '["\']', 'i');
+      var m = h.match(re1) || h.match(re2); return m ? m[1] : '';
+    };
+    var t = meta('og:title') || ((h.match(/<title[^>]*>([^<]+)<\/title>/i) || [])[1] || '');
+    out.title = t.replace(/&amp;/g, '&').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim().slice(0, 120);
+    var img = meta('og:image');
+    if (img && img.indexOf('//') === 0) img = 'https:' + img;
+    else if (img && img.charAt(0) === '/') img = url.replace(/^(https?:\/\/[^\/]+).*$/, '$1') + img;
+    out.img = img.slice(0, 500);
+  } catch (err) { }
+  return out;
+}
+// ttl = 주소 쪽에서 제목을 못 읽을 때 쓸 이름(북마크 이름 등). 네이버 스토어는 수집을 막아 제목이 비는 일이 있다.
+function detailAddWeb_(url, cat, memo, ttl) {
+  url = String(url || '').trim();
+  if (!/^https?:\/\/[^\s]+\.[^\s]+/i.test(url)) return { ok: false, err: '주소가 http 로 시작하지 않아요' };
+  cat = String(cat || '').trim().slice(0, 20) || '미분류';
+  memo = String(memo || '').trim().slice(0, 300);
+  var sh = getDesignTab_();
+  detailEnsureHead_(sh);
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]).charAt(0) === 'C' && String(data[i][7]).trim() === url) return { ok: false, err: '이미 넣은 주소예요 (' + data[i][0] + ')', dupId: String(data[i][0]) };
+  }
+  var maxN = 0;
+  for (var j = 1; j < data.length; j++) { var id0 = String(data[j][0]); if (id0.charAt(0) === 'C') maxN = Math.max(maxN, parseInt(id0.slice(1), 10) || 0); }
+  var id = 'C' + (maxN + 1);
+  var m = detailMeta_(url);
+  var dom = url.replace(/^https?:\/\//i, '').split('/')[0].replace(/^www\./, '');
+  var bad = /^(네이버|naver|smartstore|error|에러|access denied|403|404|페이지를 찾을 수 없)/i;
+  var title = (m.title && !bad.test(m.title)) ? m.title : (String(ttl || '').trim().slice(0, 120) || m.title || dom);
+  var today = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd');
+  sh.appendRow([id, today, 'C 상세페이지', title, '', memo, '', url, '채택', '', cat, m.img]);
+  return { ok: true, case: { id: id, brand: 'C 상세페이지', title: title, sub: '', point: memo, apply: '', src: url, status: '채택', date: '', cat: cat, img: m.img, added: today } };
+}
+function detailFindRow_(sh, id) {
+  id = String(id || '').trim();
+  if (id.charAt(0) !== 'C') return -1;
+  var ids = sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 1).getValues();
+  for (var i = 0; i < ids.length; i++) if (String(ids[i][0]).trim() === id) return i + 2;
+  return -1;
+}
+function detailSetWeb_(id, cat, memo) {
+  var sh = getDesignTab_();
+  detailEnsureHead_(sh);
+  var row = detailFindRow_(sh, id);
+  if (row < 0) return { ok: false, err: '없는 카드예요' };
+  if (cat != null && String(cat).trim()) sh.getRange(row, 11).setValue(String(cat).trim().slice(0, 20));
+  if (memo != null) sh.getRange(row, 6).setValue(String(memo).trim().slice(0, 300));
+  return { ok: true };
+}
+function detailDelWeb_(id) {
+  var sh = getDesignTab_();
+  var row = detailFindRow_(sh, id);
+  if (row < 0) return { ok: false, err: '없는 카드예요' };
+  sh.deleteRow(row);
+  return { ok: true };
 }
 // 케이스북 카드에서 디자인 사례 채택/패스 토글 (google.script.run 호출용 — 언더스코어 없는 공개함수)
 function setDesignStatusWeb(id, status) { return setDesignCaseStatus_(id, status); }

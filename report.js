@@ -4685,7 +4685,14 @@ ${dramaLine}
     console.log('[월간 성과요약]', ms && ms.ok ? `완료${ms.done}·진행${ms.wip}` : '실패');
     const utc = ga4?.userType?.cur;
     const beforeSnap = `전환율 ${siteCvr} · 재구매 ${repurchase?.repurchaseRate?.toFixed(1) || '-'}% · 재방문CVR ${utc ? pct(utc.ret.conv, utc.ret.sessions) : '-'} · 골든 ${goldenZone?.d21_35 || '-'}명`;
-    const candRows = (weeklyActions || []).map(a => ({ date: display, area: 'CX주간', action: a.replace(/<[^>]+>/g, ''), context: '', before: beforeSnap }));
+    // ★콕핏엔 제목만 (2026-10-01 은우 「🎥 주간 세션리뷰 10분 으로 축소」) — 긴 안내는 개입기록 D(맥락) 칸으로.
+    //   제목을 시트에서만 줄이면 다음 주 긴 문장이 「다른 내용」으로 읽혀 후보가 하나 더 쌓인다(중복방지가 개입내용 글자로 비교).
+    const candRows = (weeklyActions || []).map(a => {
+      const t = a.replace(/<[^>]+>/g, '');
+      const m = t.match(/^(🎥 주간 세션리뷰 10분)\s*—\s*([\s\S]*)$/);
+      return m ? { date: display, area: 'CX주간', action: m[1], context: m[2], before: beforeSnap }
+               : { date: display, area: 'CX주간', action: t, context: '', before: beforeSnap };
+    });
     if (candRows.length) {
       const cr = await postToAppsScript({ action: 'append_cx_candidates', rows: candRows }, APPS_SCRIPT_URL).catch(() => null);
       console.log('[CX 후보 적재]', cr && cr.ok ? `+${cr.added}` : '실패');
