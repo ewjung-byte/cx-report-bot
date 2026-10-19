@@ -625,11 +625,12 @@ async function getCafe24DailyOrders(startDate, endDate) {
       자체_회원: 0, 자체_게스트: 0, 네이버_외부: 0, 네이버_버튼: 0, 카카오_외부: 0, 카카오_버튼: 0,
       회원: 0, 비회원: 0,
     };
+    const _memSet = new Set();   // 회원 「사람 수」(2026-10-19 은우 「회원으로 사는 사람 몇 명, 비회원 몇 명」) — 비회원은 이 호출에 buyer 가 없어 주문 건수만
     valid.forEach(o => {
       const place = String(o.order_place_name || '');
       const gw = (o.payment_gateway_names || []).join('').toLowerCase();
       const mem = String(o.member_id || '').trim() !== '';
-      if (mem) payMethods.회원++; else payMethods.비회원++;
+      if (mem) { payMethods.회원++; _memSet.add(String(o.member_id).trim()); } else payMethods.비회원++;
       if (place.indexOf('네이버') >= 0) { payMethods.네이버페이++; payMethods.네이버_외부++; }       // 네이버페이 주문형(외부, 게스트)
       else if (place.indexOf('톡') >= 0) { payMethods.카카오페이++; payMethods.카카오_외부++; }      // 톡체크아웃(외부 카카오, 게스트)
       else if (gw.includes('naver')) { payMethods.네이버페이++; payMethods.네이버_버튼++; }          // 결제창 내 네이버페이 버튼(회원多)
@@ -637,6 +638,7 @@ async function getCafe24DailyOrders(startDate, endDate) {
       else if (gw.includes('payco') || gw.includes('toss') || gw.includes('ssg') || gw.includes('smilepay')) payMethods.기타간편++;
       else { payMethods.자체결제++; mem ? payMethods.자체_회원++ : payMethods.자체_게스트++; }          // 결제창 카드·계좌 등
     });
+    payMethods.회원_사람 = _memSet.size;
     return {
       totalCount: all.length,
       validCount: valid.length,
@@ -2057,6 +2059,7 @@ const PRODUCT_NAME = {
   //   ⚠️구글 검색은 전용번호가 없다 — 본상품 27 랜딩 + UTM pesto_search 로만 갈린다.
   '83': '메타 광고 (본진)',
   '84': '메타 광고 (본진)',
+  '136': '광고 랜딩 136 (어느 광고인지 확인 중)',   // 2026-10-19 3창: 10/12~18 24개·52만 팔렸는데 이름표가 없어 「비밀링크 #136」으로만 떴음 → 미주·버팀에 캠페인 확인 뒤 이름 바꿀 것
   '85': 'LG 임직원 특가',
   '87': '꿀동이 공구',
   '88': '구글 광고 (DG 0723)',
@@ -4478,6 +4481,26 @@ async function weeklyReport() {
     const nm = PRODUCT_NAME[String(p.productNo)] || p.name || `#${p.productNo}`;
     return `${nm}(#${p.productNo}): 실판매 ${p.count}건 · ${formatMoney(p.amount)}`;
   }).join('\n');
+  // 🛒 광고 랜딩 상품별 실판매 (2026-10-19 은우 「상품을 제대로 인식 못 한다」) — ★GA4 랜딩은 surl 유입이라 광고 상품이 안 잡힘(10/12~18 상위 12에 83·128·136 전부 없음).
+  //   cafe24 실판매(진실)를 광고 전용 번호만 골라 보여 준다. 이름표 없는 번호는 「이름표 없음」으로 띄워 바로 눈에 띄게(136 사고 재발 방지).
+  //   광고 랜딩 판별: 이름표에 「광고」가 있거나, 본상품(27)과 같은 이름의 복제 상품인데 공구·특가 이름표가 아닌 것(=비밀링크 광고 랜딩, 이름표 없으면 ⚠️로 뜸)
+  const isAdLanding = p => {
+    const lbl = String(PRODUCT_NAME[String(p.productNo)] || '');
+    if (/광고/.test(lbl)) return true;
+    if (lbl) return false;                                   // 공구·특가·콜라보·판매중지 등 이름표가 있는 건 광고가 아님
+    return String(p.productNo) !== '27' && /바질페스토 150g/.test(String(p.name || ''));
+  };
+  const adProducts = Object.values(cpById)
+    .filter(p => p.count > 0 && isAdLanding(p))
+    .sort((a, b) => b.amount - a.amount);
+  const adTop = adProducts[0] || null;
+  const adLine = adProducts.length
+    ? adProducts.slice(0, 6).map(p => {
+        const lbl = PRODUCT_NAME[String(p.productNo)];
+        const nm = lbl ? lbl.replace(/ 광고 \(/, ' ').replace(/\)$/, '') : '⚠️이름표 없음';
+        return `${nm} #${p.productNo} ${p.count}개·${formatMoney(p.amount)}`;
+      }).join('\n')
+    : '지난주 광고 랜딩 판매 없음';
 
   // (결제 누수 추정 제거 2026-06-19 — 에러세션×CVR×AOV 곱셈 추정치라 측정값 아님. 절대규칙. 측정된 스크립트에러%·빠른뒤로%는 👁️Clarity 섹션에 그대로 노출)
 
@@ -4585,7 +4608,7 @@ async function weeklyReport() {
     const _spike = (_dead != null && _dead >= 10) || (_rage != null && _rage >= 2);
     weeklyActions.push(_spike
       ? `🎥 Clarity 마찰 신호↑ (데드 ${(_dead || 0).toFixed(1)}%·레이지 ${(_rage || 0).toFixed(2)}%) — ij-links.pages.dev/watch 최신 5개(1.5배속)로 막힘 1개 찾기 → /메모 클러리티`
-      : `🎥 주간 세션리뷰 10분 — ij-links.pages.dev/watch 열어 최신 5개만(1.5배속). 질문 하나: 나가기 직전에 뭘 했나 → /메모 클러리티 MMDD 한 줄. ※지금 지켜보는 페이지=광고랜딩 88(10%지점 이탈 53%·✕닫기 4위). 링크는 고정, 대상 바뀌면 3창이 목적지만 교체`);
+      : `🎥 주간 세션리뷰 10분 — ij-links.pages.dev/watch 열어 최신 5개만(1.5배속). 질문 하나: 나가기 직전에 뭘 했나 → /메모 클러리티 MMDD 한 줄. ※지금 지켜보는 페이지=${adTop ? `지난주 실판매 1위 광고 랜딩 ${(PRODUCT_NAME[String(adTop.productNo)] || '이름표 없음').replace(/ 광고 \(/, ' ').replace(/\)$/, '')} #${adTop.productNo} (${adTop.count}개)` : '광고 랜딩(지난주 판매 없음)'}. 링크는 고정, 대상 바뀌면 3창이 목적지만 교체`);
   }
   // 🔔 운영 중 CRM 명시 (봇이 뭘 아는지 투명화 — "이미 하는 것" 위에서 액션)
   const crmRunLine = (crm && crm.running && crm.running.length)
@@ -4643,8 +4666,9 @@ async function weeklyReport() {
       const tot = (_pc.회원 || 0) + (_pc.비회원 || 0);
       const guestPct = tot ? Math.round(_pc.비회원 / tot * 100) : null;
       const gPrev = _pp && (_pp.회원 + _pp.비회원) ? Math.round(_pp.비회원 / (_pp.회원 + _pp.비회원) * 100) : null;
+      // 2026-10-19 은우: 회원으로 산 사람·비회원으로 산 사람 수를 바로 보이게 (회원=사람 수, 비회원=주문 건수)
       payLine = parts.join(' · ')
-        + (guestPct != null ? `\n비회원 ${guestPct}%${gPrev != null ? ` (전주 ${gPrev}%)` : ''} · 네이버 외부주문 ${_pc.네이버_외부}건` : '');
+        + (guestPct != null ? `\n👤 회원 구매 ${_pc.회원_사람 != null ? `${_pc.회원_사람}명` : `${_pc.회원}건`}(주문 ${_pc.회원}건) · 비회원 구매 ${_pc.비회원}건 → 비회원 ${guestPct}%${gPrev != null ? ` (전주 ${gPrev}%)` : ''} · 네이버 외부주문 ${_pc.네이버_외부}건` : '');
     }
   } catch (e) { }
 
@@ -4663,6 +4687,9 @@ ${repurchase
 
 ${trendLine}💳 <b>결제수단</b> (cafe24 원장)
 ${payLine}
+
+🛒 <b>광고 랜딩 상품별 실판매</b> (cafe24 원장 · GA4엔 안 잡힘)
+${adLine}
 
 📊 <b>유입 경로</b> (전주대비)
 ${chLines}${searchSplit}
@@ -4920,6 +4947,7 @@ module.exports = {
   refreshCafe24Token,
   getCafe24Sales,
   getCafe24SalesByProduct,
+  PRODUCT_NAME,
   getCafe24DailyOrders,
   getKamasotDaily, loadCafe24FromDrive, KAMASOT_TOKEN_DRIVE_FILE_ID,
   getCafe24Reviews,
