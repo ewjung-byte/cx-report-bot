@@ -1825,17 +1825,35 @@ async function getMetaAdSignal(dataDate) {
     const man = (v) => v >= 10000 ? `${(v / 10000).toFixed(1)}만` : v.toLocaleString();
     let verdict;
     if (dImp <= -20) verdict = '→ 노출이 줄었다 = 광고비·예산·학습 확인 (미주)';
-    else if (dCtr <= -15) verdict = '→ 클릭률이 떨어졌다 = 소재 피로 (소재 교체)';
+    else if (dCtr <= -15) verdict = '→ 클릭률이 떨어졌다 = 소재 쪽 (지친 소재·새 소재 확인 · 아래 소재별)';
     else verdict = '→ 노출·클릭률 평소대로 = 광고 쪽 이상 없음 · 유입이 줄었다면 광고 탓 아님 (GA4·랜딩 확인)';
     let s = `\n\n📣 <b>메타 광고</b> (어제)`
       + `\n노출 ${man(y.imp)} (${sg(dImp)}) · 링크 클릭 ${y.clk} (${sg(dClk)})`
       + `\n클릭률 <b>${y.ctr.toFixed(2)}%</b> (7일 ${p7.ctr.toFixed(2)}% · 30일 ${m30.ctr.toFixed(2)}%)`
       + `\n${verdict}`;
-    // 4주 추세 — 하루 흔들림이 아니라 소재가 닳는 건 몇 주에 걸쳐 온다(10/20 실측: 3.85% → 2.45%, 노출 +19% 인데 클릭 383 → 290/일)
+    // 4주 추세 — 하루 흔들림이 아니라 소재 쪽 변화는 몇 주에 걸쳐 온다(10/20 실측: 3.85% → 2.45%, 노출 +19% 인데 클릭 383 → 290/일)
+    //   ★「소재 피로」로 단정하지 않는다 — 10/20 소재별로 까 보니 ①9월 주력 2개(0626 B 3.67% · 부활 0312합본 4.37%, 노출 80%)가 꺼졌고
+    //     ②계속 돈 소재도 닳았고(0324 C 3.87→2.66%) ③10월 새 소재는 2.36% 였다. 셋이 섞인 결과라 「소재 문제」로 쓰고 소재별 줄로 가린다.
     if (old7.imp && r7.ctr <= old7.ctr * 0.8) {
       s += `\n⚠️ 클릭률 4주 새 ${old7.ctr.toFixed(2)}% → ${r7.ctr.toFixed(2)}% (${sg((r7.ctr - old7.ctr) / old7.ctr * 100)})`
-        + ` · 광고로 오는 사람 하루 ${Math.round(old7.clk / 7)} → ${Math.round(r7.clk / 7)} = 소재 피로`;
+        + ` · 광고로 오는 사람 하루 ${Math.round(old7.clk / 7)} → ${Math.round(r7.clk / 7)} = 소재 문제 (잘 되던 소재가 빠졌거나 지쳤음)`;
     }
+    // 🎯 소재별 (7일 · 광고비 5만↑) — 은우 10/20 고름. 돈을 쓰는 소재 중 계정 30일 클릭률보다 확실히 높은/낮은 것만 이름으로.
+    //   새 소재는 「그 전」 숫자가 없어서 「얼마나 떨어졌나」 대신 「지금 얼마나 받나」로 본다.
+    try {
+      let aurl = `https://graph.facebook.com/v19.0/${META_AD_ACCOUNT}/insights?level=ad&fields=ad_name,spend,impressions,inline_link_clicks&time_range={"since":"${day(6)}","until":"${dataDate}"}&limit=500&access_token=${META_TOKEN}`;
+      const ads = [];
+      while (aurl) { const j = await fetchJson(aurl); (j.data || []).forEach(x => ads.push({ n: String(x.ad_name || '').replace(/\s*\(본진\)\s*$/, ''), sp: +x.spend || 0, imp: +x.impressions || 0, clk: +x.inline_link_clicks || 0 })); aurl = j.paging && j.paging.next; }
+      const base = m30.ctr, big = ads.filter(a => a.sp >= 50000 && a.imp >= 1000).map(a => ({ ...a, ctr: a.clk / a.imp * 100 }));
+      const good = big.filter(a => a.ctr >= base * 1.1).sort((a, b) => b.ctr - a.ctr).slice(0, 2);
+      const weak = big.filter(a => a.ctr <= base * 0.8).sort((a, b) => b.sp - a.sp).slice(0, 3);
+      const fmt = (a) => `${a.n} ${a.ctr.toFixed(2)}% (${Math.round(a.sp / 10000)}만)`;
+      if (good.length || weak.length) {
+        s += `\n🎯 소재별 (7일 · 광고비 5만↑ · 기준 ${base.toFixed(2)}%)`;
+        if (good.length) s += `\n· 잘 됨: ${good.map(fmt).join(' · ')}`;
+        if (weak.length) s += `\n· 약함: ${weak.map(fmt).join(' · ')}`;
+      }
+    } catch (e) { console.error('[메타 소재별]', e.message); }
     s += `\n<i>구글·카카오·네이버는 노출·클릭 숫자 없음 (미주 「어제 광고」엔 광고비·매출만)</i>`;
     return s;
   } catch (e) { console.error('[메타 광고 신호]', e.message); return ''; }
