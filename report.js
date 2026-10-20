@@ -1804,6 +1804,43 @@ async function getMetaStats(since, until) {
   } catch(e) { return { spend:0, impressions:0, reach:0, frequency:0, clicks:0, ctr:0, cpm:0, purchases:0, revenue:0, roas:0, landing:0, viewContent:0, addToCart:0, checkout:0 }; }
 }
 
+// 📣 메타 광고 신호 (일간 · 2026-10-20 은우 T133 「평균 CTR · 유입이 떨어진 이유 · 광고 탓인지」)
+//   유입이 줄었을 때 ① 노출이 줄었나(광고비·학습) ② 클릭률이 줄었나(소재 피로) ③ 둘 다 그대로인데 유입만 줄었나(광고 탓 아님)를 한 줄로 가른다.
+//   ★GA4 「Paid Social」로 판정하지 않는다 — 메타 링크 클릭과 안 맞고(35일 1.44배 · 10/17 클릭 284인데 1,359) 어제분은 덜 쌓인다.
+//     메타가 직접 센 노출·링크 클릭(inline_link_clicks)만 쓴다. 클릭률 = 링크 클릭 ÷ 노출(합으로 나눔, 날마다 % 평균 X).
+//   구글·카카오·네이버는 노출·클릭을 받을 길이 없다(미주 「어제 광고」는 광고비·매출만, 구글 API 는 막힘 [[tool_ad_spend_sources]]).
+async function getMetaAdSignal(dataDate) {
+  try {
+    if (!META_TOKEN || !META_AD_ACCOUNT) return '';
+    const day = (n) => { const t = new Date(dataDate + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() - n); return t.toISOString().slice(0, 10); };
+    const url = `https://graph.facebook.com/v19.0/${META_AD_ACCOUNT}/insights?fields=impressions,inline_link_clicks&time_increment=1&time_range={"since":"${day(34)}","until":"${dataDate}"}&limit=100&access_token=${META_TOKEN}`;
+    const data = await fetchJson(url);
+    const byDay = {}; (data.data || []).forEach(x => byDay[x.date_start] = { imp: +x.impressions || 0, clk: +x.inline_link_clicks || 0 });
+    const range = (a, b) => { let imp = 0, clk = 0; for (let n = a; n <= b; n++) { const v = byDay[day(n)] || { imp: 0, clk: 0 }; imp += v.imp; clk += v.clk; } return { imp, clk, ctr: imp ? clk / imp * 100 : 0 }; };
+    const y = range(0, 0), p7 = range(1, 7), r7 = range(0, 6), old7 = range(28, 34), m30 = range(0, 29);
+    if (!y.imp || !p7.imp) return '';
+    const pImp = p7.imp / 7, pClk = p7.clk / 7;
+    const dImp = (y.imp - pImp) / pImp * 100, dClk = pClk ? (y.clk - pClk) / pClk * 100 : 0, dCtr = p7.ctr ? (y.ctr - p7.ctr) / p7.ctr * 100 : 0;
+    const sg = (v) => `${v >= 0 ? '+' : '-'}${Math.abs(Math.round(v))}%`;
+    const man = (v) => v >= 10000 ? `${(v / 10000).toFixed(1)}만` : v.toLocaleString();
+    let verdict;
+    if (dImp <= -20) verdict = '→ 노출이 줄었다 = 광고비·예산·학습 확인 (미주)';
+    else if (dCtr <= -15) verdict = '→ 클릭률이 떨어졌다 = 소재 피로 (소재 교체)';
+    else verdict = '→ 노출·클릭률 평소대로 = 광고 쪽 이상 없음 · 유입이 줄었다면 광고 탓 아님 (GA4·랜딩 확인)';
+    let s = `\n\n📣 <b>메타 광고</b> (어제)`
+      + `\n노출 ${man(y.imp)} (${sg(dImp)}) · 링크 클릭 ${y.clk} (${sg(dClk)})`
+      + `\n클릭률 <b>${y.ctr.toFixed(2)}%</b> (7일 ${p7.ctr.toFixed(2)}% · 30일 ${m30.ctr.toFixed(2)}%)`
+      + `\n${verdict}`;
+    // 4주 추세 — 하루 흔들림이 아니라 소재가 닳는 건 몇 주에 걸쳐 온다(10/20 실측: 3.85% → 2.45%, 노출 +19% 인데 클릭 383 → 290/일)
+    if (old7.imp && r7.ctr <= old7.ctr * 0.8) {
+      s += `\n⚠️ 클릭률 4주 새 ${old7.ctr.toFixed(2)}% → ${r7.ctr.toFixed(2)}% (${sg((r7.ctr - old7.ctr) / old7.ctr * 100)})`
+        + ` · 광고로 오는 사람 하루 ${Math.round(old7.clk / 7)} → ${Math.round(r7.clk / 7)} = 소재 피로`;
+    }
+    s += `\n<i>구글·카카오·네이버는 노출·클릭 숫자 없음 (미주 「어제 광고」엔 광고비·매출만)</i>`;
+    return s;
+  } catch (e) { console.error('[메타 광고 신호]', e.message); return ''; }
+}
+
 // 캠페인별 메타 성과 (주간 스냅샷용) — 메타 자체 추적이라 UTM 불필요·정확
 async function getMetaByCampaign(since, until) {
   try {
@@ -3749,6 +3786,9 @@ async function dailyReport() {
   if (sumSeg) concl.push(`🔁 첫구매 <b>${sumSeg.first}%</b> : 재구매 <b>${sumSeg.rep}%</b>`);
   const conclusionBlock = concl.length ? `\n🧭 <b>오늘의 결론</b>\n${concl.join('\n')}\n━━━━━━━━━━━━━━━━━` : '';
 
+  // 📣 메타 광고 신호 — 유입 아래에 붙여 「유입이 줄면 광고 탓인지」 같이 본다(2026-10-20 T133)
+  const adSignalSection = await getMetaAdSignal(today);
+
   // 🏁 어제 종료된 캠페인 자동 정산 + 📣 진행중 캠페인 유입→전환
   const wrapupSection = await getPromoWrapups(promoSchedule);
   const activeFunnelSection = await getActivePromoFunnel(promos).catch(() => '');
@@ -3758,7 +3798,7 @@ async function dailyReport() {
   const msg = `🔎 <b>CX 일간</b> · ${display}
 ━━━━━━━━━━━━━━━━━${conclusionBlock}
 🚦 <b>사이트</b>
-${healthSection}${inappNotice}${checkoutSection}${productPageSection}${inflowSection}
+${healthSection}${inappNotice}${checkoutSection}${productPageSection}${inflowSection}${adSignalSection}
 
 🔁 <b>리텐션</b> (Cafe24 raw)
 ${retentionSection}${ltvSection}${segmentSalesSection}
@@ -4943,6 +4983,7 @@ if (require.main === module) {
 
 // personal-metrics 등 외부 스크립트에서 데이터 수집 함수 재사용
 module.exports = {
+  getMetaAdSignal,
   getActivePromos,
   fetchPromoSchedule, getActivePromoFunnel,
   refreshCafe24Token,
