@@ -739,6 +739,11 @@ function doPost(e) {
     if (action === 'send_next_design_case') { // 디자인 사례집 — 다음 미발송 1개 개인DM 발송 (report.js 데일리가 호출)
       return jsonOut(sendNextDesignCase_());
     }
+    if (action === 'design_ig_test') { // 디자인 카드 인스타 찾기 시험(10/21) — 사이트 목록만 받아 결과를 돌려줌 · 시트 쓰기·발송 없음
+      _designIgDeadline = Date.now() + 240000;
+      var _sites = (contents.sites || []).slice(0, 25);
+      return jsonOut({ ok: true, results: _sites.map(function (s) { var g = designIgLookup_(s); return { site: s, h: g.h, fol: g.fol, state: g.state, line: designIgLine_(g) }; }) });
+    }
     if (action === 'track_weekly') { // 📈 개입_추적 주별 적재 — report.js 주간이 호출(시트 쓰기는 GAS만)
       return jsonOut(trackWeeklyUpsert_(contents.rows || []));
     }
@@ -1270,7 +1275,19 @@ function handleEunwooDM(msg) {
     return;
   }
   if (text === '/도움' || text === '/help') {
-    sendTGMessage(chatId, '📌 <b>은우봇 명령어 (콕핏)</b>\n\n🥇 <b>이번주 정하기</b>\n/원씽 [내용]   → ONE THING (완료시 자동 사라짐)\n\n▶️ <b>시작</b>\n/할거 [내용]   → 자사몰·CX\n/적용 [내용]   → D2C·마케팅\n/백로그 [내용] → 나중에\n/진행 [키워드] → 나중에→진행중으로\n\n✅ <b>끝내기</b> (키워드 일부만)\n/끝 [키워드]          → 완료\n/끝 [키워드] = 3.2%   → 완료 + 수치 협상카드에\n/실측 [키워드] = 값   → 완료된 것도 실측 After 갱신(⭐)\n/보류 [키워드]        → 나중에로\n/삭제 [키워드]        → 필요없는 항목 삭제 (완료는 보호)\n\n📝 <b>메모</b>\n/메모 [내용]   → 콕핏 📝메모에 쌓임\n/메모목록 · /메모비우기\n\n👀 <b>보기</b>\n/콕핏  → 현황 전체 (메모 포함)\n/성과  → 월간 협상카드\n/정리  → 회의 후 완료 비우기\n\n🏷 <b>출처 직접</b> (@ 맨앞)\n/할거 @대표 상세 수정 → [대표]\n여러 줄 붙여넣기도 됨\n\n🔧 <b>그 외</b>\n/작업 · /작업목록 (개인) · /UX 발송|보류|수정 · /조회 내것|액션|결정|공유 (미주 시트)\n\nℹ️ 완료는 /완료 아님 → /끝\nℹ️ 콕핏 = COMPASS 은우 행 E열');
+    sendTGMessage(chatId, '📌 <b>은우봇 명령어 (콕핏)</b>\n\n🥇 <b>이번주 정하기</b>\n/원씽 [내용]   → ONE THING (완료시 자동 사라짐)\n\n▶️ <b>시작</b>\n/할거 [내용]   → 자사몰·CX\n/적용 [내용]   → D2C·마케팅\n/백로그 [내용] → 나중에\n/진행 [키워드] → 나중에→진행중으로\n\n✅ <b>끝내기</b> (키워드 일부만)\n/끝 [키워드]          → 완료\n/끝 [키워드] = 3.2%   → 완료 + 수치 협상카드에\n/실측 [키워드] = 값   → 완료된 것도 실측 After 갱신(⭐)\n/보류 [키워드]        → 나중에로\n/삭제 [키워드]        → 필요없는 항목 삭제 (완료는 보호)\n\n📝 <b>메모</b>\n/메모 [내용]   → 콕핏 📝메모에 쌓임\n/메모목록 · /메모비우기\n\n👀 <b>보기</b>\n/콕핏  → 현황 전체 (메모 포함)\n/성과  → 월간 협상카드\n/정리  → 회의 후 완료 비우기\n\n🏷 <b>출처 직접</b> (@ 맨앞)\n/할거 @대표 상세 수정 → [대표]\n여러 줄 붙여넣기도 됨\n\n🔧 <b>그 외</b>\n/작업 · /작업목록 (개인) · /UX 발송|보류|수정 · /조회 내것|액션|결정|공유 (미주 시트)\n\n💬 / 없이 그냥 쓴 글 → 자비스에 넘김(창에 일로)\n\nℹ️ 완료는 /완료 아님 → /끝\nℹ️ 콕핏 = COMPASS 은우 행 E열');
+    return;
+  }
+  // 「/」로 시작하지 않는 보통 글은 자비스로 넘김(10/13 1창 T37 — 은우 「텔레 방이 3개인데 그거 다 너가 알아들어야」). 전엔 아무 답 없이 버려졌음.
+  //   개인성과시트 「🤖 자비스 수신함」에 한 줄 → 자비스 수신기(tools/jarvis.js watch)가 1분마다 읽어 일(T)로 만들고 D칸에 T번호. 우리 창이 은우 계정으로 보낸 글(🤖…)은 안 넘김
+  if (text.charAt(0) !== '/' && !/^🤖/.test(text)) {
+    try {
+      var _jss = SpreadsheetApp.openById(PERSONAL_METRICS_SHEET_ID);
+      var _jsh = _jss.getSheetByName('🤖 자비스 수신함') || _jss.insertSheet('🤖 자비스 수신함');
+      if (_jsh.getLastRow() < 1) _jsh.appendRow(['받은 시각', '글', '메시지 번호', '자비스 처리']);
+      _jsh.appendRow([Utilities.formatDate(msgTime, 'Asia/Seoul', 'yyyy-MM-dd HH:mm'), /^[=+\-@]/.test(text) ? "'" + text : text, msg.message_id || '', '']); // = + - @ 로 시작하면 시트가 수식으로 읽어서 앞에 ' (글자로만)
+      sendTGMessage(chatId, '📨 자비스에 넘겼어요 — 1분 안에 받아서 자비스 쪽에서 이어서 알려 드려요');
+    } catch (e) { sendTGMessage(chatId, '⚠️ 자비스에 못 넘겼어요(' + e.message + ') — 자비스 DM 으로 보내 주세요'); }
     return;
   }
 }
@@ -3244,13 +3261,87 @@ function designThemes_(row) {
   for (var i = 0; i < DESIGN_THEMES.length; i++) if (DESIGN_THEMES[i][1].test(txt)) out[DESIGN_THEMES[i][0]] = true;
   return out;
 }
+// ===== 디자인 카드에 공식 인스타 한 줄 (2026-10-21 2창 · 은우 「케이스북 인스타 매일 같이」) =====
+// 계정은 그 사이트 홈페이지 HTML 안의 instagram.com/계정 링크로만 찾는다(짐작 X — 디자인 케이스북 T127 과 같은 규칙).
+// 찾은 값은 🎨디자인_사례 M칸(13번째, K·L 은 C 상세가 씀)에 「@계정|팔로워|날짜」로 남겨 다시 안 찾는다.
+// 10/21 로컬 실측(미발송 14 + 풀 5 = 19곳): 그냥 주소 12곳 · 「www.」 붙여 다시 열면 14곳(74%).
+//   팔로워 숫자는 보통 브라우저 요청엔 안 주고 링크 미리보기 요청(facebookexternalhit)엔 「182K Followers」 로 준다.
+// 발송이 늦어지지 않게 한 번 발송(A·B·D 3장)에 찾기 시간 150초 한도 — 넘으면 「확인 못 함」으로 그냥 보낸다.
+var DESIGN_IG_COL = 13;
+var DESIGN_IG_BAD = /^(p|reel|reels|explore|accounts|stories|tv|direct|share|sharer|about|legal|developer|web|static|emails?|privacy|terms|help|instagram|_u|tags?|locations?)$/i;
+var _designIgDeadline = 0;
+function designIgHandle_(html) {
+  var re = /instagram\.com\/(?:#!\/)?([A-Za-z0-9_.]{2,30})(?=[\/"'?#\s<\\]|$)/gi, m, cnt = {}, best = '', bestN = 0;
+  while ((m = re.exec(html)) !== null) {
+    var h = m[1].replace(/\.+$/, '');
+    if (DESIGN_IG_BAD.test(h)) continue;
+    var k = h.toLowerCase(); cnt[k] = (cnt[k] || 0) + 1;
+    if (cnt[k] > bestN) { bestN = cnt[k]; best = k; }
+  }
+  return best;
+}
+// 돌려주는 것: { h: '계정' 또는 '', fol: '182K' 또는 '', state: 'ok'|'none'|'dead'|'time' }
+function designIgLookup_(src) {
+  if (_designIgDeadline && Date.now() > _designIgDeadline) return { h: '', fol: '', state: 'time' };
+  var s = String(src || '').trim().split(/\s/)[0];
+  var dom = designDomain_(/^https?:\/\//i.test(s) ? s : 'https://' + s.replace(/^\/+/, ''));
+  if (!dom) return { h: '', fol: '', state: 'none' };
+  var base = { muteHttpExceptions: true, followRedirects: true, validateHttpsCertificates: false, headers: { 'Accept-Language': 'ko,en;q=0.8' } };
+  var urls = ['https://' + dom + '/', 'https://www.' + dom + '/'];   // 출처 칸은 「www」 없이 적혀 있어 맨 주소가 안 열리는 곳이 있다(10/21 deandeluca.co.jp·marukome.co.jp)
+  var resps = [];
+  try { resps = UrlFetchApp.fetchAll(urls.map(function (u) { var o = JSON.parse(JSON.stringify(base)); o.url = u; return o; })); } catch (e) {
+    // 한 주소가 아예 없는 주소(DNS 없음)면 fetchAll 전체가 던진다(10/21 구글 서버 실측 deandeluca.co.jp) → 하나씩 따로
+    resps = [];
+    urls.forEach(function (u) { try { resps.push(UrlFetchApp.fetch(u, base)); } catch (e2) {} });
+  }
+  var opened = false, h = '';
+  for (var i = 0; i < resps.length && !h; i++) {
+    var txt = '';
+    try { if (resps[i].getResponseCode() < 400) { txt = resps[i].getContentText(); opened = opened || txt.length > 0; } } catch (e) {}
+    if (txt) h = designIgHandle_(txt);
+  }
+  if (!h) return { h: '', fol: '', state: opened ? 'none' : 'dead' };
+  var fol = '';
+  // 팔로워: 인스타가 구글 서버 요청을 일부만 받아 줌(10/21 @191 실측 4/12) → 받는 쪽 이름을 바꿔 한 번 더. 못 읽으면 @계정만
+  var uas = ['facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)', 'TelegramBot (like TwitterBot)'];
+  for (var u = 0; u < uas.length && !fol; u++) {
+    if (_designIgDeadline && Date.now() > _designIgDeadline) break;
+    try {
+      var p = UrlFetchApp.fetch('https://www.instagram.com/' + h + '/', { muteHttpExceptions: true, followRedirects: true, headers: { 'User-Agent': uas[u], 'Accept-Language': 'en' } });
+      var d = (/<meta[^>]+(?:property|name)="(?:og:)?description"[^>]+content="([^"]+)"/i.exec(p.getContentText()) || [])[1] || '';
+      // 한국어로 오면 「팔로워 182K명」이 &#xd314;… 부호로 온다(10/21 실측) → 글자로 풀고 읽음
+      d = d.replace(/&#x([0-9a-f]+);/gi, function (_, x) { return String.fromCharCode(parseInt(x, 16)); }).replace(/&#(\d+);/g, function (_, x) { return String.fromCharCode(+x); });
+      var fm = /([\d.,]+\s?[KMkm만천]?)\s*(?:Followers|팔로워)/.exec(d) || /팔로워\s*([\d.,]+\s?[KMkm만천]?)/.exec(d);
+      if (fm) fol = fm[1].replace(/\s/g, '');
+    } catch (e) {}
+  }
+  return { h: h, fol: fol, state: 'ok' };
+}
+function designIgLine_(ig) {
+  if (ig.state === 'ok') return '📷 인스타 <a href="https://www.instagram.com/' + ig.h + '/">@' + ig.h + '</a>' + (ig.fol ? ' · 팔로워 ' + ig.fol : '');
+  if (ig.state === 'dead') return '📷 홈페이지가 안 열려 인스타 확인 못 함';
+  if (ig.state === 'time') return '📷 인스타 확인 못 함(시간)';
+  return '📷 홈페이지에 공식 인스타 링크 없음';
+}
 function sendDesignRow_(sh, data, i) {
   var r = data[i];
+  var igLine = '';
+  try {
+    var cached = String(r[DESIGN_IG_COL - 1] || '');   // 「@계정|팔로워|날짜」 · 「없음|…」
+    var ig;
+    if (/^@/.test(cached)) { var cp = cached.split('|'); ig = { h: cp[0].slice(1), fol: cp[1] || '', state: 'ok' }; }
+    else {
+      ig = designIgLookup_(r[7]);
+      if (ig.state !== 'time') sh.getRange(i + 1, DESIGN_IG_COL).setValue((ig.state === 'ok' ? '@' + ig.h : (ig.state === 'dead' ? '안 열림' : '없음')) + '|' + (ig.fol || '') + '|' + Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd'));
+    }
+    igLine = designIgLine_(ig);
+  } catch (e) { Logger.log('[디자인 인스타] ' + e.message); }
   var msg = '🎨 <b>디자인 사례</b> [' + r[0] + '] · ' + r[2]
     + '\n\n<b>' + r[3] + '</b>' + (r[4] ? '\n<i>' + r[4] + '</i>' : '')
     + (r[5] ? '\n\n💡 ' + r[5] : '')
     + (r[6] ? '\n\n🎯 <b>우리 적용:</b> ' + r[6] : '')
-    + (r[7] ? '\n\n🔗 ' + r[7] : '');
+    + (r[7] ? '\n\n🔗 ' + r[7] : '')
+    + (igLine ? '\n' + igLine : '');
   var kb = { inline_keyboard: [[
     { text: '⭐ 채택', callback_data: 'dzc:add:' + r[0] },
     { text: '✕ 패스', callback_data: 'dzc:pass:' + r[0] }
@@ -3304,6 +3395,7 @@ function sendNextDesignCase_() {
   var sh = getDesignTab_();
   if (!sh || sh.getLastRow() < 2) return { ok: false, error: '디자인_사례 시트 없음/빔' };
   var data = sh.getDataRange().getValues();
+  _designIgDeadline = Date.now() + 150000;   // 인스타 찾기는 세 장 합쳐 150초까지(GAS 한 번 실행 한도 6분)
   var a = sendOneDesignByBrand_(sh, data, 'A');
   var b = sendOneDesignByBrand_(sh, data, 'B');
   // D 홈페이지 = 2026-08-01 신설(은우 '개쩌는 홈 1페이지 UI/UX 모을 것'). 업종 무관.
