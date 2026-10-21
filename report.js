@@ -3805,7 +3805,7 @@ async function dailyReport() {
   const conclusionBlock = concl.length ? `\n🧭 <b>오늘의 결론</b>\n${concl.join('\n')}\n━━━━━━━━━━━━━━━━━` : '';
 
   // 📣 메타 광고 신호 — 유입 아래에 붙여 「유입이 줄면 광고 탓인지」 같이 본다(2026-10-20 T133)
-  const adSignalSection = await getMetaAdSignal(today);
+  // ↑ 10/21 은우 T139 「메타 광고는 여기(자비스 DM)로 줘, 내가 따로 보게, 단톡방 보내지 말고」 → 단톡방에서 뺌. 자비스 봇 열쇠는 PC 에만 있어서 은우 PC 의 italy-jungmiso/tools/meta_ad_dm.js(작업 스케줄러 Jarvis\Meta_Ad_DM)가 getMetaAdSignal(아래 module.exports)을 불러 자비스 DM 으로 보냄
 
   // 🏁 어제 종료된 캠페인 자동 정산 + 📣 진행중 캠페인 유입→전환
   const wrapupSection = await getPromoWrapups(promoSchedule);
@@ -3816,7 +3816,7 @@ async function dailyReport() {
   const msg = `🔎 <b>CX 일간</b> · ${display}
 ━━━━━━━━━━━━━━━━━${conclusionBlock}
 🚦 <b>사이트</b>
-${healthSection}${inappNotice}${checkoutSection}${productPageSection}${inflowSection}${adSignalSection}
+${healthSection}${inappNotice}${checkoutSection}${productPageSection}${inflowSection}
 
 🔁 <b>리텐션</b> (Cafe24 raw)
 ${retentionSection}${ltvSection}${segmentSalesSection}
