@@ -186,7 +186,7 @@ ${convo}
     const raw = await new Promise((resolve, reject) => {
       const req = https.request({ hostname: 'api.anthropic.com', path: '/v1/messages', method: 'POST', headers: { 'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {
         res.setEncoding('utf8');
-        let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(JSON.parse(d)));
+        let d = ''; res.on('data', c => d += c); res.on('end', () => { try { const j = JSON.parse(d); aiUse('회의록', j); resolve(j); } catch (e) { reject(e); } });
       });
       req.on('error', reject); req.write(body); req.end();
     });
@@ -360,13 +360,24 @@ function fetchJson(url, headers = {}) {
     req.on('error', reject); req.end();
   });
 }
+// ── 클로드 API 사용량 기록(2026-10-28 T187) — AI 문단을 다시 켜며 하루 쓴 양을 재려고. 부를 때마다 한 줄 + 끝날 때 합계 한 줄
+//   (월 $100 Max 크레딧 · 다음 달로 안 넘어감). 잔액은 콘솔에서만 보여서 이 줄이 유일한 재료다.
+const AI_USE = { calls: 0, in: 0, out: 0, cacheIn: 0, search: 0 };
+function aiUse(tag, res) {
+  const u = res && res.usage; if (!u) return;
+  const s = (u.server_tool_use && u.server_tool_use.web_search_requests) || 0;
+  AI_USE.calls++; AI_USE.in += u.input_tokens || 0; AI_USE.out += u.output_tokens || 0; AI_USE.cacheIn += (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0); AI_USE.search += s;
+  console.log('[AI 사용량]', tag, `입력 ${u.input_tokens || 0} · 출력 ${u.output_tokens || 0}` + (s ? ` · 웹서치 ${s}번` : ''));
+}
+process.on('exit', () => { if (AI_USE.calls) console.log('[AI 사용량 합계]', `${AI_USE.calls}번 · 입력 ${AI_USE.in} · 출력 ${AI_USE.out} · 캐시 ${AI_USE.cacheIn} · 웹서치 ${AI_USE.search}번`); });
+
 function postJson(hostname, path, headers, body) {
   return new Promise((resolve, reject) => {
     const bodyStr = JSON.stringify(body);
     const req = https.request({ hostname, path, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyStr), ...headers } }, (res) => {
       res.setEncoding('utf8'); // ★한글(3바이트)이 청크 경계서 잘려 ��로 깨지는 것 방지 (2026-06-29 fix)
       let d = ''; res.on('data', c => d += c);
-      res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { reject(new Error(d.slice(0,200))); } });
+      res.on('end', () => { try { const j = JSON.parse(d); if (hostname === 'api.anthropic.com') aiUse('분석(max ' + (body && body.max_tokens) + ')', j); resolve(j); } catch(e) { reject(new Error(d.slice(0,200))); } });
     });
     req.on('error', reject); req.write(bodyStr); req.end();
   });
@@ -958,7 +969,7 @@ function claudeStreamMessage(body, totalMs) {
       res.setEncoding('utf8');
       if (res.statusCode >= 400) { let d = ''; res.on('data', c => d += c); res.on('end', () => fail('HTTP ' + res.statusCode + ' ' + d.slice(0, 300))); return; }
       kick();
-      let buf = ''; const blocks = []; let stop = null;
+      let buf = ''; const blocks = []; let stop = null; const usage = {};
       res.on('data', chunk => {
         kick(); buf += chunk;
         let i;
@@ -967,6 +978,8 @@ function claudeStreamMessage(body, totalMs) {
           const dl = evt.split('\n').find(l => l.startsWith('data:'));
           if (!dl) continue;
           let j; try { j = JSON.parse(dl.slice(5)); } catch (e) { continue; }
+          if (j.type === 'message_start' && j.message && j.message.usage) Object.assign(usage, j.message.usage);
+          if (j.type === 'message_delta' && j.usage) Object.assign(usage, j.usage);
           if (j.type === 'content_block_start') blocks[j.index] = j.content_block;
           else if (j.type === 'content_block_delta' && blocks[j.index]) {
             const b = blocks[j.index];
@@ -983,7 +996,8 @@ function claudeStreamMessage(body, totalMs) {
         if (done) return; done = true;
         // server_tool_use 블록의 input은 partial_json 조각 합쳐 복원 (pause_turn 재개 시 필요)
         blocks.forEach(b => { if (b && b.__pj !== undefined) { try { b.input = JSON.parse(b.__pj || '{}'); } catch (e) {} delete b.__pj; } });
-        resolve({ content: blocks.filter(Boolean), stop_reason: stop });
+        aiUse('웹서치 사례', { usage });
+        resolve({ content: blocks.filter(Boolean), stop_reason: stop, usage });
       });
       res.on('error', e => { clearTimeout(totalTimer); clearTimeout(idleTimer); fail('stream res error: ' + e.message); });
     });
@@ -1128,7 +1142,7 @@ function poolAiMessage(payload) {          // 스트림 없이 짧게 — 웹서
     }, (res) => {
       res.setEncoding('utf8'); let d = '';
       res.on('data', (c) => d += c);
-      res.on('end', () => { if (res.statusCode >= 400) return reject(new Error('HTTP ' + res.statusCode + ' ' + d.slice(0, 200))); try { resolve(JSON.parse(d)); } catch (e) { reject(e); } });
+      res.on('end', () => { if (res.statusCode >= 400) return reject(new Error('HTTP ' + res.statusCode + ' ' + d.slice(0, 200))); try { const j = JSON.parse(d); aiUse('디자인 풀', j); resolve(j); } catch (e) { reject(e); } });
     });
     req.on('timeout', () => { req.destroy(); reject(new Error('90s 초과')); });
     req.on('error', reject); req.write(s); req.end();
