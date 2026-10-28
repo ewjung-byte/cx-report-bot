@@ -50,6 +50,9 @@ jobs:
           # 디자인 풀 자동보충만 켜는 스위치(2026-09-21). AI_ANALYSIS_ON 과 별개 —
           # 그건 7/28 크레딧 소진으로 끈 전역 스위치라 켜면 CX 판단·관리자 분석까지 살아난다.
           POOL_AI_ON:           ${{ secrets.POOL_AI_ON }}
+          # 전역 AI 문단 3개(CX 판단·관리자 분석·디자인 사례 자동 생성) — 2026-10-28 다시 켬(은우 「켜 보자」 · Max 5x 월 $100 API 크레딧 연결 뒤)
+          #   전엔 이 줄이 없어서 시크릿을 넣어도 안 켜졌다. 끄기 = 시크릿 AI_ANALYSIS_ON 지우기
+          AI_ANALYSIS_ON:       ${{ secrets.AI_ANALYSIS_ON }}
           CLARITY_TOKEN:        ${{ secrets.CLARITY_TOKEN }}
           GA4_CLIENT_ID:        ${{ secrets.GA4_CLIENT_ID }}
           GA4_CLIENT_SECRET:    ${{ secrets.GA4_CLIENT_SECRET }}
