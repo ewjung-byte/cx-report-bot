@@ -367,7 +367,8 @@ function aiUse(tag, res) {
   const u = res && res.usage; if (!u) return;
   const s = (u.server_tool_use && u.server_tool_use.web_search_requests) || 0;
   AI_USE.calls++; AI_USE.in += u.input_tokens || 0; AI_USE.out += u.output_tokens || 0; AI_USE.cacheIn += (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0); AI_USE.search += s;
-  console.log('[AI 사용량]', tag, `입력 ${u.input_tokens || 0} · 출력 ${u.output_tokens || 0}` + (s ? ` · 웹서치 ${s}번` : ''));
+  // 모델·캐시까지 찍음 — 은우 PC 의 tools/claude_api.js bot 이 이 줄을 읽어 금액으로 바꿔 한 달 합계에 더함(목표 $90)
+  console.log('[AI 사용량]', tag, `입력 ${u.input_tokens || 0} · 출력 ${u.output_tokens || 0} · 캐시 ${(u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0)}` + (s ? ` · 웹서치 ${s}번` : '') + ` · 모델 ${res.model || CLAUDE_MODEL}`);
 }
 process.on('exit', () => { if (AI_USE.calls) console.log('[AI 사용량 합계]', `${AI_USE.calls}번 · 입력 ${AI_USE.in} · 출력 ${AI_USE.out} · 캐시 ${AI_USE.cacheIn} · 웹서치 ${AI_USE.search}번`); });
 
@@ -969,7 +970,7 @@ function claudeStreamMessage(body, totalMs) {
       res.setEncoding('utf8');
       if (res.statusCode >= 400) { let d = ''; res.on('data', c => d += c); res.on('end', () => fail('HTTP ' + res.statusCode + ' ' + d.slice(0, 300))); return; }
       kick();
-      let buf = ''; const blocks = []; let stop = null; const usage = {};
+      let buf = ''; const blocks = []; let stop = null; const usage = {}; let model = body.model;
       res.on('data', chunk => {
         kick(); buf += chunk;
         let i;
@@ -978,7 +979,7 @@ function claudeStreamMessage(body, totalMs) {
           const dl = evt.split('\n').find(l => l.startsWith('data:'));
           if (!dl) continue;
           let j; try { j = JSON.parse(dl.slice(5)); } catch (e) { continue; }
-          if (j.type === 'message_start' && j.message && j.message.usage) Object.assign(usage, j.message.usage);
+          if (j.type === 'message_start' && j.message && j.message.usage) { Object.assign(usage, j.message.usage); model = j.message.model || model; }
           if (j.type === 'message_delta' && j.usage) Object.assign(usage, j.usage);
           if (j.type === 'content_block_start') blocks[j.index] = j.content_block;
           else if (j.type === 'content_block_delta' && blocks[j.index]) {
@@ -996,7 +997,7 @@ function claudeStreamMessage(body, totalMs) {
         if (done) return; done = true;
         // server_tool_use 블록의 input은 partial_json 조각 합쳐 복원 (pause_turn 재개 시 필요)
         blocks.forEach(b => { if (b && b.__pj !== undefined) { try { b.input = JSON.parse(b.__pj || '{}'); } catch (e) {} delete b.__pj; } });
-        aiUse('웹서치 사례', { usage });
+        aiUse('웹서치 사례', { usage, model });
         resolve({ content: blocks.filter(Boolean), stop_reason: stop, usage });
       });
       res.on('error', e => { clearTimeout(totalTimer); clearTimeout(idleTimer); fail('stream res error: ' + e.message); });
