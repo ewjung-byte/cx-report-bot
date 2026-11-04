@@ -657,6 +657,8 @@ async function getCafe24DailyOrders(startDate, endDate) {
       paidCount,
       canceledCount: all.length - valid.length,
       revenue,
+      // (2026-11-02 3창 T243) 미입금(무통장 입금 전 · paid F) 금액 — 세그먼트는 결제 끝난 주문만 세서 이만큼 늘 모자람(10/31 56,800원 1건 = 7.3% → 「합계 불일치」 경고)
+      unpaidRevenue: valid.filter(o => o.paid !== 'T').reduce((s, o) => s + cafe24OrderRevenue(o), 0),
       channels: channelList,
       payMethods,
     };
@@ -2693,7 +2695,8 @@ async function uxDraftFlow() {
   } catch (e) { console.error('[UX metrics fetch] 실패:', e.message); }
 
   const insight = await generateUXInsight(history, feedback, metricsBlock);
-  if (!insight) { console.error('UX 초안 생성 실패 — 종료'); return; }
+  // (2026-10-30 3창 T216) 월·목 GAS 가 「대기 초안 없음」일 때 이 흐름을 자동으로 부름 → 실패하면 조용히 끝나지 않게 은우 DM 한 줄(8/5: 8일간 조용히 멈췄던 것 재발 방지)
+  if (!insight) { console.error('UX 초안 생성 실패 — 종료'); await sendTelegram(`📚 <b>UX 사례 자동 생성 실패</b> — ${CLAUDE_API_KEY ? 'AI 응답이 비었어요(모델·크레딧 확인)' : 'AI 꺼짐(AI_ANALYSIS_ON·키 없음)'}.\n→ 3창에 「UX 사례 채워줘」`).catch(() => {}); return; }
 
   // 제목 추출 (robust — [제목] 패턴 우선, 못 찾으면 첫 줄)
   const titleMatch = insight.match(/\[제목\]\s*(.+)/);
@@ -3244,8 +3247,9 @@ function buildDataHealthWarnings(d) {
   if (segments && dailyOrders && dailyOrders.revenue > 0) {
     const segSum = (segments.member?.newAmt || 0) + (segments.member?.retAmt || 0) + (segments.guest?.newAmt || 0) + (segments.guest?.repeatAmt || 0);
     if (segSum > 0) {
-      const diffPct = Math.abs(segSum - dailyOrders.revenue) / dailyOrders.revenue * 100;
-      if (diffPct > 5) w.push(`세그먼트 합계 ${formatMoney(segSum)} ≠ 전체 ${formatMoney(dailyOrders.revenue)} (${diffPct.toFixed(1)}%)`);
+      const paidRev = dailyOrders.revenue - (dailyOrders.unpaidRevenue || 0);   // 세그먼트와 같은 기준(결제 끝난 주문)으로 대조
+      const diffPct = paidRev > 0 ? Math.abs(segSum - paidRev) / paidRev * 100 : 0;
+      if (diffPct > 5) w.push(`세그먼트 합계 ${formatMoney(segSum)} ≠ 결제 끝난 매출 ${formatMoney(paidRev)} (${diffPct.toFixed(1)}%)`);
     }
   }
   // ④ Funnel 단조성 — 진짜 이상만 alert.

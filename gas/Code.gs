@@ -3940,19 +3940,18 @@ function setupCXTriggers() {
 //   7/28 AI_ANALYSIS_ON=0 이후 생성기가 죽어 8일간 조용히 멈췄던 것 재발 방지.
 //   흐름: 클로드가 UX_사례 시트에 draft 저장 → 월요일 09시 이 트리거가 발송만 한다(AI 무관).
 //   주 2회 → 주 1회(월). 은우 "주 1회 밀도 높은 글로".
-function triggerUXDraftMon() {
+// 2026-10-30 3창 T216(은우 「이것도 무료 api로 하자」): 대기 초안이 없으면 「발송 못함」 대신 워크플로 ux_draft 로 바로 새로 씀
+//   = report.js uxDraftFlow — 월 크레딧 키(10/28 AI_ANALYSIS_ON 다시 켬)로 자사몰 실측(카페24·GA4·클러리티) 넣어 쓰고 시트 sent + 은우 개인 DM + 큐레이션 버튼.
+//   클로드 창이 미리 채워 둔 초안이 있으면 예전처럼 그것부터 보냄. 워크플로를 못 띄우면(GH_TOKEN·HTTP) 그때만 「발송 못함」.
+function uxMonThu_() {
   var p = getUXPending_();
-  if (!p || !p.ok || !p.draft) {
-    sendTGMessage(EUNWOO_CHAT_ID, '📚 <b>UX 사례 발송 못함</b> — 대기 중 초안이 없습니다.' + String.fromCharCode(10) + '→ 클로드한테 "이번 주 UX 사례 써줘"');
-    return { ok: false, error: 'no draft' };
+  if (p && p.ok && p.draft) return triggerUXSend();
+  var code = triggerUXDraft();
+  if (code !== 204) {
+    sendTGMessage(EUNWOO_CHAT_ID, '📚 <b>UX 사례 발송 못함</b> — 대기 중 초안이 없고, 자동으로 새로 쓰기도 못 띄웠어요(HTTP ' + code + ').' + String.fromCharCode(10) + '→ 3창에 「UX 사례 채워줘」');
+    return { ok: false, error: 'no draft, ux_draft HTTP ' + code };
   }
-  return triggerUXSend();
+  return { ok: true, auto: 'ux_draft' };
 }
-function triggerUXDraftThu() {   // 2026-09-09 월·목 복원 — 월요일과 동일 동작
-  var p = getUXPending_();
-  if (!p || !p.ok || !p.draft) {
-    sendTGMessage(EUNWOO_CHAT_ID, '📚 <b>UX 사례 발송 못함</b> — 대기 중 초안이 없습니다.' + String.fromCharCode(10) + '→ 클로드한테 "이번 주 UX 사례 써줘"');
-    return { ok: false, error: 'no draft' };
-  }
-  return triggerUXSend();
-}
+function triggerUXDraftMon() { return uxMonThu_(); }
+function triggerUXDraftThu() { return uxMonThu_(); }   // 2026-09-09 월·목 복원 — 월요일과 동일 동작
