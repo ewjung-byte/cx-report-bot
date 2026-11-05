@@ -215,7 +215,7 @@ const TG_CHAT_ID         = (process.env.TG_CHAT_ID        || _tg.chat_id        
 // 은우 개인 DM = 자비스봇(2026-11-05 T282 · 은우 「은우봇으로 오는 것들 다 자비스봇으로」) — 시크릿 JARVIS_BOT_TOKEN 없으면 예전처럼 은우봇
 //   단추 달린 DM 은 자비스 수신기가 그 단추를 받게 될 때까지(T283) 은우봇 그대로 → 그때 DM_BUTTONS_TO_JARVIS = true
 const DM_TOKEN           = (process.env.JARVIS_BOT_TOKEN  || '').trim() || TG_TOKEN;
-const DM_BUTTONS_TO_JARVIS = false;
+const DM_BUTTONS_TO_JARVIS = true;   // 11/5 T283 자비스 수신기가 dzc·uxc·ux·cxa·work·memo 단추를 GAS cx_callback 으로 넘김(@194)
 // ★AI 분석 OFF (2026-07-28 은우 C안) — 봇 API 크레딧 소진(3달 무료분 소진, Max 구독과 별개).
 //   AI가 쓰던 문단(🤖CX 판단·🎯CX 관리자 분석·디자인 케이스 생성)만 끄고, 숫자·발송·시트는 그대로.
 //   분석은 은우가 클로드 창에서 실데이터 까며 함(품질↑·추가비용 0).

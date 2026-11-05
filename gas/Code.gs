@@ -5,8 +5,28 @@ var PERSONAL_METRICS_SHEET_ID = '1nxnsbqQSxv-lRcCDsUh6r16qoyeywVRJhPScd2N21bA';
 var STRATEGY_SHEET_ID = '1EQaNYcJz1c_WmPKiDbtecCNKtJ5LX4P8zg6m1-xkTBs'; // 전략 대시보드 (COMPASS 개인메모)
 var TAGS = ['/결정', '/액션', '/아이디어', '/공유', '/광고', '/소싱', '/CS', '/운영', '/디자인'];
 
+// 은우 개인 DM = 자비스봇(2026-11-05 3창 T283 · 은우 「은우봇으로 오는 것들 다 자비스봇으로 · 자비스 창만 보게」)
+//   JARVIS_BOT_TOKEN(스크립트 속성)이 있으면 은우에게 가는 새 글은 자비스봇으로 · 단톡은 은우봇 그대로
+//   자비스 수신기가 넘겨준 단추(doPost cx_callback) 처리 중엔 단추 답·글 고치기도 자비스봇으로(__VIA_JARVIS)
+//   예전 은우봇 카드 단추는 은우봇 폴링으로 와서 은우봇 토큰으로 고침 · 끄기 = JARVIS_BOT_TOKEN 속성 지우기
+var __VIA_JARVIS = false;
+function _jarvisToken() {
+  return PropertiesService.getScriptProperties().getProperty('JARVIS_BOT_TOKEN') || '';
+}
 function _botToken() {
+  if (__VIA_JARVIS && _jarvisToken()) return _jarvisToken();
   return PropertiesService.getScriptProperties().getProperty('BOT_TOKEN') || '';
+}
+function _sendToken(chatId) {
+  if (String(chatId) === String(EUNWOO_CHAT_ID) && _jarvisToken()) return _jarvisToken();
+  return _botToken();
+}
+// 자비스 수신기가 보낸 요청인지: 자비스 토큰의 SHA-256 앞 32자를 같이 보냄(토큰 자체는 안 보냄)
+function _jarvisSigOk_(sig) {
+  var t = _jarvisToken(); if (!t || !sig) return false;
+  var h = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, t, Utilities.Charset.UTF_8)
+    .map(function(b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
+  return h.slice(0, 32) === String(sig);
 }
 
 function detectTags(text) {
@@ -722,6 +742,24 @@ function doPost(e) {
       catch (eCx) { var capErr = __CX_CAPTURE; __CX_CAPTURE = null; return jsonOut({ ok: false, error: String(eCx).slice(0, 200), replies: capErr }); }
       var capOk = __CX_CAPTURE; __CX_CAPTURE = null;
       return jsonOut({ ok: true, replies: capOk });
+    }
+    if (action === 'cx_callback') { // T283 자비스봇 DM 단추(dzc·uxc·ux·cxa·work·memo)를 자비스 수신기가 넘김 → 은우봇과 같은 처리, 답·고치기는 자비스봇으로
+      if (!_jarvisSigOk_(contents.sig)) return jsonOut({ ok: false, error: 'sig' });
+      var jcq = contents.cq || {};
+      if (!jcq.id || !jcq.data || !jcq.message || !jcq.message.chat || String(jcq.message.chat.id) !== String(EUNWOO_CHAT_ID)) return jsonOut({ ok: false, error: 'bad cq' });
+      __VIA_JARVIS = true;
+      try { handleCallbackQuery(jcq); }
+      catch (eCb) { __VIA_JARVIS = false; return jsonOut({ ok: false, error: String(eCb).slice(0, 200) }); }
+      __VIA_JARVIS = false;
+      return jsonOut({ ok: true });
+    }
+    if (action === 'set_jarvis_token') { // T283 한 번만: 자비스봇 토큰을 스크립트 속성에(getMe 가 eunwoo_jarvis_bot 일 때만 받음 · 이미 있으면 같은 값일 때만)
+      var nt = String(contents.token || '').trim();
+      var me = {}; try { me = JSON.parse(UrlFetchApp.fetch('https://api.telegram.org/bot' + nt + '/getMe', { muteHttpExceptions: true }).getContentText()); } catch (eMe) {}
+      if (!me.ok || !me.result || me.result.username !== 'eunwoo_jarvis_bot') return jsonOut({ ok: false, error: 'not jarvis bot' });
+      var old = _jarvisToken(); if (old && old !== nt) return jsonOut({ ok: false, error: 'already set' });
+      PropertiesService.getScriptProperties().setProperty('JARVIS_BOT_TOKEN', nt);
+      return jsonOut({ ok: true, set: !old });
     }
     if (action === 'set_one_thing') { // ONE THING 설정(빈값이면 클리어)
       var ot = String(contents.text || '').trim();
@@ -2906,10 +2944,17 @@ function sendTGMessage(chatId, text, replyMarkup) {
   if (__CX_CAPTURE && String(chatId) === String(EUNWOO_CHAT_ID)) { __CX_CAPTURE.push(String(text)); return; }
   var payload = { chat_id: chatId, text: text, parse_mode: 'HTML' };
   if (replyMarkup) payload.reply_markup = replyMarkup;
-  UrlFetchApp.fetch('https://api.telegram.org/bot' + _botToken() + '/sendMessage', {
+  var sr = UrlFetchApp.fetch('https://api.telegram.org/bot' + _sendToken(chatId) + '/sendMessage', {
     method: 'post', contentType: 'application/json',
     payload: JSON.stringify(payload), muteHttpExceptions: true
   });
+  // 자비스봇이 못 보내면(토큰 만료·차단) 은우봇으로 한 번 더 — DM 이 사라지지 않게(T283)
+  if (sr.getResponseCode() !== 200 && _sendToken(chatId) !== PropertiesService.getScriptProperties().getProperty('BOT_TOKEN')) {
+    UrlFetchApp.fetch('https://api.telegram.org/bot' + PropertiesService.getScriptProperties().getProperty('BOT_TOKEN') + '/sendMessage', {
+      method: 'post', contentType: 'application/json',
+      payload: JSON.stringify(payload), muteHttpExceptions: true
+    });
+  }
 }
 
 function editTGMessage(chatId, messageId, text, replyMarkup) {
