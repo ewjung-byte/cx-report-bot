@@ -212,6 +212,10 @@ const META_TOKEN         = (process.env.META_ACCESS_TOKEN || _mt.access_token   
 const META_AD_ACCOUNT    = (process.env.META_AD_ACCOUNT   || _mt.ad_account_id   || '').toString().trim();
 const TG_TOKEN           = (process.env.TG_BOT_TOKEN      || _tg.bot_token       || '').trim();
 const TG_CHAT_ID         = (process.env.TG_CHAT_ID        || _tg.chat_id         || '').toString().trim();
+// 은우 개인 DM = 자비스봇(2026-11-05 T282 · 은우 「은우봇으로 오는 것들 다 자비스봇으로」) — 시크릿 JARVIS_BOT_TOKEN 없으면 예전처럼 은우봇
+//   단추 달린 DM 은 자비스 수신기가 그 단추를 받게 될 때까지(T283) 은우봇 그대로 → 그때 DM_BUTTONS_TO_JARVIS = true
+const DM_TOKEN           = (process.env.JARVIS_BOT_TOKEN  || '').trim() || TG_TOKEN;
+const DM_BUTTONS_TO_JARVIS = false;
 // ★AI 분석 OFF (2026-07-28 은우 C안) — 봇 API 크레딧 소진(3달 무료분 소진, Max 구독과 별개).
 //   AI가 쓰던 문단(🤖CX 판단·🎯CX 관리자 분석·디자인 케이스 생성)만 끄고, 숫자·발송·시트는 그대로.
 //   분석은 은우가 클로드 창에서 실데이터 까며 함(품질↑·추가비용 0).
@@ -3357,7 +3361,12 @@ function sendTelegram(text, replyMarkup) {
   if (DRY_RUN) { console.log('\n[DRY_RUN][개인 DM]\n' + text.replace(/<[^>]+>/g, '') + '\n'); return Promise.resolve({ ok: true, dry: true }); }
   const payload = { chat_id: TG_CHAT_ID, text, parse_mode: 'HTML' };
   if (replyMarkup) payload.reply_markup = replyMarkup;
-  return postJson('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {}, payload);
+  const tok = (replyMarkup && !DM_BUTTONS_TO_JARVIS) ? TG_TOKEN : DM_TOKEN;
+  const viaBot = (t) => postJson('api.telegram.org', `/bot${t}/sendMessage`, {}, payload);
+  if (tok === TG_TOKEN) return viaBot(TG_TOKEN);
+  // 자비스봇이 못 보내면(토큰 만료·차단 등) 은우봇으로 한 번 더 — DM 이 사라지지 않게
+  return viaBot(tok).then(r => (r && r.ok) ? r : (console.log('[T282] 자비스봇 DM 실패 → 은우봇으로: ' + (r && r.description)), viaBot(TG_TOKEN)),
+                        e => (console.log('[T282] 자비스봇 DM 오류 → 은우봇으로: ' + e.message), viaBot(TG_TOKEN)));
 }
 function sendTelegramGroup(text, replyMarkup) {
   if (SNAPSHOT_ONLY) { console.log('[snapshot-only] 단톡방 발송 생략'); return Promise.resolve({ ok: true, skipped: true }); }
