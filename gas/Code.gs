@@ -753,6 +753,13 @@ function doPost(e) {
       __VIA_JARVIS = false;
       return jsonOut({ ok: true });
     }
+    if (action === 'cx_text') { // T285 자비스 창에 친 나머지 / 명령(작업·UX·디자인 발송·조회·내것·완료 — 콕핏 명령은 cx_command) → handleEunwooDM 그대로, 답(단추 포함)은 sendTGMessage 가 자비스봇으로
+      if (!_jarvisSigOk_(contents.sig)) return jsonOut({ ok: false, error: 'sig' });
+      var jt = String(contents.text || '').trim();
+      if (!/^\/(작업(완료|중단|보류|목록)?|UX\s*(발송|보류|셋업|수정)|디자인\s?발송|조회|내것|은우|미주|경태|완료)(\s|$)/.test(jt)) return jsonOut({ ok: false, error: '넘길 명령 아님' });
+      handleEunwooDM({ text: jt, chat: { id: EUNWOO_CHAT_ID }, date: Math.floor(Date.now() / 1000), message_id: contents.message_id || '' });
+      return jsonOut({ ok: true });
+    }
     if (action === 'set_jarvis_token') { // T283 한 번만: 자비스봇 토큰을 스크립트 속성에(getMe 가 eunwoo_jarvis_bot 일 때만 받음 · 이미 있으면 같은 값일 때만)
       var nt = String(contents.token || '').trim();
       var me = {}; try { me = JSON.parse(UrlFetchApp.fetch('https://api.telegram.org/bot' + nt + '/getMe', { muteHttpExceptions: true }).getContentText()); } catch (eMe) {}
