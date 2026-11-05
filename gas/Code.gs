@@ -68,6 +68,13 @@ function doGet(e) {
     if (cb) return ContentService.createTextOutput(cb + '(' + out + ')').setMimeType(ContentService.MimeType.JAVASCRIPT);
     return ContentService.createTextOutput(out).setMimeType(ContentService.MimeType.JSON);
   }
+  // UX 사례 목록 JSON (design-casebook UX 탭이 JSONP로 읽음 · 11/5 3창 — 은우 「케이스북에 제대로 추가되고 있나」 → 8/5 고정 카드 20장에서 멈춰 있었음)
+  if (page === 'uxjson') {
+    var uout = JSON.stringify({ ok: true, cases: getUXCasesForWeb_() });
+    var ucb = e && e.parameter && e.parameter.callback;
+    if (ucb) return ContentService.createTextOutput(ucb + '(' + uout + ')').setMimeType(ContentService.MimeType.JAVASCRIPT);
+    return ContentService.createTextOutput(uout).setMimeType(ContentService.MimeType.JSON);
+  }
   // ★베스트 — 사례집이 JSONP 로 읽고 쓴다 (2026-09-21). 기기가 달라도 같은 별을 본다.
   if (page === 'bestlist' || page === 'bestset' || page === 'bestmerge') {
     var r;
@@ -3479,6 +3486,27 @@ function setDesignCaseStatus_(id, status) {
     if (String(data[i][0]) === String(id)) { sh.getRange(i + 1, 9).setValue(status); SpreadsheetApp.flush(); return { ok: true, title: String(data[i][3]) }; }
   }
   return { ok: false, error: 'ID 없음: ' + id };
+}
+// 케이스북 웹용 UX 사례: 나간 것(sent/케이스북/채택/패스)만, 최신이 위. 카드에 쓰는 「우리 액션」(실행안 첫 줄)·정의만 잘라 보냄.
+function getUXCasesForWeb_() {
+  var sh = getUXTab_();
+  if (!sh || sh.getLastRow() < 2) return [];
+  return sh.getDataRange().getValues().slice(1).filter(function (r) {
+    var st = String(r[5]).trim();
+    return (st === 'sent' || st === '케이스북' || st === '채택' || st === '패스') && String(r[2]).trim() && !/^#/.test(String(r[2]).trim());
+  }).map(function (r) {
+    // 본문 모양이 세 가지: 옛 「실행안 1.」 · 9월 「[그래서 뭘 할 것인가] 1.」 · 10월 「[정의] 글」 한 줄 + 「[이태리정미소 변형 적용] 1.」
+    var body = String(r[4] || ''), lines = body.split('\n');
+    var act = '', def = '', inApply = false, inDef = false;
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i].trim(), hm = l.match(/^\[([^\]]+)\]\s*(.*)$/);
+      if (hm) { inApply = /변형 적용|우리 적용|그래서 뭘|우리 액션/.test(hm[1]); inDef = hm[1] === '정의'; l = hm[2]; }
+      if (!def && inDef && l) def = l;
+      if (!act && inApply && /^(실행|1[.)]|①)/.test(l)) act = l.replace(/^1[.)]\s*/, '');
+    }
+    if (!act) { for (var j = 0; j < lines.length; j++) { if (/^실행안/.test(lines[j].trim())) { act = lines[j].trim(); break; } } }
+    return { date: _uxYmd_(r[0]), title: String(r[2]).trim(), cat: String(r[3] || '').trim(), status: String(r[5]).trim(), act: act.slice(0, 400), def: def.slice(0, 300) };
+  }).sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; });
 }
 // 케이스북 웹용: 발송된(발송/채택/패스) 디자인 사례 목록. 미발송은 제외.
 function getDesignCasesForWeb_() {
